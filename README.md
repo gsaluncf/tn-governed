@@ -446,6 +446,18 @@ python -m tn_governed.values.demo --numeric-type Decimal --run-directory experim
 python -m tn_governed.values.verify experiments/results/sql-primitives
 ```
 
+## Check recipient decisions and review completion
+
+With the project environment and its development dependencies installed, run:
+
+```powershell
+python -m pytest tests/test_recipient_authority.py tests/test_report_review_completion.py -q
+```
+
+These nine tests use native encryption and signatures. Independent recipient Sessions receive the same publication and decide according to their own purpose and recognized writer. The checks distinguish permission from possession of a decryption key, verify original claim attribution after another transformation, and reject changes to encrypted content or governance.
+
+The report tests use constructed, signed tool and report publications returned by a local transport. They exercise the production recipient and review-registration code. A successful call returns after the recipient accepts the report and the application stores a signed pending-review request in the queue. Recipient refusal, failure to store that record, or failure to write the queue prevents success and produces a signed Failure. A retry is recorded as a separate call. The full report example above runs the model service.
+
 ## Policy across endpoints
 
 The application calls the SQL source, dataframe runtime, and model service. Each evaluates policy for its own identity and requested use. The application accepts the report using a separate recipient Session.
