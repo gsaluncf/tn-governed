@@ -447,6 +447,22 @@ python -m tn_governed.values.demo --numeric-type Decimal --run-directory experim
 python -m tn_governed.values.verify experiments/results/sql-primitives
 ```
 
+## Compare processing cost
+
+With Python, OPA, and Unity configured as described in [Setup](#setup), run:
+
+```powershell
+python -m experiments.pvldb_evaluation.processing_comparison --run-directory experiments/results/processing-comparison/example --rows 128 512 1024 --repetitions 3
+```
+
+Choose an output directory that does not already exist. Use `--unity-url` when Unity runs at a different address.
+
+The experiment compares ordinary SQLite/Polars processing, explicit TN input tracking, and automatic TN input tracking. Each uses the same integer rows, SQL query, dataframe operations, scalar increment, and output string. Both TN modes use the same SQL and dataframe controls; they differ in how scalar operations supply their input references.
+
+The SQL-to-string time covers the query, dataframe calculation, scalar operations, and return of the ordinary output string. In TN, the query also encrypts, signs, publishes, and registers the source values, then admits them at the consumer. The full path includes claim attachment and disclosure. Scalar time measures only the operations after the dataframe calculation. Setup, record export, and offline verification are recorded separately. The ordinary case has no governed publication or governance verification. Each TN case uses fresh sessions, assignments, and storage. Mode order rotates across repetitions; one ordinary warmup initializes Polars, and Unity starts before measurement.
+
+`measurements.json` contains every observation and the median, minimum, and maximum for each configuration. The experiment checks the calculated result and runs the production offline verifiers for each TN execution. It also records the exact size of the final TN publication.
+
 ## Check policy accumulation
 
 After Python setup, configure OPA as described in [Setup](#setup). Run the six cases in a directory that does not already exist:
