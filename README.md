@@ -93,7 +93,7 @@ The model generates report content. The runtime retains source policies, claims,
 
 A source statement remains attached to the data it describes. A recipient can retrieve that statement and verify its author. The receiving application separately checks whether its configured rules recognize that author for the requested use. For example, a statement that a company name is suitable for internal identification does not establish that a generated report is suitable for investment advice.
 
-The review requirement has a different effect in this example: the receiving service is configured to apply it, so the application must queue review before returning the draft. Retaining a statement makes it available for evaluation; the configured rules determine the action. Combining values also records links to each input, so a recipient can trace the result back to its sources.
+The application defines the review requirement and supplies the components that perform it. In this example, the model service records report creation, and the Python adapter queues review after the recipient accepts the report. The application returns the draft with review pending. Retaining a statement makes it available for evaluation; the configured rules determine the action. Combining values also records links to each input, so a recipient can trace the result back to its sources.
 
 ## Source Guide
 
@@ -109,6 +109,7 @@ The installed `tn_governed.values` package provides `TNString`, `TNNumeric`, `Co
 | [sql.py](src/tn_governed/values/sql.py) | Resolving source governance and returning governed SQL cells |
 | [frames.py](experiments/pvldb_evaluation/frames.py) | SQL cells through governed Polars and back to a governed number |
 | [numeric_profile.py](experiments/pvldb_evaluation/numeric_profile.py) | Exact dataframe types and range checks |
+| [policy_accumulation.py](experiments/pvldb_evaluation/policy_accumulation.py) | Policies, input references, claims, and disclosure after filtering and aggregation |
 | [Native server](native/tn-llama) | Rust governance runtime, TN cryptography, C++ integration and pinned llama.cpp patch |
 | [model.py](src/tn_governed/values/model.py) | Native transfer to the model service and registration of pending review |
 | [run.py](experiments/pvldb_evaluation/run.py) | Complete setup, execution and verification of the submission example |
@@ -444,6 +445,26 @@ For the smaller SQL/string/numeric demonstration:
 ```powershell
 python -m tn_governed.values.demo --numeric-type Decimal --run-directory experiments/results/sql-primitives
 python -m tn_governed.values.verify experiments/results/sql-primitives
+```
+
+## Check policy accumulation
+
+After Python setup, configure OPA as described in [Setup](#setup). Run the six cases in a directory that does not already exist:
+
+```powershell
+python -m experiments.pvldb_evaluation.policy_accumulation --run-directory experiments/results/policy-accumulation/example
+```
+
+These checks use SQLite, native TN encryption and signatures, and real OPA evaluation. A local catalog resolves signed assignments and editions. They vary the number of rows, selected rows, and source tables, with two column policies per table under one catalog authority.
+
+The output records policy revision IDs, input references, original claim attribution, observed aggregate membership, and publication size. The checks compare the aggregate's policies with the exact union of its inputs' policies. Increasing rows retains the same policies while adding input references. Adding source tables adds distinct policies. Adding an aggregate to itself preserves its policies and claim identity, with both operand references recorded.
+
+In the cases with multiple source tables, one table permits disclosure only to `review-console`. Its rows are filtered out, but its condition still applies to the aggregate. Disclosure to `analysis-console` stops before content opens; `review-console` receives the calculated value. The signed operation records are verified and exported with each case.
+
+Run the accumulation and adjacent dataframe checks with:
+
+```powershell
+python -m pytest tests/test_policy_accumulation.py tests/test_query_dataframe.py -q
 ```
 
 ## Check recipient decisions and review completion
