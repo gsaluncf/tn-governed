@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
+
+from tn.canonical import _canonical_bytes
+
+from .context_evidence import CONTEXT_PROTOCOL, ContextEvidence, inspect_governance_context
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +25,7 @@ class QuestionResult:
 class WitnessResult:
     run_directory: str
     questions: tuple[QuestionResult, ...]
+    governance_context: ContextEvidence | None = None
 
     @property
     def all_full(self) -> bool:
@@ -30,6 +36,9 @@ class WitnessResult:
             "run_directory": self.run_directory,
             "all_full": self.all_full,
             "questions": [asdict(item) for item in self.questions],
+            "governance_context": (
+                self.governance_context.to_dict() if self.governance_context else None
+            ),
         }
 
 
@@ -98,6 +107,29 @@ def verify_reference_run(run_directory: Path) -> WitnessResult:
     row_facts = json.loads(str(row_verified.get("facts_json", "{}")))
     commitments = kinds.get("commitments_matched", {})
     commitment_facts = json.loads(str(commitments.get("facts_json", "{}")))
+    trace = [row for path in sorted((root / "runtime" / "raw-trace").glob("*.ndjson"))
+             for row in _read_ndjson(path)]
+    request_digest = "sha256:" + hashlib.sha256(
+        b"tn.llama.request-context.v1\0" + _canonical_bytes({
+            "messages": request.get("messages"), "purpose": request.get("purpose"),
+            "row_hash": source_hash,
+        })
+    ).hexdigest()
+    context_evidence = inspect_governance_context(
+        runtime, trace, run_id=response.get("run_id"), request_digest=request_digest,
+        source_id=source_hash,
+    )
+    uses_context = context_evidence.protocol == CONTEXT_PROTOCOL
+    governance_bound = context_evidence.verified
+    if uses_context:
+        binding_evidence = "verified governance bound to each decision request, prompt, and tokens"
+        semantic_evidence = ("verified semantic context supplied at selection and every action",)
+    elif context_evidence.protocol == "legacy_echo":
+        binding_evidence = "commitments matched"
+        semantic_evidence = ("six governance fields opened", "six commitments interpreted")
+    else:
+        binding_evidence = "governance binding evidence unavailable"
+        semantic_evidence = ("governance interpretation evidence unavailable",)
     packages = root / "tn" / "packages"
     required_packages = {
         "source-to-polars.tnpkg",
@@ -135,10 +167,10 @@ def verify_reference_run(run_directory: Path) -> WitnessResult:
         ),
         (
             "Is the rule bound to this exact financial output?",
-            commitment_facts.get("hashes_matched") is True
+            governance_bound
             and response.get("source_row_hash") == source_hash
             and response.get("output_row_hash") == output_hash,
-            ("commitments matched", "source row joined to exact output row"),
+            (binding_evidence, "source row joined to exact output row"),
         ),
         (
             "Is the claim authentic?",
@@ -155,8 +187,9 @@ def verify_reference_run(run_directory: Path) -> WitnessResult:
         (
             "Can this receiver interpret the rule?",
             "governance_opened_and_verified" in kinds
-            and commitment_facts.get("governance_commitment_count") == 6,
-            ("six governance fields opened", "six commitments interpreted"),
+            and governance_bound
+            and (uses_context or commitment_facts.get("governance_commitment_count") == 6),
+            semantic_evidence,
         ),
         (
             "Were recipient and purpose evaluated at decision time?",
@@ -187,6 +220,7 @@ def verify_reference_run(run_directory: Path) -> WitnessResult:
             QuestionResult(number, question, _status(ok), evidence)
             for number, (question, ok, evidence) in enumerate(checks, start=1)
         ),
+        governance_context=context_evidence,
     )
 
 

@@ -1,7 +1,9 @@
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum Phase {
+    /// Reserved wire identifier; the runtime admits governance without inference.
     GovernanceRead = 1,
+    /// Reserved wire identifier; model results never serve as governance verification.
     CommitmentEcho = 2,
     SectionSelection = 3,
     GovernedAction = 4,

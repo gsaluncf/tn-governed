@@ -536,7 +536,6 @@ def test_runtime_config_is_the_closed_finance_profile_with_live_material(
         "max_message_bytes": 16384,
         "max_active_sessions": 1,
         "max_chain_namespaces": 8,
-        "echo_max_tokens": 1536,
         "final_max_tokens": 2048,
     }
 

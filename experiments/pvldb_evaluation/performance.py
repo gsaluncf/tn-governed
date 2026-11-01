@@ -638,7 +638,7 @@ def run_tool_workloads(root, args, profile):
         "contract": "Each trial executes fresh SQL/Polars/scalar processing, one native model "
         "workflow when enabled, and the configured chain of dependent receipt tools. "
         "Depth counts the native compliance tool plus subsequent dependent receipt calls; "
-        "governance-read, commitment-echo, section-selection and report-emission protocol "
+        "section-selection and report-emission model "
         "turns are not application tool calls. "
         "End-to-end time sums active stages, excluding setup, model endpoint configuration, "
         "startup, "

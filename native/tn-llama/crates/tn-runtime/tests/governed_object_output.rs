@@ -17,8 +17,6 @@ fn output_verification_retains_the_configured_lineage_bound() {
         let request = fixture.request("calculation");
         let (_keys, runtime) = fixture.runtime();
         let mut session = runtime.start_session(&request).unwrap();
-        get_governance(&mut session).unwrap();
-        echo(&mut session).unwrap();
         select(&mut session, &["finance"]).unwrap();
         let turn = session.next_model_turn().unwrap();
         let output = accept(
@@ -48,8 +46,6 @@ fn independent_output_reader_failure_releases_no_wire() {
     .unwrap();
     let (_keys, runtime) = fixture.runtime();
     let mut session = runtime.start_session(&request).unwrap();
-    get_governance(&mut session).unwrap();
-    echo(&mut session).unwrap();
     select(&mut session, &["finance"]).unwrap();
     let turn = session.next_model_turn().unwrap();
     assert_eq!(
@@ -103,8 +99,6 @@ fn v2_reuses_visible_and_unselected_attribution_gates() {
         );
         let (_keys, runtime) = fixture.runtime();
         let mut session = runtime.start_session(&request).unwrap();
-        get_governance(&mut session).unwrap();
-        echo(&mut session).unwrap();
         select(&mut session, &["finance"]).unwrap();
         let turn = session.next_model_turn().unwrap();
         assert_eq!(
@@ -162,8 +156,6 @@ fn configured_report_revision_is_attached_without_replacing_inherited_policies()
     let model_use = profile.use_context.clone();
     let (_keys, runtime) = fixture.runtime();
     let mut session = runtime.start_session(&request).unwrap();
-    get_governance(&mut session).unwrap();
-    echo(&mut session).unwrap();
     select(&mut session, &["finance"]).unwrap();
     let turn = session.next_model_turn().unwrap();
     let ActionOutcome::GovernedRelease(release) = accept(
@@ -214,8 +206,6 @@ fn native_report_retains_both_contracts_bindings_and_exact_parent() {
         .clone();
     let (_keys, runtime) = fixture.runtime();
     let mut session = runtime.start_session(&request).unwrap();
-    get_governance(&mut session).unwrap();
-    echo(&mut session).unwrap();
     select(&mut session, &["finance"]).unwrap();
     let turn = session.next_model_turn().unwrap();
     let outcome = accept(
@@ -266,8 +256,6 @@ fn model_cannot_supply_governance_or_lineage() {
     let request = fixture.request("calculation");
     let (_keys, runtime) = fixture.runtime();
     let mut session = runtime.start_session(&request).unwrap();
-    get_governance(&mut session).unwrap();
-    echo(&mut session).unwrap();
     select(&mut session, &["finance"]).unwrap();
     let turn = session.next_model_turn().unwrap();
     assert_eq!(

@@ -7,15 +7,14 @@ use sha2::{Digest, Sha256};
 use crate::contract::OutputPolicy;
 use crate::error::{AdmissionStage, TnLlamaError};
 use crate::model_phase::Phase;
-use crate::output_tn::{ComplianceReceipt, SourceLineage};
+use crate::output_tn::SourceLineage;
 
 pub const MODEL_REQUEST_DIGEST_DOMAIN: &[u8] = b"tn.llama.model-request.v1\0";
 pub const RENDERED_PROMPT_DIGEST_DOMAIN: &[u8] = b"tn.llama.rendered-prompt.v1\0";
 pub const RUNNABLE_TASK_DIGEST_DOMAIN: &[u8] = b"tn.llama.runnable-task.v1\0";
 pub const RUNNABLE_TASK_SCHEMA: &str = "tn.llama.runnable-task.v1";
-pub(crate) const GOVERNANCE_READ_MAX_TOKENS: u32 = 256;
 
-pub(crate) const SYSTEM_CONTENT: &str = "This is a server-governed action interaction. Call exactly one available tool and return no prose. Copy server-provided trusted fields exactly. Generate only the requested output fields. The server validates, executes, emits, and releases every action.";
+pub(crate) const SYSTEM_CONTENT: &str = "This is a server-governed action interaction. Call exactly one available tool and return no prose. Generate only the requested business arguments and output fields. Governance in the current request applies to every decision; source identities, cryptographic evidence, and authorization are bound by the runtime. The server validates, executes, emits, and releases every action.";
 
 pub(crate) fn governance_presentation(
     plaintext: &BTreeMap<String, Value>,
@@ -64,50 +63,6 @@ pub struct NativeToolResult<'a> {
     pub stop_limit: bool,
 }
 
-pub(crate) fn governance_read_body(
-    purpose: &str,
-    row_hash: &str,
-    request_digest: &str,
-) -> Result<Vec<u8>, TnLlamaError> {
-    let control = canonical_text(&json!({
-        "phase": "governance_read",
-        "purpose": purpose,
-        "request_digest": request_digest,
-        "row_hash": row_hash,
-    }))?;
-    canonical_value(&json!({
-        "cache_prompt": false,
-        "max_tokens": GOVERNANCE_READ_MAX_TOKENS,
-        "messages": [
-            {"role": "system", "content": SYSTEM_CONTENT},
-            {"role": "user", "content": control}
-        ],
-        "n": 1,
-        "n_cache_reuse": 0,
-        "parallel_tool_calls": false,
-        "reasoning_effort": "none",
-        "stream": false,
-        "temperature": 0,
-        "tool_choice": "required",
-        "tools": [{
-            "type": "function",
-            "function": {
-                "name": "get_governance",
-                "description": "Request the governance bound to this admitted row and request.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "request_digest": {"type": "string"},
-                        "row_hash": {"type": "string"}
-                    },
-                    "required": ["request_digest", "row_hash"],
-                    "additionalProperties": false
-                }
-            }
-        }]
-    }))
-}
-
 #[derive(Clone, Copy)]
 pub(crate) struct AcceptedCall<'a> {
     pub id: &'a str,
@@ -115,63 +70,17 @@ pub(crate) struct AcceptedCall<'a> {
     pub arguments: &'a str,
 }
 
-pub(crate) fn commitment_echo_body(
-    purpose: &str,
-    row_hash: &str,
-    request_digest: &str,
-    governance: &BTreeMap<String, Value>,
-    commitments: &BTreeMap<String, String>,
-    first_call: AcceptedCall<'_>,
-    max_tokens: u32,
-) -> Result<Vec<u8>, TnLlamaError> {
-    let control = canonical_text(&json!({
-        "phase": "governance_read",
-        "purpose": purpose,
-        "request_digest": request_digest,
-        "row_hash": row_hash,
-    }))?;
-    let result = canonical_text(&json!({
-        "governance": governance,
-        "governance_commitments": commitments,
-        "request_digest": request_digest,
-        "row_hash": row_hash,
-    }))?;
-    canonical_value(&json!({
-        "cache_prompt": false,
-        "max_tokens": max_tokens,
-        "messages": [
-            {"role": "system", "content": SYSTEM_CONTENT},
-            {"role": "user", "content": control},
-            assistant_call_message(first_call),
-            {"role": "tool", "tool_call_id": first_call.id, "content": result}
-        ],
-        "n": 1,
-        "n_cache_reuse": 0,
-        "parallel_tool_calls": false,
-        "reasoning_effort": "none",
-        "stream": false,
-        "temperature": 0,
-        "tool_choice": "required",
-        "tools": [{
-            "type": "function",
-            "function": {
-                "name": "continue_with_governance",
-                "description": "Continue only by echoing the server's governance presentation and original commitment set exactly.",
-                "parameters": echo_parameters_schema(governance)
-            }
-        }]
-    }))
-}
-
 pub(crate) fn section_selection_body(
     user_content: &str,
     available_sections: &BTreeMap<String, Vec<String>>,
+    governance: &BTreeMap<String, Value>,
     max_tokens: u32,
 ) -> Result<Vec<u8>, TnLlamaError> {
     let selection = canonical_text(&json!({
         "phase": "section_selection",
         "user_request": user_content,
         "available_sections": available_sections,
+        "applicable_source_governance": governance,
     }))?;
     let section_names = available_sections.keys().cloned().collect::<Vec<_>>();
     canonical_value(&json!({
@@ -224,21 +133,20 @@ pub(crate) fn governed_object_action_body(
     tool_exchanges: &[ToolExchange<'_>],
     max_tokens: u32,
 ) -> Result<Vec<u8>, TnLlamaError> {
-    let trusted_source_binding = json!({"source_object_id":source_object_id,"action":action});
-    let required_tool_calls = tools
+    let required_tools = tools
         .iter()
         .filter(|tool| tool["function"]["name"] != "emit_governed_record")
-        .map(|tool| json!({"name":tool["function"]["name"],"arguments":trusted_source_binding}))
+        .map(|tool| tool["function"]["name"].clone())
         .collect::<Vec<_>>();
     let mut messages = vec![
         json!({"role":"system","content":SYSTEM_CONTENT}),
         json!({"role":"user","content":canonical_text(&json!({
         "phase":"governed_action", "user_request":user_content, "selected_values":selected,
         "applicable_source_governance":governance, "required_attributions":attributions,
-        "trusted_source_binding":trusted_source_binding,
-        "required_tool_calls":required_tool_calls,
+        "source_object_id":source_object_id, "operation":action,
+        "required_tools":required_tools,
         "additional_report_contract": report_policy.map(|policy| json!({"governed_by":policy.governed_by(),"fields":policy.fields()})),
-        "output_instruction":"Execute each required_tool_calls entry using its name and arguments copied exactly. trusted_source_binding identifies the current admitted input and authorized action; IDs in source_lineage and calculation input fields identify earlier ancestors. When emission is offered, write report_html only and use the authenticated tool results when relevant. The runtime retains and signs every inherited contract, dataset binding, exact input source, and accepted tool publication."
+        "output_instruction":"Call the required tools using the business arguments in their schemas. The runtime binds each invocation to the admitted source and authorized action. When emission is offered, write report_html only and use the authenticated tool results when relevant. The runtime retains and signs every inherited contract, dataset binding, exact input source, and accepted tool publication."
     }))?}),
     ];
     for exchange in tool_exchanges {
@@ -363,135 +271,6 @@ pub(crate) fn governed_action_body(
     }))
 }
 
-pub(crate) fn emit_governed_record_tool(
-    output_event_type: &str,
-    output_public_section: &str,
-    output_policy: &OutputPolicy,
-    source_lineage: Option<&SourceLineage>,
-    compliance_evidence: Option<&ComplianceReceipt>,
-) -> Value {
-    let mut governance_properties = Map::from_iter([
-        (
-            "instruction".to_string(),
-            json!({"type": "string", "const": &output_policy.instruction}),
-        ),
-        (
-            "use_for".to_string(),
-            json!({"type": "string", "const": &output_policy.use_for}),
-        ),
-        (
-            "do_not_use_for".to_string(),
-            json!({"type": "string", "const": &output_policy.do_not_use_for}),
-        ),
-        (
-            "consequences".to_string(),
-            json!({"type": "string", "const": &output_policy.consequences}),
-        ),
-        (
-            "on_violation_or_error".to_string(),
-            json!({"type": "string", "const": &output_policy.on_violation_or_error}),
-        ),
-    ]);
-    let mut governance_required = vec![
-        "instruction",
-        "use_for",
-        "do_not_use_for",
-        "consequences",
-        "on_violation_or_error",
-    ];
-    if let Some(lineage) = source_lineage {
-        governance_properties.insert("source_lineage".to_string(), source_lineage_schema(lineage));
-        governance_required.push("source_lineage");
-    }
-    if let Some(evidence) = compliance_evidence {
-        governance_properties.insert(
-            "compliance_evidence".to_string(),
-            compliance_evidence_schema(evidence),
-        );
-        governance_required.push("compliance_evidence");
-    }
-    let public_section_properties = Map::from_iter([(
-        output_public_section.to_string(),
-        json!({
-            "type": "object",
-            "properties": {"report_html": {"type": "string"}},
-            "required": ["report_html"],
-            "additionalProperties": false
-        }),
-    )]);
-    json!({
-        "type": "function",
-        "function": {
-            "name": "emit_governed_record",
-            "description": "Propose the configured governed record. The server owns all TN headers, policy references, commitments, hashes, and emission.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "event_type": {"type": "string", "const": output_event_type},
-                    "public_sections": {
-                        "type": "object",
-                        "properties": public_section_properties,
-                        "required": [output_public_section],
-                        "additionalProperties": false
-                    },
-                    "governance": {
-                        "type": "object",
-                        "properties": governance_properties,
-                        "required": governance_required,
-                        "additionalProperties": false
-                    }
-                },
-                "required": ["event_type", "public_sections", "governance"],
-                "additionalProperties": false
-            }
-        }
-    })
-}
-
-fn source_lineage_schema(lineage: &SourceLineage) -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "source_device_identity": {"type": "string", "const": &lineage.source_device_identity},
-            "source_event_id": {"type": "string", "const": &lineage.source_event_id},
-            "source_event_type": {"type": "string", "const": &lineage.source_event_type},
-            "derived_from_row_hash": {"type": "string", "const": &lineage.derived_from_row_hash},
-            "source_policy": {"type": "string", "const": &lineage.source_policy},
-            "selected_sections": {
-                "type": "array",
-                "items": {"type": "string"},
-                "const": &lineage.selected_sections
-            },
-            "operation": {"type": "string", "const": &lineage.operation}
-        },
-        "required": [
-            "source_device_identity",
-            "source_event_id",
-            "source_event_type",
-            "derived_from_row_hash",
-            "source_policy",
-            "selected_sections",
-            "operation"
-        ],
-        "additionalProperties": false,
-    })
-}
-
-fn compliance_evidence_schema(evidence: &ComplianceReceipt) -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "event_id": {"type": "string", "const": &evidence.event_id},
-            "event_type": {"type": "string", "const": &evidence.event_type},
-            "row_hash": {"type": "string", "const": &evidence.row_hash},
-            "source_row_hash": {"type": "string", "const": &evidence.source_row_hash},
-            "action": {"type": "string", "const": &evidence.action}
-        },
-        "required": ["event_id", "event_type", "row_hash", "source_row_hash", "action"],
-        "additionalProperties": false,
-    })
-}
-
 fn assistant_call_message(call: AcceptedCall<'_>) -> Value {
     json!({
         "role": "assistant",
@@ -503,73 +282,13 @@ fn assistant_call_message(call: AcceptedCall<'_>) -> Value {
     })
 }
 
-fn echo_parameters_schema(governance: &BTreeMap<String, Value>) -> Value {
-    let mut governance_properties = Map::new();
-    let mut commitment_properties = Map::new();
-    for (field, value) in governance {
-        governance_properties.insert(field.clone(), value_type_schema(value));
-        commitment_properties.insert(field.clone(), json!({"type": "string"}));
-    }
-    let fields = governance.keys().cloned().collect::<Vec<_>>();
-    json!({
-        "type": "object",
-        "properties": {
-            "governance": {
-                "type": "object",
-                "properties": governance_properties,
-                "required": &fields,
-                "additionalProperties": false
-            },
-            "governance_commitments": {
-                "type": "object",
-                "properties": commitment_properties,
-                "required": &fields,
-                "additionalProperties": false
-            },
-            "request_digest": {"type": "string"},
-            "row_hash": {"type": "string"}
-        },
-        "required": ["governance", "governance_commitments", "request_digest", "row_hash"],
-        "additionalProperties": false
-    })
-}
-
-fn value_type_schema(value: &Value) -> Value {
-    // The echo copies structure as well as scalar values. Describe nested
-    // governance records without embedding their values in the decoder grammar.
-    // Rust's canonical comparison remains the authority for the actual contents.
-    if let Value::Object(fields) = value {
-        let properties = fields
-            .iter()
-            .map(|(key, value)| (key.clone(), value_type_schema(value)))
-            .collect::<Map<_, _>>();
-        let required = fields.keys().cloned().collect::<Vec<_>>();
-        return json!({"type":"object","properties":properties,"required":required,"additionalProperties":false});
-    }
-    if let Value::Array(values) = value {
-        let mut shapes = Vec::new();
-        for value in values {
-            let shape = value_type_schema(value);
-            if !shapes.contains(&shape) {
-                shapes.push(shape);
-            }
-        }
-        let items = match shapes.len() {
-            0 => json!({}),
-            1 => shapes.remove(0),
-            _ => json!({"anyOf":shapes}),
-        };
-        return json!({"type":"array","items":items,"minItems":values.len(),"maxItems":values.len()});
-    }
-    let value_type = match value {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(number) if number.is_i64() || number.is_u64() => "integer",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) | Value::Object(_) => unreachable!("containers handled above"),
-    };
-    json!({"type": value_type})
+pub(crate) fn governance_context_digest(
+    context: &BTreeMap<String, Value>,
+) -> Result<String, TnLlamaError> {
+    Ok(digest_bytes(
+        b"tn.llama.governance-context.v1\0",
+        &canonical_value(&json!(context))?,
+    ))
 }
 
 pub(crate) fn digest_bytes(domain: &[u8], bytes: &[u8]) -> String {

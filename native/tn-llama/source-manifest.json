@@ -37,7 +37,7 @@
     },
     {
       "path": "crates/tn-runtime/src/audit.rs",
-      "sha256": "9c38fc6067d0d635741bdfa4196a420955ea4e9bfec827e3da09587003aea43f"
+      "sha256": "b2e80a18d5b3fca52d8d821fab10740824746da9e310c699237d68b06d72d8ed"
     },
     {
       "path": "crates/tn-runtime/src/chain_store.rs",
@@ -49,11 +49,15 @@
     },
     {
       "path": "crates/tn-runtime/src/config.rs",
-      "sha256": "94dbf51232f22a9ae4a9cb7bb4e8124dc7d2905fd624e8272ea7824075862882"
+      "sha256": "352c9b9b6d77e1f7f7cff8a1fb1071cc6b7a916160cb0eecb5f1b8f5a0524a63"
     },
     {
       "path": "crates/tn-runtime/src/contract.rs",
       "sha256": "ef19797928673289ff0f68b8cdf958143c7208b7156f80611af2a4955a6ce675"
+    },
+    {
+      "path": "crates/tn-runtime/src/decision_context.rs",
+      "sha256": "bbfe29acaf295bbfee54a30e1bab5e09f7f5530839818604bbbed63bc32d15c4"
     },
     {
       "path": "crates/tn-runtime/src/envelope.rs",
@@ -81,19 +85,19 @@
     },
     {
       "path": "crates/tn-runtime/src/governed_input.rs",
-      "sha256": "94d40ed6cc3e6e6c9f153dac613a849c8c37a96e61e6f732165955f4bb719124"
+      "sha256": "db0d1911a08bff6d9a609d2f733f9ec49901b7ad9650e4e91962255a3555b33d"
     },
     {
       "path": "crates/tn-runtime/src/lib.rs",
-      "sha256": "76cbc227d68d381cc8d97db52561a773b14312514ffb08e07319a8923f3e75bf"
+      "sha256": "6fcc6574271e480448b7e7e521da8805cf89d626e0f3d95dd6b156faa1edc51a"
     },
     {
       "path": "crates/tn-runtime/src/model_phase.rs",
-      "sha256": "11d83ac357d132a23163a0761b7bc83d4ad8d93d33199b26ab6c5add423005f5"
+      "sha256": "8593bfdfac9a94bba4e09fc21bad3810d2c2c8e200313a4bd70e3b386836dd29"
     },
     {
       "path": "crates/tn-runtime/src/model_protocol.rs",
-      "sha256": "4584c3438f1006fad6f1c18d5780e7d99524c412acf20caa82ae22c1d2b89bec"
+      "sha256": "84242fcbf2a45c6656db25ecca99b6ed15fe4e900e997c974f4e5008f77d936b"
     },
     {
       "path": "crates/tn-runtime/src/output_tn.rs",
@@ -101,7 +105,7 @@
     },
     {
       "path": "crates/tn-runtime/src/runtime.rs",
-      "sha256": "1b13e20b02466e48ac276c2b1ed1a03c4aa1637466ea42497820baf3ce41a3ee"
+      "sha256": "50b59c17d50954dc49d2beabbf0e9ad40be36acb6f7a78445551f66ff8274b3f"
     },
     {
       "path": "crates/tn-runtime/src/sensitive_trace.rs",
@@ -109,11 +113,11 @@
     },
     {
       "path": "crates/tn-runtime/src/session.rs",
-      "sha256": "0b5e7f3d38a6737e39c6c896f23d68cc000619045cfe320319dbdf515ea4f157"
+      "sha256": "94eea2803d2be0afd02849e7ebe454bc936974c7fa1644ca8aadd813a401a218"
     },
     {
       "path": "crates/tn-runtime/src/tools.rs",
-      "sha256": "927e0a7b59fdf0b07dbdc644ce47fe511a409a7038a82c24daba776bce5c552f"
+      "sha256": "136b22c39c1de18155fac41f23a806f07bdf99b43551f0f784df3526f5c55cb3"
     },
     {
       "path": "crates/tn-runtime/tests/audit.rs",
@@ -121,15 +125,11 @@
     },
     {
       "path": "crates/tn-runtime/tests/derived_report.rs",
-      "sha256": "472493d5e9316468ab4e6259ca35a3c34a566b279fca0a81da40460127ffa41b"
-    },
-    {
-      "path": "crates/tn-runtime/tests/echo_structure.rs",
-      "sha256": "1cf900defac54ede36c4c31aab5ef1c8fa0a9a960e18a90ac72016ac1047524e"
+      "sha256": "3d92b80eef400371e1325beb11b084e2470f0a204723860024e3dae8a4c0f62d"
     },
     {
       "path": "crates/tn-runtime/tests/ffi.rs",
-      "sha256": "8c13b22c13fb4c1407a8e55eff8ab9712c3eead6ccdba346afb364de53e3584e"
+      "sha256": "2527bceb61bc33caa3f8ae90e3a601dd962572bb67d4a7d7bd0f1bd67f35194e"
     },
     {
       "path": "crates/tn-runtime/tests/fixtures/chain-row-1.json",
@@ -142,6 +142,10 @@
     {
       "path": "crates/tn-runtime/tests/fixtures/chain-row-2b-valid-fork.json",
       "sha256": "0fe1608cf588f324a257f2d087e4b04b97f3a80fcaf817ce61bb0d1fc2781d2a"
+    },
+    {
+      "path": "crates/tn-runtime/tests/fixtures/decision-context.json",
+      "sha256": "5ab86ac76b4846fcb455886da117428c428dc00c70cc1e8074ee088f32c9ded7"
     },
     {
       "path": "crates/tn-runtime/tests/fixtures/governed/manifest.json",
@@ -160,12 +164,24 @@
       "sha256": "69aafccc206061667b764bddad542f74161b15cf4886a380fd24cfad8861f38e"
     },
     {
+      "path": "crates/tn-runtime/tests/governance_context.rs",
+      "sha256": "dd220e78933f8bb9adc52f9dbcca9756b5cc972178e80300a6bbce9104a3fae7"
+    },
+    {
+      "path": "crates/tn-runtime/tests/governed_context_structure.rs",
+      "sha256": "93c354e6c0aa47f9047ec1d1df135eec8a0686eb41e669da5cd25643b9fe90d2"
+    },
+    {
+      "path": "crates/tn-runtime/tests/governed_decision_context.rs",
+      "sha256": "99bf52f71c625794440b843855cae53632531559be8524a00a924743aad1c98e"
+    },
+    {
       "path": "crates/tn-runtime/tests/governed_object_admission.rs",
-      "sha256": "ecba02d0f27cd6375a71a5c29a18c95334bba982b4ffef87ca8681ac251ea18d"
+      "sha256": "ce22599272651b2b270950de7c8acbb83349c936fbe92505e9aa1e2aabed216c"
     },
     {
       "path": "crates/tn-runtime/tests/governed_object_output.rs",
-      "sha256": "2b6a8daa157e4ebb817edcd8a613712e5d493c683fb5a2071272788119d0b35d"
+      "sha256": "b039a2bc0056ebb79d1b72e66672677303cc07f04f9d635dd766e81c5fcb64a8"
     },
     {
       "path": "crates/tn-runtime/tests/governed_object_request.rs",
@@ -173,19 +189,19 @@
     },
     {
       "path": "crates/tn-runtime/tests/governed_object_tools.rs",
-      "sha256": "84331f5e0216f2b7f24c0b477b717f4b2fb2a73e433f17bc46439f69529ede81"
+      "sha256": "f8f0044a61bbf0ca1a6348b11bf6517794ac1c881e47b5018dd776e6abaa00af"
     },
     {
       "path": "crates/tn-runtime/tests/governed_presentation.rs",
-      "sha256": "dfb312ad1179742e11e21dc3cb17a2c433c49e5a0c4ae8e01bb5d951c6192425"
+      "sha256": "6c3628ba20c3c9c11729f2bd03702bacb95bd06e9d848b3d252853d8294838bc"
     },
     {
       "path": "crates/tn-runtime/tests/governed_registers.rs",
-      "sha256": "c03a8ed040cedfe424b8cf1253f41e919393bd9e7b3b06a053b95112f94d0d0d"
+      "sha256": "e8b08984818f448993ad82a29ce88c4b971f8aeb299e5e3ecc44b188ac5987c5"
     },
     {
       "path": "crates/tn-runtime/tests/governed_support/mod.rs",
-      "sha256": "80192f6cce874cb830b6eb3861bc7ed09f77cf835533bf7029c78c1003140a7e"
+      "sha256": "996d0032ddf4cf09429c787fa00df8320dd49c69cc44c4c3abaed93cfd4fd4ae"
     },
     {
       "path": "crates/tn-runtime/tests/output_tn.rs",
@@ -197,7 +213,7 @@
     },
     {
       "path": "crates/tn-runtime/tests/runtime.rs",
-      "sha256": "f64ff64dcfb4b4fbf29ce987f267cede2f0ca5e38bf5262b9a89f992519c3039"
+      "sha256": "4b475142b7243ef6f79292aa5f7ed4de96531baaddc9a0171d82d6d99c08d075"
     },
     {
       "path": "crates/tn-runtime/tests/sensitive_trace.rs",
@@ -205,11 +221,11 @@
     },
     {
       "path": "crates/tn-runtime/tests/session.rs",
-      "sha256": "03735dd1d6adb4e1ef8af0196a719c0c6d538969f6a7e4b7a2757ce5765fa789"
+      "sha256": "df555457dc056b1ef60251bac6b2ebf4d4f7cb6bcda1cdff83e73b009ce9cb5c"
     },
     {
       "path": "crates/tn-runtime/tests/support/mod.rs",
-      "sha256": "d75e7937ab6679dc8d49a37ba0e586d237e908f631bbe53757304e343dd219c7"
+      "sha256": "1815847909df3defa13d8c468bc4eb56e0b9efc6b519b0b1d965a05a7cf82d25"
     },
     {
       "path": "crates/tn-runtime/tests/tools.rs",
@@ -217,7 +233,7 @@
     },
     {
       "path": "crates/tn-runtime/tests/vllm_binding.rs",
-      "sha256": "387c8a33235bd80480c3e7067b21f7fe0c49fd68a3e8e61f391b545a92ca0c79"
+      "sha256": "0290a302936f6f6cf50cb5addef211d0c9155da9ac7ec0f84ad0915a38c6b74e"
     },
     {
       "path": "crates/tn-test-tools/Cargo.toml",
@@ -241,7 +257,7 @@
     },
     {
       "path": "crates/tn-test-tools/src/fixture.rs",
-      "sha256": "e906c57db30c0b6a58a90223b8fa246d655e6d4d9d31da23e96fdc204bd2f592"
+      "sha256": "01a9a58328fc2b70e0be60029a382d4dd34bbd338ba96d55b1c398f5a82998e2"
     },
     {
       "path": "crates/tn-test-tools/src/lib.rs",
@@ -278,6 +294,10 @@
     {
       "path": "upstream/tn-proto/Cargo.toml",
       "sha256": "ef9cb2302f43826bfdc4837bd3468a3c15920dcd2276a72f5351e8b2df5bc5ee"
+    },
+    {
+      "path": "upstream/tn-proto/LICENSE",
+      "sha256": "2be23a4360b0f4ad40a49a09b1f73614d0fbc029db5c7bf7a67843a135726796"
     },
     {
       "path": "upstream/tn-proto/crypto/tn-bbg/Cargo.toml",
@@ -328,12 +348,12 @@
       "sha256": "8419b1653ce926250a3375f107d74e52bf890eb2cfb1fbeab3d297f355176e70"
     },
     {
-      "path": "upstream/tn-proto/crypto/tn-btn/benches/btn_bench.rs",
-      "sha256": "ca63e92da92d2168c884a0b8943c14001eb837ca055739de1d55687ad0532ff2"
-    },
-    {
       "path": "upstream/tn-proto/crypto/tn-btn/Cargo.toml",
       "sha256": "15e06369ca510ad58bc9f893a1e35f0432c114d288d18d1f54232e17fce0602c"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-btn/benches/btn_bench.rs",
+      "sha256": "ca63e92da92d2168c884a0b8943c14001eb837ca055739de1d55687ad0532ff2"
     },
     {
       "path": "upstream/tn-proto/crypto/tn-btn/examples/stress.rs",
@@ -408,16 +428,16 @@
       "sha256": "b26eca7795f01768739386edd0ce6318800308968aabf44a5b3ddaefacb42a62"
     },
     {
+      "path": "upstream/tn-proto/crypto/tn-core/Cargo.toml",
+      "sha256": "600b7a88153cbe6513f27d2f9722171b46987cc1b87e9172d688c08f020c24bf"
+    },
+    {
       "path": "upstream/tn-proto/crypto/tn-core/benches/pipeline.rs",
       "sha256": "9e18cef95f365558e49610038179e4a900b588d3a73b172893a1c13f80cdf124"
     },
     {
       "path": "upstream/tn-proto/crypto/tn-core/bin/tn-core-cli.rs",
       "sha256": "bc206ede66ebec7a55f0b0cb7e5933eaa6c527e1fe0a8439fdb54da7517764c0"
-    },
-    {
-      "path": "upstream/tn-proto/crypto/tn-core/Cargo.toml",
-      "sha256": "600b7a88153cbe6513f27d2f9722171b46987cc1b87e9172d688c08f020c24bf"
     },
     {
       "path": "upstream/tn-proto/crypto/tn-core/examples/governed_fixture_manifest.rs",
@@ -664,6 +684,10 @@
       "sha256": "98ed30dfc378ca8a2b9556e120cc3de8900d9017244de349968ca81f29314202"
     },
     {
+      "path": "upstream/tn-proto/crypto/tn-core/src/runtime/read.rs",
+      "sha256": "405ff54da788ce2ed961c20eab33f707cebdb597afab28173692b21deb7b18cb"
+    },
+    {
       "path": "upstream/tn-proto/crypto/tn-core/src/runtime/read/decrypt.rs",
       "sha256": "d4a64b514ab1558d192c0531da7eef825f5d322fedc470fc28bfcf56f89b1138"
     },
@@ -688,16 +712,12 @@
       "sha256": "8df078d4f572a92b92de45e0e17854628604e1e6fe988aaa5332233c1e75d4ef"
     },
     {
-      "path": "upstream/tn-proto/crypto/tn-core/src/runtime/read.rs",
-      "sha256": "405ff54da788ce2ed961c20eab33f707cebdb597afab28173692b21deb7b18cb"
+      "path": "upstream/tn-proto/crypto/tn-core/src/runtime/seal.rs",
+      "sha256": "989e557ac4e8f2487fc2c1eecbc7a0ff0fa643ce29cee351ec7ddf7085b44add"
     },
     {
       "path": "upstream/tn-proto/crypto/tn-core/src/runtime/seal/candidates.rs",
       "sha256": "c3b61b42ab1bddc74f6f96eba42042018306a1f8ea8d0f053fb97d92c3b628ce"
-    },
-    {
-      "path": "upstream/tn-proto/crypto/tn-core/src/runtime/seal.rs",
-      "sha256": "989e557ac4e8f2487fc2c1eecbc7a0ff0fa643ce29cee351ec7ddf7085b44add"
     },
     {
       "path": "upstream/tn-proto/crypto/tn-core/src/runtime/types.rs",
@@ -1088,12 +1108,12 @@
       "sha256": "abb739155ac2f0c9e6591bc41d37c7e4fc2479b5f8309eb0ba3334734927c61f"
     },
     {
-      "path": "upstream/tn-proto/crypto/tn-hibe/tests/golden/vectors.json",
-      "sha256": "d93121ff24bc69225fa8ae9e8acc4184e1c7529911e8255aaafea8a98aafdd39"
-    },
-    {
       "path": "upstream/tn-proto/crypto/tn-hibe/tests/golden.rs",
       "sha256": "d9efb2b577fe2d2eb64a87319c2e25512268a3d2ca4d3e67ca96c27786af93bc"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-hibe/tests/golden/vectors.json",
+      "sha256": "d93121ff24bc69225fa8ae9e8acc4184e1c7529911e8255aaafea8a98aafdd39"
     },
     {
       "path": "upstream/tn-proto/crypto/tn-hibe/tests/lifecycle.rs",
@@ -1106,10 +1126,6 @@
     {
       "path": "upstream/tn-proto/crypto/tn-hibe/tests/roundtrip.rs",
       "sha256": "b1ee0de371b4e1688a58a9d65307ca0520aa2ebc3235974d17eb9527b2739f6e"
-    },
-    {
-      "path": "upstream/tn-proto/LICENSE",
-      "sha256": "2be23a4360b0f4ad40a49a09b1f73614d0fbc029db5c7bf7a67843a135726796"
     }
   ]
 }

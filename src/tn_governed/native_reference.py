@@ -414,7 +414,6 @@ def write_governed_runtime_config(
         "max_message_bytes": 16 * 1024,
         "max_active_sessions": 1,
         "max_chain_namespaces": 8,
-        "echo_max_tokens": 8192,
         "final_max_tokens": 2048,
     }
     path = directory / "runtime.json"

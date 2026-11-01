@@ -31,7 +31,7 @@ fn manifest() -> Vec<u8> {
         .iter()
         .map(|key| (key.to_string(), Value::Null))
         .collect();
-    sampling.extend(json!({"n":1,"max_tokens":256,"temperature":0.0,"output_kind":2,"detokenize":true,"skip_clone":false}).as_object().unwrap().clone());
+    sampling.extend(json!({"n":1,"max_tokens":2048,"temperature":0.0,"output_kind":2,"detokenize":true,"skip_clone":false}).as_object().unwrap().clone());
     serde_json::to_vec(&json!({
         "schema":"tn.vllm.execution.v1", "engine_instance":"engine-test",
         "model_bundle_sha256":"a".repeat(64), "tokenizer_sha256":"b".repeat(64),
@@ -53,9 +53,16 @@ fn identity() -> VllmExecutionIdentity {
     }
 }
 #[test]
-fn vllm_executes_the_actual_native_governance_transition() {
+fn vllm_selects_sections_with_governance_in_the_bound_request() {
     let mut h = harness();
     let turn = h.session.next_model_turn().unwrap();
+    assert_eq!(h.session.state(), State::SectionSelection);
+    let request_text = String::from_utf8_lossy(&turn.request_json);
+    assert!(request_text.contains("held request"));
+    let request: Value = serde_json::from_slice(&turn.request_json).unwrap();
+    let context: Value = serde_json::from_str(request["messages"][1]["content"].as_str().unwrap()).unwrap();
+    assert_eq!(context["applicable_source_governance"], serde_json::to_value(&h.governance).unwrap());
+    assert!(!request_text.contains("continue_with_governance"));
     turn.permit
         .prepare(&turn.request_json, b"rendered", &manifest())
         .unwrap();
@@ -63,12 +70,11 @@ fn vllm_executes_the_actual_native_governance_transition() {
         .begin_vllm(identity(), &turn.request_json, b"rendered", &manifest())
         .unwrap();
     h.session
-        .accept_model_action(turn.permit, h.get_governance_result().native())
+        .accept_model_action(turn.permit, h.section_selection_result(&["firm_data"]).native())
         .unwrap();
-    assert_eq!(h.session.state(), State::CommitmentEcho);
+    assert_eq!(h.session.state(), State::GovernedAction);
     let next = h.session.next_model_turn().unwrap();
-    assert!(String::from_utf8_lossy(&next.request_json).contains("continue_with_governance"));
-    assert!(!String::from_utf8_lossy(&next.request_json).contains("held request"));
+    assert!(String::from_utf8_lossy(&next.request_json).contains("held request"));
 }
 #[test]
 fn changed_tokens_are_terminal_before_execution() {
@@ -137,7 +143,7 @@ fn cross_session_result_is_rejected() {
         .unwrap();
     assert!(b
         .session
-        .accept_model_action(turn.permit, a.get_governance_result().native())
+        .accept_model_action(turn.permit, a.section_selection_result(&["firm_data"]).native())
         .is_err());
     assert_eq!(b.session.state(), State::Failed);
 }
@@ -298,7 +304,7 @@ fn one_vllm_runtime_owns_independent_concurrent_sessions() {
     turn.permit
         .begin_vllm(identity(), &turn.request_json, b"rendered", &manifest())
         .unwrap();
-    assert_eq!(second.state(), State::GovernanceRead);
+    assert_eq!(second.state(), State::SectionSelection);
     assert!(runtime.start_session(&request).is_ok());
     second.abort().unwrap();
 }

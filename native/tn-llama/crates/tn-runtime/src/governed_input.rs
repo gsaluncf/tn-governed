@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Map, Value};
 use tn_core::governed::{
     AdmissionContext, DataObject, DatasetCatalog, DatasetEdition, GovernanceView, GovernedObject,
     GovernedReader, LineageVerifier, PolicyDag, PolicyRevision, UseContext,
@@ -23,6 +23,14 @@ pub const GOVERNED_REQUEST_PROTOCOL: &str = "tn.llama.request.v2";
 pub struct ContractPermission {
     pub revision_id: String,
     pub scope: String,
+    pub allowed_uses: BTreeSet<UseContext>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceContractPermission {
+    pub governed_by: String,
+    pub fields: Map<String, Value>,
     pub allowed_uses: BTreeSet<UseContext>,
 }
 
@@ -48,6 +56,8 @@ pub struct GovernedInputConfig {
     pub trusted_writers: BTreeSet<String>,
     pub authority_writers: BTreeSet<String>,
     pub contracts: Vec<ContractPermission>,
+    #[serde(default)]
+    pub evidence_contracts: Vec<EvidenceContractPermission>,
 }
 
 impl GovernedInputConfig {
@@ -143,17 +153,20 @@ struct MetadataStore {
     policy_revisions: Vec<String>,
     dataset_editions: Vec<String>,
     publications: Vec<String>,
+    #[serde(default)]
+    claim_records: Vec<String>,
 }
 
 pub(crate) struct GovernedInputRuntime {
     pub config: GovernedInputConfig,
-    reader: GovernedReader,
+    pub(crate) reader: GovernedReader,
     pub verifier: Arc<GovernanceReader>,
     pub report_policy: Option<tn_core::governed::Governance>,
-    dag: PolicyDag,
-    catalog: DatasetCatalog,
-    retained: BTreeMap<String, GovernanceView>,
-    lineage: LineageVerifier,
+    pub(crate) dag: PolicyDag,
+    pub(crate) catalog: DatasetCatalog,
+    pub(crate) retained: BTreeMap<String, GovernanceView>,
+    pub(crate) lineage: LineageVerifier,
+    pub(crate) claim_records: Vec<String>,
 }
 
 impl GovernedInputRuntime {
@@ -290,10 +303,11 @@ impl GovernedInputRuntime {
             catalog,
             retained,
             lineage,
+            claim_records: metadata.claim_records,
         })
     }
 
-    fn accepts(
+    pub(crate) fn accepts(
         &self,
         context: &AdmissionContext<'_>,
         view: &GovernanceView,
@@ -318,7 +332,10 @@ impl GovernedInputRuntime {
         Ok(true)
     }
 
-    fn accepts_contracts(&self, context: &AdmissionContext<'_>) -> tn_core::Result<bool> {
+    pub(crate) fn accepts_contracts(
+        &self,
+        context: &AdmissionContext<'_>,
+    ) -> tn_core::Result<bool> {
         if context.use_context() != Some(&self.config.use_context) {
             return Ok(false);
         }

@@ -9,7 +9,7 @@ use std::thread;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use support::{
-    advance_to_echo, advance_to_selection, canonical_json, fixture_config,
+    advance_to_selection, canonical_json, fixture_config,
     literal_runnable_manifest, prepare_and_begin, SessionHarness,
 };
 use tn_runtime::{
@@ -103,7 +103,7 @@ fn admission_audit_records_verified_then_reserved_and_binds_terminal_denial() {
     assert_eq!(admission_error.code(), "tn_active_session_limit");
 
     let events = audit.events.lock().unwrap();
-    assert_eq!(events.len(), 4);
+    assert_eq!(events.len(), 5);
     let verified = &events[0];
     assert_eq!(verified.kind, "row_verified");
     assert_eq!(verified.state_before, "received");
@@ -124,14 +124,25 @@ fn admission_audit_records_verified_then_reserved_and_binds_terminal_denial() {
     let reserved = &events[1];
     assert_eq!(reserved.kind, "chain_reserved");
     assert_eq!(reserved.state_before, "row_verified");
-    assert_eq!(reserved.state_after, "governance_read");
+    assert_eq!(reserved.state_after, "governance_admission");
     assert_eq!(reserved.target_row_hash, harness.row_hash);
     assert_eq!(reserved.request_digest, harness.request_digest);
     assert_eq!(reserved.outcome, "allow");
     assert_eq!(reserved.error_code, None);
     assert_eq!(reserved.facts, AuditFacts::default());
 
-    let denied_verified = &events[2];
+    let governance = &events[2];
+    assert_eq!(governance.kind, "governance_opened_and_verified");
+    assert_eq!(governance.state_before, "governance_admission");
+    assert_eq!(governance.state_after, "section_selection");
+    assert_eq!(governance.target_row_hash, harness.row_hash);
+    assert_eq!(governance.request_digest, harness.request_digest);
+    assert_eq!(governance.facts.hashes_verified, Some(true));
+    assert_eq!(governance.facts.governance_value_count, Some(7));
+    assert_eq!(governance.facts.governance_commitment_count, Some(7));
+    assert!(governance.llama_task_id.is_none());
+
+    let denied_verified = &events[3];
     assert_eq!(denied_verified.kind, "row_verified");
     assert_eq!(denied_verified.state_before, "received");
     assert_eq!(denied_verified.state_after, "row_verified");
@@ -146,7 +157,7 @@ fn admission_audit_records_verified_then_reserved_and_binds_terminal_denial() {
         }
     );
 
-    let denied = &events[3];
+    let denied = &events[4];
     assert_eq!(denied.kind, "terminal_error");
     assert_eq!(denied.state_before, "row_verified");
     assert_eq!(denied.state_after, "failed");
@@ -205,7 +216,7 @@ fn admission_error_is_masked_only_when_its_terminal_audit_append_fails() {
 
 #[test]
 fn every_rejected_runnable_mode_terminalizes_before_begin_or_a_later_turn() {
-    let base = literal_runnable_manifest(256);
+    let base = literal_runnable_manifest(2048);
     let mut cases = vec![
         ("schema", manifest_with(&base, &["schema"], json!("other"))),
         (
@@ -362,8 +373,8 @@ fn sequential_sessions_append_to_one_runtime_evidence_without_truncating_row_one
         .permit
         .prepare(
             &row2_turn.request_json,
-            b"second-governance",
-            &literal_runnable_manifest(256),
+            b"second-selection",
+            &literal_runnable_manifest(2048),
         )
         .unwrap();
 
@@ -385,7 +396,7 @@ fn begin_audit_and_trace_bind_the_exact_body_prompt_manifest_and_task() {
     let mut harness = SessionHarness::from_fixture_and_runtime(fixture, runtime, "digest binding");
     let turn = harness.session.next_model_turn().unwrap();
     let request = turn.request_json.clone();
-    let manifest = literal_runnable_manifest(256);
+    let manifest = literal_runnable_manifest(2048);
     let prompt = b"exact rendered prompt";
     turn.permit.prepare(&request, prompt, &manifest).unwrap();
     turn.permit
@@ -481,9 +492,8 @@ fn audit_failures_stop_at_each_real_boundary_and_precommit_failures_abort() {
         "row_verified",
         "chain_reserved",
         "turn_begin_authorized",
-        "tool_call_accepted",
         "governance_opened_and_verified",
-        "commitments_matched",
+        "governance_context_bound",
         "sections_selected",
         "output_emitted_and_read_back",
     ] {
@@ -492,7 +502,7 @@ fn audit_failures_stop_at_each_real_boundary_and_precommit_failures_abort() {
         let trace = Arc::new(RecordingTrace::passing());
         let runtime = runtime_with_sinks(&fixture, Arc::clone(&audit), trace);
 
-        if kind == "row_verified" || kind == "chain_reserved" {
+        if matches!(kind, "row_verified" | "chain_reserved" | "governance_opened_and_verified") {
             let error = runtime
                 .start_session(&fixture.row1_request_json)
                 .unwrap_err();
@@ -503,32 +513,14 @@ fn audit_failures_stop_at_each_real_boundary_and_precommit_failures_abort() {
 
         let mut harness = SessionHarness::from_fixture_and_runtime(fixture, runtime.clone(), kind);
         let error = match kind {
-            "turn_begin_authorized" => {
+            "turn_begin_authorized" | "governance_context_bound" => {
                 let turn = harness.session.next_model_turn().unwrap();
-                let manifest = literal_runnable_manifest(256);
+                let manifest = literal_runnable_manifest(2048);
                 turn.permit
                     .prepare(&turn.request_json, b"prompt", &manifest)
                     .unwrap();
                 turn.permit
                     .begin(91, 0, &turn.request_json, b"prompt", &manifest)
-                    .unwrap_err()
-            }
-            "tool_call_accepted" | "governance_opened_and_verified" => {
-                let turn = harness.session.next_model_turn().unwrap();
-                prepare_and_begin(&turn, b"turn-one", 256, 92);
-                let result = harness.get_governance_result();
-                harness
-                    .session
-                    .accept_model_action(turn.permit, result.native())
-                    .unwrap_err()
-            }
-            "commitments_matched" => {
-                let turn = advance_to_echo(&mut harness);
-                prepare_and_begin(&turn, b"echo", 1536, 93);
-                let result = harness.commitment_echo_result();
-                harness
-                    .session
-                    .accept_model_action(turn.permit, result.native())
                     .unwrap_err()
             }
             "sections_selected" => {
@@ -602,7 +594,7 @@ fn sensitive_trace_failures_stop_prepare_begin_and_model_result_boundaries() {
         (SensitiveTraceKind::TurnStarted, None),
         (
             SensitiveTraceKind::ModelResult,
-            Some(tn_runtime::Phase::GovernanceRead),
+            Some(tn_runtime::Phase::SectionSelection),
         ),
         (
             SensitiveTraceKind::ModelResult,
@@ -628,13 +620,13 @@ fn sensitive_trace_failures_stop_prepare_begin_and_model_result_boundaries() {
                     .prepare(
                         &turn.request_json,
                         b"prompt",
-                        &literal_runnable_manifest(256),
+                        &literal_runnable_manifest(2048),
                     )
                     .unwrap_err()
             }
             (SensitiveTraceKind::TurnStarted, _) => {
                 let turn = harness.session.next_model_turn().unwrap();
-                let manifest = literal_runnable_manifest(256);
+                let manifest = literal_runnable_manifest(2048);
                 turn.permit
                     .prepare(&turn.request_json, b"prompt", &manifest)
                     .unwrap();
@@ -642,10 +634,10 @@ fn sensitive_trace_failures_stop_prepare_begin_and_model_result_boundaries() {
                     .begin(96, 0, &turn.request_json, b"prompt", &manifest)
                     .unwrap_err()
             }
-            (SensitiveTraceKind::ModelResult, Some(tn_runtime::Phase::GovernanceRead)) => {
+            (SensitiveTraceKind::ModelResult, Some(tn_runtime::Phase::SectionSelection)) => {
                 let turn = harness.session.next_model_turn().unwrap();
-                prepare_and_begin(&turn, b"turn-one", 256, 97);
-                let result = harness.get_governance_result();
+                prepare_and_begin(&turn, b"selection", 2048, 97);
+                let result = harness.section_selection_result(&["firm_data"]);
                 harness
                     .session
                     .accept_model_action(turn.permit, result.native())
@@ -705,21 +697,7 @@ fn complete_firm_report(harness: &mut SessionHarness, task_id: i64) -> ReportRel
 }
 
 fn firm_report_proposal() -> Value {
-    json!({
-        "event_type": "report.generated",
-        "public_sections": {
-            "default": {
-                "report_html": "<article><p>Customer FIRM-42 underwriting report.</p></article>"
-            }
-        },
-        "governance": {
-            "instruction": "Generate only the configured derived report.",
-            "use_for": "Creating the governed HTML report requested by the user.",
-            "do_not_use_for": "Any ungoverned output or unrelated purpose.",
-            "consequences": "Reject the report and release no output when validation fails.",
-            "on_violation_or_error": "Abort the governed session and record the failing gate."
-        }
-    })
+    json!({"report_html": "<article><p>Customer FIRM-42 underwriting report.</p></article>"})
 }
 
 fn runtime_with_sinks(

@@ -12,7 +12,7 @@ use support::{canonical_json, literal_runnable_manifest};
 
 const TN_STATUS_OK: i32 = 0;
 const TN_STATUS_ERROR: i32 = 1;
-const TN_TURN_GOVERNANCE_READ: u32 = 1;
+const TN_TURN_SECTION_SELECTION: u32 = 3;
 
 #[repr(C)]
 struct RuntimeHandle {
@@ -137,31 +137,15 @@ fn standalone_ffi_release(with_tool: bool) {
             tn_session_create(runtime, view(&request), &mut session, &mut error),
             TN_STATUS_OK
         );
-        for phase_index in 1..=if with_tool { 5 } else { 4 } {
+        for phase_index in 0..if with_tool { 3 } else { 2 } {
             let (turn, phase, body) = next_turn(session);
-            assert_eq!(phase, phase_index.min(4));
+            assert_eq!(phase, if phase_index == 0 { 3 } else { 4 });
             let body_value: Value = serde_json::from_slice(&body).unwrap();
-            let control: Value =
-                serde_json::from_str(body_value["messages"][1]["content"].as_str().unwrap())
-                    .unwrap();
             let (name, args) = match phase {
-                1 => (
-                    "get_governance",
-                    json!({"row_hash":control["row_hash"],"request_digest":control["request_digest"]}),
-                ),
-                2 => (
-                    "continue_with_governance",
-                    serde_json::from_str(
-                        body_value["messages"].as_array().unwrap().last().unwrap()["content"]
-                            .as_str()
-                            .unwrap(),
-                    )
-                    .unwrap(),
-                ),
                 3 => ("select_sections", json!({"sections":["finance"]})),
-                4 if with_tool && phase_index == 4 => (
+                4 if with_tool && phase_index == 1 => (
                     "log_compliance_creation",
-                    json!({"source_object_id":fixture.manifest["publications"]["calculation"]["object_id"],"action":"generate_report"}),
+                    json!({}),
                 ),
                 4 => (
                     "emit_governed_record",
@@ -321,8 +305,8 @@ fn begin_before_prepare_is_precise_and_terminalizes_the_session() {
     let fixture = build_real_tn_fixture().unwrap();
     let (runtime, session) = unsafe { create_runtime_session(&fixture) };
     let (turn, phase, body) = unsafe { next_turn(session) };
-    assert_eq!(phase, TN_TURN_GOVERNANCE_READ);
-    let manifest = literal_runnable_manifest(256);
+    assert_eq!(phase, TN_TURN_SECTION_SELECTION);
+    let manifest = literal_runnable_manifest(2048);
     let mut error = empty_owned();
     let status = unsafe {
         tn_turn_begin(
@@ -386,7 +370,7 @@ fn begin_rejects_changed_body_prompt_and_manifest_bindings() {
         let (runtime, session) = unsafe { create_runtime_session(&fixture) };
         let (turn, _, body) = unsafe { next_turn(session) };
         let prompt = b"prepared-binding".to_vec();
-        let manifest = literal_runnable_manifest(256);
+        let manifest = literal_runnable_manifest(2048);
         let mut error = empty_owned();
         let prepare_status = unsafe {
             tn_turn_prepare(

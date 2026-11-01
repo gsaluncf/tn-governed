@@ -51,11 +51,19 @@ pub struct AuditFacts {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub execution_identity: Option<crate::ExecutionIdentity>,
     pub phase: Option<crate::model_phase::Phase>,
-    pub turn_ordinal: Option<u8>,
+    pub turn_ordinal: Option<u64>,
     pub model_request_digest: Option<AuditDigest>,
     pub rendered_prompt_digest: Option<AuditDigest>,
     pub runnable_task_digest: Option<AuditDigest>,
     pub content_digest: Option<AuditDigest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_digest: Option<AuditDigest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub governance_context_protocol: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_object_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_row_hash: Option<String>,
     pub governance_value_count: Option<u32>,
     pub governance_commitment_count: Option<u32>,
     pub hashes_verified: Option<bool>,

@@ -102,7 +102,8 @@ pub struct RuntimeConfig {
     pub max_message_bytes: usize,
     pub max_active_sessions: usize,
     pub max_chain_namespaces: usize,
-    pub echo_max_tokens: u32,
+    #[serde(default, rename = "echo_max_tokens")]
+    _reserved_echo_max_tokens: Option<serde::de::IgnoredAny>,
     pub final_max_tokens: u32,
 }
 

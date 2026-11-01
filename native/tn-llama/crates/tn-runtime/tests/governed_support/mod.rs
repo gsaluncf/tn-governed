@@ -149,32 +149,6 @@ pub fn accept(
     };
     session.accept_model_action(turn.permit, result.native())
 }
-pub fn get_governance(session: &mut Session) -> Result<(), TnLlamaError> {
-    let turn = session.next_model_turn()?;
-    let body: Value = serde_json::from_slice(&turn.request_json).unwrap();
-    assert!(!String::from_utf8_lossy(&turn.request_json).contains("wealth_path"));
-    let control: Value =
-        serde_json::from_str(body["messages"][1]["content"].as_str().unwrap()).unwrap();
-    accept(
-        session,
-        turn,
-        "get_governance",
-        json!({"row_hash":control["row_hash"],"request_digest":control["request_digest"]}),
-    )?;
-    Ok(())
-}
-pub fn echo(session: &mut Session) -> Result<(), TnLlamaError> {
-    let turn = session.next_model_turn()?;
-    let body: Value = serde_json::from_slice(&turn.request_json).unwrap();
-    let args: Value = serde_json::from_str(
-        body["messages"].as_array().unwrap().last().unwrap()["content"]
-            .as_str()
-            .unwrap(),
-    )
-    .unwrap();
-    accept(session, turn, "continue_with_governance", args)?;
-    Ok(())
-}
 pub fn select(session: &mut Session, groups: &[&str]) -> Result<(), TnLlamaError> {
     let turn = session.next_model_turn()?;
     accept(session, turn, "select_sections", json!({"sections":groups}))?;

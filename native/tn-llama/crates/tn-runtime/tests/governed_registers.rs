@@ -55,8 +55,6 @@ fn register_child() {
         .clone();
     let (_keys, runtime) = fixture.runtime();
     let mut session = runtime.start_session(&request).unwrap();
-    get_governance(&mut session).unwrap();
-    echo(&mut session).unwrap();
     select(&mut session, &["finance"]).unwrap();
     let turn = session.next_model_turn().unwrap();
     let ActionOutcome::GovernedRelease(release) = accept(

@@ -38,7 +38,6 @@ pub(crate) struct RuntimeInner {
     pub(crate) governed_input: Option<Arc<GovernedInputRuntime>>,
     pub(crate) governed_output: Option<Arc<GovernedOutputPublisher>>,
     pub(crate) tool_dispatcher: Arc<ToolDispatcher>,
-    pub(crate) echo_max_tokens: u32,
     pub(crate) final_max_tokens: u32,
 }
 
@@ -196,7 +195,6 @@ impl GovernedRuntime {
                 governed_input,
                 governed_output,
                 tool_dispatcher: Arc::new(tool_dispatcher),
-                echo_max_tokens: config.echo_max_tokens,
                 final_max_tokens: config.final_max_tokens,
             }),
         })
@@ -281,7 +279,7 @@ impl GovernedRuntime {
                 audit.as_ref(),
                 "standalone_object_reserved",
                 "received",
-                "governance_read",
+                "governance_admission",
                 &object_id,
                 &request_digest,
                 AuditFacts {
@@ -296,7 +294,7 @@ impl GovernedRuntime {
                     "object admission audit append failed",
                 )
             })?;
-            return Ok(Session::new(
+            return Session::new(
                 run_id.clone(),
                 self.inner.execution_backend.clone(),
                 AdmittedInput::GovernedObject(admitted),
@@ -306,7 +304,6 @@ impl GovernedRuntime {
                 Arc::clone(&self.inner.report_contract),
                 None,
                 Arc::clone(&self.inner.tool_dispatcher),
-                self.inner.echo_max_tokens,
                 self.inner.final_max_tokens,
                 Some(crate::session::GovernedSessionState {
                     input: Arc::clone(input),
@@ -320,7 +317,7 @@ impl GovernedRuntime {
                     data: None,
                     tools: Vec::new(),
                 }),
-            ));
+            );
         }
         let accepted = match parse_and_verify_request(raw, &self.inner.limits) {
             Ok(accepted) => accepted,
@@ -383,7 +380,7 @@ impl GovernedRuntime {
             audit.as_ref(),
             "chain_reserved",
             "row_verified",
-            "governance_read",
+            "governance_admission",
             &row_hash,
             &request_digest,
             AuditFacts::default(),
@@ -409,7 +406,7 @@ impl GovernedRuntime {
                 "chain reservation audit append failed",
             ));
         }
-        Ok(Session::new(
+        Session::new(
             run_id.clone(),
             self.inner.execution_backend.clone(),
             AdmittedInput::LegacyChained(admitted),
@@ -419,10 +416,9 @@ impl GovernedRuntime {
             Arc::clone(&self.inner.report_contract),
             self.inner.output_publisher.as_ref().map(Arc::clone),
             Arc::clone(&self.inner.tool_dispatcher),
-            self.inner.echo_max_tokens,
             self.inner.final_max_tokens,
             None,
-        ))
+        )
     }
 }
 
@@ -456,7 +452,6 @@ fn validate_config(
             crate::ExecutionBackend::Vllm(_) => config.max_active_sessions > 0,
         }
         && config.max_chain_namespaces > 0
-        && config.echo_max_tokens > 0
         && config.final_max_tokens > 0;
     if valid {
         Ok(())

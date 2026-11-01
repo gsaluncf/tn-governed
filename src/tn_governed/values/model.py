@@ -211,7 +211,7 @@ def prepare_native_model(value, *, context, input_session, output_session, recip
     limits = resolve_runtime_limits(runtime_limits)
     source = context.store_object(value.reference.object_id)
     _require_standalone_value(source, value.reference)
-    metadata, _, _ = context._metadata(value)
+    metadata, _, claims = context._metadata(value)
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     input_config, output_config = Path(input_config), Path(output_config)
@@ -226,6 +226,21 @@ def prepare_native_model(value, *, context, input_session, output_session, recip
     lineage = tn.LineageVerifier(max_objects=limits["lineage_max_objects"],
         max_depth=limits["lineage_max_depth"]).verify(input_session.governance(source),
             context.catalog, context.policy_dag, resolve)
+    publication_ids = set(lineage.object_ids)
+    pending = [(source.id, 0)]
+    visited = set()
+    while pending:
+        identity, depth = pending.pop()
+        if depth > limits["lineage_max_depth"]:
+            raise OperationDenied("claim subject ancestry exceeds the native depth limit")
+        if identity in visited:
+            continue
+        visited.add(identity)
+        publication_ids.add(identity)
+        if len(publication_ids) > limits["lineage_max_objects"]:
+            raise OperationDenied("claim subject ancestry exceeds the native object limit")
+        pending.extend((parent.object_id, depth + 1)
+                       for parent in resolve(identity).governance.sources)
     revision_ids = list(dict.fromkeys(identity for a in context.resolver.assignments.values() for identity in a["revisions"]))
     edition_ids = [r.id for r in context.editions.values()]
     metadata_path = directory / "native-metadata.json"
@@ -233,7 +248,8 @@ def prepare_native_model(value, *, context, input_session, output_session, recip
     write_once(metadata_path, json.dumps({
         "policy_revisions": [wire(i) for i in revision_ids],
         "dataset_editions": [wire(i) for i in edition_ids],
-        "publications": [wire(i) for i in lineage.object_ids],
+        "publications": [wire(i) for i in sorted(publication_ids)],
+        "claim_records": [wire(i) for i in sorted({claim.id for claim in claims})],
     }).encode())
     for config in (input_config, output_config):
         readers = config.parent / "readers"
@@ -255,6 +271,8 @@ def prepare_native_model(value, *, context, input_session, output_session, recip
             "native_reader_config_path": translate(input_config), "metadata_store_path": translate(metadata_path),
             "use_context": use_dict(model_use), "destinations": [requirements["report_destination"]],
             "trusted_writers": sorted(context.evaluator.writers), "authority_writers": [context.resolver.authority],
+            "evidence_contracts": [{"governed_by": context.recorder.policy.governed_by,
+                "fields": context.recorder.policy.fields, "allowed_uses": [use_dict(model_use)]}],
             "contracts": [{"revision_id": p.revision_id, "scope": context.policy_dag.get(p.revision_id).scope,
                            "allowed_uses": [use_dict(model_use)]} for p in metadata.policies],
         },
@@ -279,7 +297,7 @@ def prepare_native_model(value, *, context, input_session, output_session, recip
         "model_sha256": digest(model), "binary_sha256": digest(binary),
         "max_request_bytes": limits["max_request_bytes"],
         "max_message_bytes": limits["max_message_bytes"],
-        "max_active_sessions": 1, "max_chain_namespaces": 8, "echo_max_tokens": 8192, "final_max_tokens": 2048,
+        "max_active_sessions": 1, "max_chain_namespaces": 8, "final_max_tokens": 2048,
     }
     path = directory / "runtime.json"
     write_once(path, json.dumps(config, indent=2).encode())

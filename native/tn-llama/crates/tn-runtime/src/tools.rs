@@ -89,34 +89,15 @@ impl RegisteredToolSpec {
         &self.parameters
     }
 
-    pub(crate) fn model_tool(&self, source_event_id: &str, action: &str) -> Value {
-        let mut parameters = self.parameters.clone();
-        parameters["properties"]["source_event_id"]["const"] =
-            Value::String(source_event_id.to_string());
-        parameters["properties"]["action"]["const"] = Value::String(action.to_string());
-        json!({
-            "type": "function",
-            "function": {
-                "name": self.name,
-                "description": self.description,
-                "parameters": parameters,
-            }
-        })
+    pub(crate) fn model_tool(&self) -> Value {
+        json!({"type":"function", "function":{"name":self.name, "description":self.description,
+            "parameters":{"type":"object","properties":{},"additionalProperties":false}}})
     }
 }
 
 impl RegisteredToolSpec {
-    pub(crate) fn native_model_tool(&self, source_object_id: &str, action: &str) -> Value {
-        let mut parameters = self.parameters.clone();
-        parameters["properties"]["source_object_id"]["const"] = json!(source_object_id);
-        parameters["properties"]["action"]["const"] = json!(action);
-        parameters["properties"]["source_object_id"]["description"] = json!(format!(
-            "Current admitted source object. Copy this exact value: {source_object_id}"
-        ));
-        parameters["properties"]["action"]["description"] = json!(format!(
-            "Runtime-authorized action. Copy this exact value: {action}"
-        ));
-        json!({"type":"function", "function":{"name":self.name, "description":self.description, "parameters":parameters}})
+    pub(crate) fn native_model_tool(&self) -> Value {
+        json!({"type":"function", "function":{"name":self.name, "description":self.description, "parameters":self.parameters}})
     }
 }
 
@@ -211,9 +192,7 @@ impl ToolDispatcher {
         let spec = RegisteredToolSpec {
             name: configured_name.into(),
             description: "Record governed report creation through the native TN publisher and return its authenticated receipt.".into(),
-            parameters: json!({"type":"object", "properties":{
-                "source_object_id":{"type":"string"}, "action":{"type":"string"}
-            }, "required":["source_object_id","action"], "additionalProperties":false}),
+            parameters: json!({"type":"object", "properties":{}, "additionalProperties":false}),
         };
         Ok(Self {
             handlers: BTreeMap::new(),
@@ -237,17 +216,11 @@ impl ToolDispatcher {
                     "native protected tool is not registered",
                 )
             })?;
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Arguments {
-            source_object_id: String,
-            action: String,
-        }
         let value = parse_duplicate_safe_json(&call.arguments).map_err(|_| arguments_error())?;
-        let arguments: Arguments = serde_json::from_value(value).map_err(|_| arguments_error())?;
-        if call.id.trim().is_empty()
-            || arguments.source_object_id != context.request.object.id()
-            || arguments.action != context.action
+        if !value
+            .as_object()
+            .is_some_and(|arguments| arguments.is_empty())
+            || call.id.trim().is_empty()
             || context.action != context.request.use_context.operation()
             || context.selected_sections.is_empty()
         {

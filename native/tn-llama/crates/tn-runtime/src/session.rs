@@ -3,7 +3,6 @@ use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde_json::{Map, Value};
-use subtle::ConstantTimeEq;
 
 use crate::admission::{AdmittedInput, AdmittedRequest};
 use crate::audit::{AuditDigest, AuditEvent, AuditFacts, DecisionAudit};
@@ -12,10 +11,9 @@ use crate::contract::ReportContract;
 use crate::governance::{GovernanceReader, VerifiedGovernance};
 use crate::model_phase::Phase;
 use crate::model_protocol::{
-    commitment_echo_body, emit_governed_record_tool, governance_presentation, governance_read_body,
-    governed_action_body, model_request_digest, rendered_prompt_digest, section_selection_body,
-    session_error, AcceptedCall, GovernedActionBodyInput, NativeToolResult, ToolExchange,
-    GOVERNANCE_READ_MAX_TOKENS,
+    governance_context_digest, governed_action_body, model_request_digest, rendered_prompt_digest,
+    section_selection_body, session_error, AcceptedCall, GovernedActionBodyInput, NativeToolResult,
+    ToolExchange,
 };
 use crate::output_tn::{
     ComplianceReceipt, OutputPublisher, ReportProposal, SourceLineage, TrustedDerivation,
@@ -26,8 +24,7 @@ use crate::TnLlamaError;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum State {
-    GovernanceRead,
-    CommitmentEcho,
+    GovernanceAdmission,
     SectionSelection,
     GovernedAction,
     Complete,
@@ -37,8 +34,7 @@ pub enum State {
 impl State {
     const fn phase(self) -> Option<Phase> {
         match self {
-            Self::GovernanceRead => Some(Phase::GovernanceRead),
-            Self::CommitmentEcho => Some(Phase::CommitmentEcho),
+            Self::GovernanceAdmission => None,
             Self::SectionSelection => Some(Phase::SectionSelection),
             Self::GovernedAction => Some(Phase::GovernedAction),
             Self::Complete | Self::Failed => None,
@@ -47,8 +43,7 @@ impl State {
 
     const fn as_str(self) -> &'static str {
         match self {
-            Self::GovernanceRead => "governance_read",
-            Self::CommitmentEcho => "commitment_echo",
+            Self::GovernanceAdmission => "governance_admission",
             Self::SectionSelection => "section_selection",
             Self::GovernedAction => "governed_action",
             Self::Complete => "complete",
@@ -91,7 +86,6 @@ struct SessionCore {
     run_id: String,
     row_hash: String,
     request_digest: String,
-    purpose: String,
     user_content: String,
     state: State,
     admitted: Option<AdmittedInput>,
@@ -102,14 +96,10 @@ struct SessionCore {
     tool_dispatcher: Arc<ToolDispatcher>,
     audit: Arc<dyn DecisionAudit>,
     trace: Arc<dyn SensitiveTraceSink>,
-    echo_max_tokens: u32,
     final_max_tokens: u32,
     next_turn_serial: u64,
     outstanding: Option<OutstandingTurn>,
     governance: Option<VerifiedGovernance>,
-    first_call: Option<StoredCall>,
-    echo_call: Option<StoredCall>,
-    echo_matched: bool,
     selected_sections: BTreeSet<String>,
     opened_sections: BTreeMap<String, Value>,
     selection_call: Option<StoredCall>,
@@ -143,6 +133,7 @@ struct OutstandingTurn {
     phase: Phase,
     request_json: Vec<u8>,
     model_request_digest: String,
+    context_digest: String,
     n_predict: u32,
     lifecycle: PermitLifecycle,
     rendered_prompt_digest: Option<String>,
@@ -397,6 +388,41 @@ impl TurnPermit {
                 FailedSink::Trace,
             ));
         }
+        let mut context_facts = governance_identity_facts(&core);
+        context_facts.context_digest = Some(audit_digest(
+            &core
+                .outstanding
+                .as_ref()
+                .expect("validated outstanding")
+                .context_digest,
+        ));
+        context_facts.execution_identity = match &identity {
+            crate::ExecutionIdentity::Vllm(_) => Some(identity.clone()),
+            _ => None,
+        };
+        if append_audit(
+            &core,
+            "governance_context_bound",
+            core.state,
+            core.state,
+            Some(self.phase),
+            task_id,
+            slot_id,
+            "allow",
+            None,
+            context_facts,
+        )
+        .is_err()
+        {
+            return Err(terminalize(
+                &mut core,
+                session_error(
+                    "tn_audit_append_failed",
+                    "governance context binding audit append failed",
+                ),
+                FailedSink::Audit,
+            ));
+        }
         if append_audit(
             &core,
             "turn_begin_authorized",
@@ -447,22 +473,19 @@ impl Session {
         report_contract: Arc<ReportContract>,
         output_publisher: Option<Arc<OutputPublisher>>,
         tool_dispatcher: Arc<ToolDispatcher>,
-        echo_max_tokens: u32,
         final_max_tokens: u32,
         governed: Option<GovernedSessionState>,
-    ) -> Self {
-        let (row_hash, request_digest, purpose, user_content, source_id) = match &admitted {
+    ) -> Result<Self, TnLlamaError> {
+        let (row_hash, request_digest, user_content, source_id) = match &admitted {
             AdmittedInput::LegacyChained(input) => (
                 input.request.row.row_hash().to_string(),
                 input.request.request_digest.clone(),
-                input.request.purpose.clone(),
                 input.request.messages[0].content.clone(),
                 input.request.row.event_id().to_string(),
             ),
             AdmittedInput::GovernedObject(input) => (
                 input.request.object.id().to_string(),
                 input.request.request_digest.clone(),
-                input.request.use_context.purpose().to_string(),
                 input.request.messages[0].content.clone(),
                 input.request.object.id().to_string(),
             ),
@@ -470,7 +493,7 @@ impl Session {
         let client_trace = vec![ClientTraceEvent {
             ordinal: 1,
             event: "admission".to_string(),
-            state: "governance_read".to_string(),
+            state: "governance_admission".to_string(),
             task_id: None,
             slot_id: None,
             row_hash: Some(row_hash.clone()),
@@ -478,15 +501,14 @@ impl Session {
             tool_name: None,
             event_id: Some(source_id),
         }];
-        Self {
+        let session = Self {
             core: Arc::new(Mutex::new(SessionCore {
                 execution_backend,
                 run_id,
                 row_hash,
                 request_digest,
-                purpose,
                 user_content,
-                state: State::GovernanceRead,
+                state: State::GovernanceAdmission,
                 admitted: Some(admitted),
                 governed,
                 governance_reader,
@@ -495,14 +517,10 @@ impl Session {
                 tool_dispatcher,
                 audit,
                 trace,
-                echo_max_tokens,
                 final_max_tokens,
                 next_turn_serial: 0,
                 outstanding: None,
                 governance: None,
-                first_call: None,
-                echo_call: None,
-                echo_matched: false,
                 selected_sections: BTreeSet::new(),
                 opened_sections: BTreeMap::new(),
                 selection_call: None,
@@ -510,7 +528,12 @@ impl Session {
                 compliance_receipt: None,
                 client_trace,
             })),
+        };
+        {
+            let mut core = lock_core(&session.core)?;
+            admit_governance(&mut core)?;
         }
+        Ok(session)
     }
 
     #[must_use]
@@ -539,37 +562,26 @@ impl Session {
                 FailedSink::None,
             ));
         }
+        let governance_context = match model_governance(&core) {
+            Ok(context) => context,
+            Err(error) => return Err(terminalize(&mut core, error, FailedSink::None)),
+        };
         let request_json = (|| -> Result<Vec<u8>, TnLlamaError> {
             match phase {
-                Phase::GovernanceRead => {
-                    governance_read_body(&core.purpose, core.row_hash(), core.request_digest())
-                }
-                Phase::CommitmentEcho => {
-                    let governance = core.governance.as_ref().ok_or_else(|| {
-                        session_error("tn_session_state", "verified governance is unavailable")
-                    })?;
-                    let first = core.first_call.as_ref().ok_or_else(|| {
-                        session_error("tn_session_state", "governance call history is unavailable")
-                    })?;
-                    commitment_echo_body(
-                        &core.purpose,
-                        core.row_hash(),
-                        core.request_digest(),
-                        &model_governance(&core)?,
-                        &governance.commitments,
-                        stored_call(first),
-                        core.echo_max_tokens,
-                    )
-                }
+                Phase::GovernanceRead | Phase::CommitmentEcho => Err(session_error(
+                    "tn_turn_phase_mismatch",
+                    "reserved model phase cannot issue a turn",
+                )),
                 Phase::SectionSelection => {
                     let available_sections = available_section_manifest(&core)?;
                     section_selection_body(
                         &core.user_content,
                         &available_sections,
+                        &governance_context,
                         core.final_max_tokens,
                     )
                 }
-                Phase::GovernedAction => governed_action_request(&core),
+                Phase::GovernedAction => governed_action_request(&core, &governance_context),
             }
         })();
         let request_json = match request_json {
@@ -579,10 +591,10 @@ impl Session {
         let digest = model_request_digest(&request_json);
         core.next_turn_serial += 1;
         let serial = core.next_turn_serial;
-        let n_predict = match phase {
-            Phase::GovernanceRead => GOVERNANCE_READ_MAX_TOKENS,
-            Phase::CommitmentEcho => core.echo_max_tokens,
-            Phase::SectionSelection | Phase::GovernedAction => core.final_max_tokens,
+        let n_predict = core.final_max_tokens;
+        let context_digest = match governance_context_digest(&governance_context) {
+            Ok(digest) => digest,
+            Err(error) => return Err(terminalize(&mut core, error, FailedSink::None)),
         };
         core.outstanding = Some(OutstandingTurn {
             execution_identity: None,
@@ -590,6 +602,7 @@ impl Session {
             phase,
             request_json: request_json.clone(),
             model_request_digest: digest.clone(),
+            context_digest,
             n_predict,
             lifecycle: PermitLifecycle::Issued,
             rendered_prompt_digest: None,
@@ -609,232 +622,16 @@ impl Session {
         })
     }
 
-    fn accept_tool_call(
-        &mut self,
-        permit: TurnPermit,
-        result: NativeToolResult<'_>,
-    ) -> Result<(), TnLlamaError> {
-        if !Arc::ptr_eq(&self.core, &permit.core) {
-            let mut core = lock_core(&self.core)?;
-            return Err(terminalize(
-                &mut core,
-                session_error(
-                    "tn_turn_session_mismatch",
-                    "turn permit belongs to a different session",
-                ),
-                FailedSink::None,
-            ));
-        }
-        let mut core = lock_core(&self.core)?;
-        if let Err(error) = validate_begun(&core, &permit) {
-            return Err(terminalize(&mut core, error, FailedSink::None));
-        }
-        if core
-            .trace
-            .append(SensitiveTraceEvent {
-                run_id: &core.run_id,
-                phase: Some(permit.phase),
-                kind: SensitiveTraceKind::ModelResult,
-                task_id: core.outstanding.as_ref().and_then(|turn| turn.task_id),
-                slot_id: core.outstanding.as_ref().and_then(|turn| turn.slot_id),
-                request_json: None,
-                rendered_prompt: None,
-                runnable_manifest: None,
-                raw_model_output: Some(result.raw_model_output),
-                parsed_content: Some(result.content),
-                error_code: None,
-            })
-            .is_err()
-        {
-            return Err(terminalize(
-                &mut core,
-                session_error(
-                    "tn_sensitive_trace_append_failed",
-                    "model-result trace append failed",
-                ),
-                FailedSink::Trace,
-            ));
-        }
-        let accepted = validate_native_call(&core, permit.phase, &result);
-        let call = match accepted {
-            Ok(call) => call,
-            Err(error) => return Err(terminalize(&mut core, error, FailedSink::None)),
-        };
-        if append_audit(
-            &core,
-            "tool_call_accepted",
-            core.state,
-            core.state,
-            Some(permit.phase),
-            core.outstanding.as_ref().and_then(|turn| turn.task_id),
-            core.outstanding.as_ref().and_then(|turn| turn.slot_id),
-            "allow",
-            None,
-            AuditFacts {
-                incomplete: Some(false),
-                ..AuditFacts::default()
-            },
-        )
-        .is_err()
-        {
-            return Err(terminalize(
-                &mut core,
-                session_error(
-                    "tn_audit_append_failed",
-                    "accepted tool-call audit append failed",
-                ),
-                FailedSink::Audit,
-            ));
-        }
-
-        match permit.phase {
-            Phase::GovernanceRead => {
-                let result = if let Some(state) = &core.governed {
-                    (|| {
-                        let groups = available_section_manifest(&core)?.into_keys().collect();
-                        state
-                            .input
-                            .governance(core.governed_request(), &groups)
-                            .map(|(view, governance)| (Some(view), governance))
-                    })()
-                } else {
-                    core.governance_reader
-                        .open_and_verify(&core.admitted_request().request.row)
-                        .map(|governance| (None, governance))
-                };
-                let (view, governance) = match result {
-                    Ok(governance) => governance,
-                    Err(error) => return Err(terminalize(&mut core, error, FailedSink::None)),
-                };
-                if let Some(state) = &mut core.governed {
-                    state.view = view;
-                }
-                let governance_value_count = u32::try_from(governance.plaintext.len())
-                    .expect("governance field count fits u32");
-                let governance_commitment_count = u32::try_from(governance.commitments.len())
-                    .expect("governance commitment count fits u32");
-                if append_audit(
-                    &core,
-                    "governance_opened_and_verified",
-                    State::GovernanceRead,
-                    State::CommitmentEcho,
-                    Some(permit.phase),
-                    core.outstanding.as_ref().and_then(|turn| turn.task_id),
-                    core.outstanding.as_ref().and_then(|turn| turn.slot_id),
-                    "allow",
-                    None,
-                    AuditFacts {
-                        governance_value_count: Some(governance_value_count),
-                        governance_commitment_count: Some(governance_commitment_count),
-                        hashes_verified: Some(true),
-                        ..AuditFacts::default()
-                    },
-                )
-                .is_err()
-                {
-                    return Err(terminalize(
-                        &mut core,
-                        session_error(
-                            "tn_audit_append_failed",
-                            "governance-open audit append failed",
-                        ),
-                        FailedSink::Audit,
-                    ));
-                }
-                let task_id = core.outstanding.as_ref().and_then(|turn| turn.task_id);
-                let slot_id = core.outstanding.as_ref().and_then(|turn| turn.slot_id);
-                let trace_row_hash = core.row_hash.clone();
-                consume_outstanding(&mut core);
-                push_client_trace(
-                    &mut core,
-                    "governance_opened",
-                    State::CommitmentEcho,
-                    task_id,
-                    slot_id,
-                    Some(trace_row_hash),
-                    None,
-                    None,
-                );
-                core.first_call = Some(call);
-                core.governance = Some(governance);
-                core.state = State::CommitmentEcho;
-            }
-            Phase::CommitmentEcho => {
-                let governance = core.governance.as_ref().expect("verified governance");
-                let governance_value_count = u32::try_from(governance.plaintext.len())
-                    .expect("governance field count fits u32");
-                let governance_commitment_count = u32::try_from(governance.commitments.len())
-                    .expect("governance commitment count fits u32");
-                if append_audit(
-                    &core,
-                    "commitments_matched",
-                    State::CommitmentEcho,
-                    State::SectionSelection,
-                    Some(permit.phase),
-                    core.outstanding.as_ref().and_then(|turn| turn.task_id),
-                    core.outstanding.as_ref().and_then(|turn| turn.slot_id),
-                    "allow",
-                    None,
-                    AuditFacts {
-                        governance_value_count: Some(governance_value_count),
-                        governance_commitment_count: Some(governance_commitment_count),
-                        hashes_matched: Some(true),
-                        ..AuditFacts::default()
-                    },
-                )
-                .is_err()
-                {
-                    return Err(terminalize(
-                        &mut core,
-                        session_error(
-                            "tn_audit_append_failed",
-                            "commitment-match audit append failed",
-                        ),
-                        FailedSink::Audit,
-                    ));
-                }
-                let task_id = core.outstanding.as_ref().and_then(|turn| turn.task_id);
-                let slot_id = core.outstanding.as_ref().and_then(|turn| turn.slot_id);
-                let trace_row_hash = core.row_hash.clone();
-                consume_outstanding(&mut core);
-                push_client_trace(
-                    &mut core,
-                    "governance_echo_matched",
-                    State::SectionSelection,
-                    task_id,
-                    slot_id,
-                    Some(trace_row_hash),
-                    None,
-                    None,
-                );
-                core.echo_call = Some(call);
-                core.echo_matched = true;
-                core.state = State::SectionSelection;
-            }
-            Phase::SectionSelection | Phase::GovernedAction => {
-                return Err(terminalize(
-                    &mut core,
-                    session_error(
-                        "tn_turn_phase_mismatch",
-                        "action phase is not accepted by the legacy tool-result entry point",
-                    ),
-                    FailedSink::None,
-                ));
-            }
-        }
-        Ok(())
-    }
-
     pub fn accept_model_action(
         &mut self,
         permit: TurnPermit,
         result: NativeToolResult<'_>,
     ) -> Result<ActionOutcome, TnLlamaError> {
         match permit.phase {
-            Phase::GovernanceRead | Phase::CommitmentEcho => {
-                self.accept_tool_call(permit, result)?;
-                Ok(ActionOutcome::Continue)
-            }
+            Phase::GovernanceRead | Phase::CommitmentEcho => Err(session_error(
+                "tn_turn_phase_mismatch",
+                "reserved model phase cannot accept a result",
+            )),
             Phase::SectionSelection => self.accept_section_selection(permit, result),
             Phase::GovernedAction => self.accept_governed_action(permit, result),
         }
@@ -1080,10 +877,34 @@ impl Session {
             selected_sections: core.selected_sections.clone(),
             action: core.report_contract.operation.clone(),
         };
+        let arguments = crate::envelope::parse_duplicate_safe_json(call.arguments.as_bytes())
+            .map_err(|_| {
+                terminalize(
+                    &mut core,
+                    session_error(
+                        "tn_tool_arguments_invalid",
+                        "protected tool arguments must be an empty object",
+                    ),
+                    FailedSink::None,
+                )
+            })?;
+        if !arguments
+            .as_object()
+            .is_some_and(|arguments| arguments.is_empty())
+        {
+            return Err(terminalize(
+                &mut core,
+                session_error(
+                    "tn_tool_arguments_invalid",
+                    "protected tool arguments must be an empty object",
+                ),
+                FailedSink::None,
+            ));
+        }
         let registered_call = RegisteredCall {
             id: call.id.clone(),
             name: call.name.clone(),
-            arguments: call.arguments.as_bytes().to_vec(),
+            arguments: serde_json::to_vec(&serde_json::json!({"source_event_id":context.source_event_id,"action":context.action})).expect("trusted invocation serializes"),
         };
         let receipt = match core.tool_dispatcher.execute(&registered_call, &context) {
             Ok(ToolReceipt::Compliance(receipt)) => receipt,
@@ -1330,23 +1151,104 @@ fn trusted_source_lineage(core: &SessionCore) -> Result<Option<SourceLineage>, T
     }))
 }
 
+fn governance_identity_facts(core: &SessionCore) -> AuditFacts {
+    AuditFacts {
+        governance_context_protocol: Some("tn.llama.governance-context.v1".into()),
+        source_object_id: core.governed.as_ref().map(|_| core.row_hash.clone()),
+        source_row_hash: core.governed.is_none().then(|| core.row_hash.clone()),
+        ..AuditFacts::default()
+    }
+}
+
+fn admit_governance(core: &mut SessionCore) -> Result<(), TnLlamaError> {
+    let result = if let Some(state) = &core.governed {
+        (|| {
+            let groups = available_section_manifest(core)?.into_keys().collect();
+            state
+                .input
+                .governance(core.governed_request(), &groups)
+                .map(|(view, governance)| (Some(view), governance))
+        })()
+    } else {
+        core.governance_reader
+            .open_and_verify(&core.admitted_request().request.row)
+            .map(|governance| (None, governance))
+    };
+    let (view, governance) = result.map_err(|error| terminalize(core, error, FailedSink::None))?;
+    if let Some(state) = &mut core.governed {
+        state.view = view;
+    }
+    let mut facts = governance_identity_facts(core);
+    facts.governance_value_count =
+        Some(u32::try_from(governance.plaintext.len()).expect("governance count fits u32"));
+    facts.governance_commitment_count =
+        Some(u32::try_from(governance.commitments.len()).expect("commitment count fits u32"));
+    facts.hashes_verified = Some(true);
+    core.governance = Some(governance);
+    // Resolve authenticated dependencies before any model permit can be issued.
+    model_governance(core).map_err(|error| terminalize(core, error, FailedSink::None))?;
+    if append_audit(
+        core,
+        "governance_opened_and_verified",
+        State::GovernanceAdmission,
+        State::SectionSelection,
+        None,
+        None,
+        None,
+        "allow",
+        None,
+        facts,
+    )
+    .is_err()
+    {
+        return Err(terminalize(
+            core,
+            session_error(
+                "tn_audit_append_failed",
+                "governance admission audit append failed",
+            ),
+            FailedSink::Audit,
+        ));
+    }
+    let row_hash = core.row_hash.clone();
+    push_client_trace(
+        core,
+        "governance_opened",
+        State::SectionSelection,
+        None,
+        None,
+        Some(row_hash),
+        None,
+        None,
+    );
+    core.state = State::SectionSelection;
+    Ok(())
+}
+
 fn model_governance(core: &SessionCore) -> Result<BTreeMap<String, Value>, TnLlamaError> {
     let governance = core
         .governance
         .as_ref()
         .ok_or_else(|| session_error("tn_session_state", "verified governance is unavailable"))?;
-    if core.governed.is_some() {
-        governance_presentation(
-            &governance.plaintext,
-            &governance.commitments,
-            core.governed_request().object.id(),
-        )
+    if let Some(state) = &core.governed {
+        let view = state.view.as_ref().ok_or_else(|| {
+            session_error(
+                "tn_session_state",
+                "verified source governance is unavailable",
+            )
+        })?;
+        state
+            .input
+            .decision_context(core.governed_request(), view, &state.tools)
     } else {
         Ok(governance.plaintext.clone())
     }
 }
 
-fn governed_action_request(core: &SessionCore) -> Result<Vec<u8>, TnLlamaError> {
+fn governed_action_request(
+    core: &SessionCore,
+    governance_context: &BTreeMap<String, Value>,
+) -> Result<Vec<u8>, TnLlamaError> {
     if core.governed.is_some() {
         let executed = core
             .governed_tool_exchanges
@@ -1365,12 +1267,7 @@ fn governed_action_request(core: &SessionCore) -> Result<Vec<u8>, TnLlamaError> 
                 .map(|name| {
                     core.tool_dispatcher
                         .specification(name)
-                        .map(|spec| {
-                            spec.native_model_tool(
-                                core.governed_request().object.id(),
-                                &core.report_contract.operation,
-                            )
-                        })
+                        .map(|spec| spec.native_model_tool())
                         .ok_or_else(|| {
                             session_error(
                                 "tn_tool_not_registered",
@@ -1391,7 +1288,7 @@ fn governed_action_request(core: &SessionCore) -> Result<Vec<u8>, TnLlamaError> 
         return crate::model_protocol::governed_object_action_body(
             &core.user_content,
             &selected_values(core)?,
-            &model_governance(core)?,
+            governance_context,
             core.governed
                 .as_ref()
                 .and_then(|state| state.input.report_policy.as_ref()),
@@ -1418,25 +1315,14 @@ fn governed_action_request(core: &SessionCore) -> Result<Vec<u8>, TnLlamaError> 
         .cloned()
         .collect::<Vec<_>>();
     let tools = if outstanding.is_empty() {
-        vec![emit_governed_record_tool(
-            &core.report_contract.output_event_type,
-            &core.report_contract.output_public_section,
-            &core.report_contract.output_policy,
-            source_lineage.as_ref(),
-            core.compliance_receipt.as_ref(),
-        )]
+        vec![crate::model_protocol::native_report_tool()]
     } else {
         outstanding
             .iter()
             .map(|name| {
                 core.tool_dispatcher
                     .specification(name)
-                    .map(|spec| {
-                        spec.model_tool(
-                            core.admitted_request().request.row.event_id(),
-                            &core.report_contract.operation,
-                        )
-                    })
+                    .map(|spec| spec.model_tool())
                     .ok_or_else(|| {
                         session_error(
                             "tn_tool_not_registered",
@@ -1465,8 +1351,7 @@ fn governed_action_request(core: &SessionCore) -> Result<Vec<u8>, TnLlamaError> 
         available_sections: &available_sections,
         selected_values: &selected_values,
         selected_sections: &selected_sections,
-        applicable_governance: requires_source_governance(core)
-            .then(|| &core.governance.as_ref().expect("echo matched").plaintext),
+        applicable_governance: Some(governance_context),
         output_event_type: &core.report_contract.output_event_type,
         output_public_section: &core.report_contract.output_public_section,
         operation: &core.report_contract.operation,
@@ -1488,10 +1373,8 @@ fn accept_native_tool(
     slot_id: Option<i32>,
 ) -> Result<ActionOutcome, TnLlamaError> {
     if core
-        .first_call
+        .selection_call
         .iter()
-        .chain(core.echo_call.iter())
-        .chain(core.selection_call.iter())
         .chain(
             core.governed_tool_exchanges
                 .iter()
@@ -1605,37 +1488,12 @@ fn accept_governed_report(
     slot_id: Option<i32>,
 ) -> Result<ActionOutcome, TnLlamaError> {
     let result = (|| {
-        let value = crate::envelope::parse_duplicate_safe_json(call.arguments.as_bytes()).map_err(
-            |_| {
-                session_error(
-                    "tn_report_proposal_invalid",
-                    "report proposal is not duplicate-free JSON",
-                )
-            },
-        )?;
-        let fields = value
-            .as_object()
-            .filter(|v| exact_keys(v, &["report_html"]))
-            .ok_or_else(|| {
-                session_error(
-                    "tn_report_proposal_invalid",
-                    "report proposal must contain report_html only",
-                )
-            })?;
-        let html = fields["report_html"]
-            .as_str()
-            .filter(|v| !v.trim().is_empty())
-            .ok_or_else(|| {
-                session_error(
-                    "tn_report_proposal_invalid",
-                    "report content must be nonempty text",
-                )
-            })?;
-        validate_html_attributions(core, html)?;
+        let html = parse_report_html(&call.arguments)?;
+        validate_html_attributions(core, &html)?;
         let state = core.governed.as_ref().expect("governed session");
         state.output.emit(
             state.data.as_ref().expect("selected data"),
-            html,
+            &html,
             &core.report_contract.output_event_type,
             core.governed_request(),
             state.view.as_ref().expect("accepted governance"),
@@ -1819,28 +1677,9 @@ fn accept_report_emission(
     if core.governed.is_some() {
         return accept_governed_report(core, phase, call, task_id, slot_id);
     }
-    let proposal_value = crate::envelope::parse_duplicate_safe_json(call.arguments.as_bytes())
-        .map_err(|_| {
-            terminalize(
-                core,
-                session_error(
-                    "tn_report_proposal_invalid",
-                    "governed record proposal is not duplicate-free JSON",
-                ),
-                FailedSink::None,
-            )
-        })?;
-    let proposal: ReportProposal = serde_json::from_value(proposal_value).map_err(|_| {
-        terminalize(
-            core,
-            session_error(
-                "tn_report_proposal_invalid",
-                "governed record proposal does not match the closed schema",
-            ),
-            FailedSink::None,
-        )
-    })?;
-    if let Err(error) = validate_report_attributions(core, &proposal) {
+    let html = parse_report_html(&call.arguments)
+        .map_err(|error| terminalize(core, error, FailedSink::None))?;
+    if let Err(error) = validate_html_attributions(core, &html) {
         return Err(terminalize(core, error, FailedSink::None));
     }
     let source_lineage = match trusted_source_lineage(core) {
@@ -1852,6 +1691,22 @@ fn accept_report_emission(
         source_lineage,
         compliance_evidence: core.compliance_receipt.clone(),
         request_digest: core.request_digest.clone(),
+    };
+    let policy = &core.report_contract.output_policy;
+    let proposal = ReportProposal {
+        event_type: core.report_contract.output_event_type.clone(),
+        public_sections: crate::output_tn::ReportPublicSections {
+            default: crate::output_tn::DefaultReportSection { report_html: html },
+        },
+        governance: crate::output_tn::ProposedOutputGovernance {
+            instruction: policy.instruction.clone(),
+            use_for: policy.use_for.clone(),
+            do_not_use_for: policy.do_not_use_for.clone(),
+            consequences: policy.consequences.clone(),
+            on_violation_or_error: policy.on_violation_or_error.clone(),
+            source_lineage: trusted.source_lineage.clone(),
+            compliance_evidence: trusted.compliance_evidence.clone(),
+        },
     };
     let verified = match core
         .output_publisher
@@ -2002,11 +1857,32 @@ fn accept_report_emission(
     Ok(ActionOutcome::Release(release))
 }
 
-fn validate_report_attributions(
-    core: &SessionCore,
-    proposal: &ReportProposal,
-) -> Result<(), TnLlamaError> {
-    validate_html_attributions(core, &proposal.public_sections.default.report_html)
+fn parse_report_html(arguments: &str) -> Result<String, TnLlamaError> {
+    let value = crate::envelope::parse_duplicate_safe_json(arguments.as_bytes()).map_err(|_| {
+        session_error(
+            "tn_report_proposal_invalid",
+            "report proposal is not duplicate-free JSON",
+        )
+    })?;
+    let fields = value
+        .as_object()
+        .filter(|value| exact_keys(value, &["report_html"]))
+        .ok_or_else(|| {
+            session_error(
+                "tn_report_proposal_invalid",
+                "report proposal must contain report_html only",
+            )
+        })?;
+    fields["report_html"]
+        .as_str()
+        .filter(|html| !html.trim().is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            session_error(
+                "tn_report_proposal_invalid",
+                "report content must be nonempty text",
+            )
+        })
 }
 
 fn validate_html_attributions(core: &SessionCore, html: &str) -> Result<(), TnLlamaError> {
@@ -2253,8 +2129,12 @@ fn validate_native_call(
             )
         })?;
     let expected_name = match phase {
-        Phase::GovernanceRead => "get_governance",
-        Phase::CommitmentEcho => "continue_with_governance",
+        Phase::GovernanceRead | Phase::CommitmentEcho => {
+            return Err(session_error(
+                "tn_turn_phase_mismatch",
+                "reserved model phase cannot accept a result",
+            ))
+        }
         Phase::SectionSelection => "select_sections",
         Phase::GovernedAction => std::str::from_utf8(call.name)
             .ok()
@@ -2286,8 +2166,7 @@ fn validate_native_call(
         )
     })?;
     match phase {
-        Phase::GovernanceRead => validate_governance_read_arguments(core, &arguments_value)?,
-        Phase::CommitmentEcho => validate_echo_arguments(core, &arguments_value)?,
+        Phase::GovernanceRead | Phase::CommitmentEcho => unreachable!("reserved phase rejected"),
         Phase::SectionSelection => {
             validate_section_selection_arguments(core, &arguments_value)?;
         }
@@ -2298,117 +2177,6 @@ fn validate_native_call(
         name: expected_name.to_string(),
         arguments: arguments.to_string(),
     })
-}
-
-fn validate_governance_read_arguments(
-    core: &SessionCore,
-    arguments: &Value,
-) -> Result<(), TnLlamaError> {
-    let object = arguments
-        .as_object()
-        .filter(|object| exact_keys(object, &["request_digest", "row_hash"]))
-        .ok_or_else(tool_arguments_shape)?;
-    let row_hash = object
-        .get("row_hash")
-        .and_then(Value::as_str)
-        .ok_or_else(tool_arguments_shape)?;
-    let request_digest = object
-        .get("request_digest")
-        .and_then(Value::as_str)
-        .ok_or_else(tool_arguments_shape)?;
-    if row_hash != core.row_hash() {
-        return Err(session_error(
-            "tn_tool_row_hash_mismatch",
-            "tool row hash does not match the admitted row",
-        ));
-    }
-    if request_digest != core.request_digest() {
-        return Err(session_error(
-            "tn_tool_request_digest_mismatch",
-            "tool request digest does not match the admitted request",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_echo_arguments(core: &SessionCore, arguments: &Value) -> Result<(), TnLlamaError> {
-    let object = arguments
-        .as_object()
-        .filter(|object| {
-            exact_keys(
-                object,
-                &[
-                    "governance",
-                    "governance_commitments",
-                    "request_digest",
-                    "row_hash",
-                ],
-            )
-        })
-        .ok_or_else(tool_arguments_shape)?;
-    let row_hash = object
-        .get("row_hash")
-        .and_then(Value::as_str)
-        .ok_or_else(tool_arguments_shape)?;
-    let request_digest = object
-        .get("request_digest")
-        .and_then(Value::as_str)
-        .ok_or_else(tool_arguments_shape)?;
-    if row_hash != core.row_hash() {
-        return Err(session_error(
-            "tn_tool_row_hash_mismatch",
-            "echo row hash does not match the admitted row",
-        ));
-    }
-    if request_digest != core.request_digest() {
-        return Err(session_error(
-            "tn_tool_request_digest_mismatch",
-            "echo request digest does not match the admitted request",
-        ));
-    }
-    let expected = core
-        .governance
-        .as_ref()
-        .ok_or_else(|| session_error("tn_session_state", "verified governance is unavailable"))?;
-    let expected_presentation = model_governance(core)?;
-    let governance = object
-        .get("governance")
-        .and_then(Value::as_object)
-        .filter(|object| same_keys(object, &expected_presentation))
-        .ok_or_else(tool_arguments_shape)?;
-    let commitments = object
-        .get("governance_commitments")
-        .and_then(Value::as_object)
-        .filter(|object| same_keys(object, &expected.commitments))
-        .ok_or_else(tool_arguments_shape)?;
-    if !commitments.values().all(Value::is_string) {
-        return Err(tool_arguments_shape());
-    }
-    for (field, expected_value) in &expected_presentation {
-        let supplied_value = governance.get(field).expect("key sets checked");
-        let expected_bytes = tn_core::canonical::canonical_bytes(expected_value)
-            .map_err(|_| tool_arguments_shape())?;
-        let supplied_bytes = tn_core::canonical::canonical_bytes(supplied_value)
-            .map_err(|_| tool_arguments_shape())?;
-        if supplied_bytes != expected_bytes {
-            return Err(session_error(
-                "tn_governance_echo_mismatch",
-                "echoed governance value does not match the opened value",
-            ));
-        }
-        let supplied = commitments[field]
-            .as_str()
-            .expect("string values checked")
-            .as_bytes();
-        let stored = expected.commitments[field].as_bytes();
-        if supplied.ct_eq(stored).unwrap_u8() != 1 {
-            return Err(session_error(
-                "tn_governance_echo_mismatch",
-                "echoed governance commitment does not match the verified token",
-            ));
-        }
-    }
-    Ok(())
 }
 
 fn validate_section_selection_arguments(
@@ -2445,22 +2213,8 @@ fn validate_section_selection_arguments(
     }
 }
 
-fn same_keys<T>(
-    object: &Map<String, Value>,
-    expected: &std::collections::BTreeMap<String, T>,
-) -> bool {
-    object.len() == expected.len() && expected.keys().all(|key| object.contains_key(key))
-}
-
 fn exact_keys<const N: usize>(object: &Map<String, Value>, expected: &[&str; N]) -> bool {
     object.len() == expected.len() && expected.iter().all(|key| object.contains_key(*key))
-}
-
-fn tool_arguments_shape() -> TnLlamaError {
-    session_error(
-        "tn_tool_arguments_shape",
-        "native parsed tool arguments do not match the closed phase schema",
-    )
 }
 
 fn section_selection_error() -> TnLlamaError {
@@ -2559,7 +2313,7 @@ fn append_audit(
     event.llama_slot_id = slot_id;
     event.error_code = error_code.map(str::to_string);
     facts.phase = phase;
-    facts.turn_ordinal = phase.map(|phase| u8::try_from(u32::from(phase)).expect("phase fits u8"));
+    facts.turn_ordinal = core.outstanding.as_ref().map(|turn| turn.serial);
     if facts.model_request_digest.is_none() {
         facts.model_request_digest = core
             .outstanding

@@ -854,7 +854,6 @@ fn write_fixture(
         max_message_bytes: 16 * 1024,
         max_active_sessions: 1,
         max_chain_namespaces: 8,
-        echo_max_tokens: 1536,
         final_max_tokens: 2048,
     };
     fs::write(&runtime_config_path, serde_json::to_vec(&runtime_config)?)?;
@@ -935,7 +934,6 @@ struct RuntimeConfigFile<'a> {
     max_message_bytes: usize,
     max_active_sessions: usize,
     max_chain_namespaces: usize,
-    echo_max_tokens: u32,
     final_max_tokens: u32,
 }
 

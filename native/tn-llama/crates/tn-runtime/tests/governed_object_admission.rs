@@ -16,8 +16,7 @@ fn admission_enforces_configured_lineage_bound() {
             .lineage_max_objects = limit;
         let request = fixture.request("calculation");
         let (_keys, runtime) = fixture.runtime();
-        let mut session = runtime.start_session(&request).unwrap();
-        let result = get_governance(&mut session);
+        let result = runtime.start_session(&request);
         assert_eq!(result.is_ok(), limit == 4096);
     }
 }
@@ -32,13 +31,14 @@ fn missing_configured_section_terminalizes_and_releases_capacity() {
         .insert("not_present".into());
     fixture.config.report_contract.allowed_input_sections = ["not_present".into()].into();
     let (_keys, runtime) = fixture.runtime();
-    let mut session = runtime.start_session(&request).unwrap();
     assert_eq!(
-        get_governance(&mut session).unwrap_err().code(),
+        runtime.start_session(&request).unwrap_err().code(),
         "tn_section_selection_invalid"
     );
-    assert_eq!(session.state(), State::Failed);
-    assert!(runtime.start_session(&request).is_ok());
+    assert_eq!(
+        runtime.start_session(&request).unwrap_err().code(),
+        "tn_section_selection_invalid"
+    );
 }
 
 #[test]
@@ -56,8 +56,6 @@ fn absent_business_capability_cannot_reach_value_bearing_turn() {
     std::fs::write(path, config.to_string()).unwrap();
     let (_keys, runtime) = fixture.runtime();
     let mut session = runtime.start_session(&request).unwrap();
-    get_governance(&mut session).unwrap();
-    echo(&mut session).unwrap();
     assert_eq!(
         select(&mut session, &["finance"]).unwrap_err().code(),
         "tn_governed_group_open_failed"
@@ -116,13 +114,11 @@ fn metadata_extra_contract_requires_its_own_accepted_authority() {
 }
 
 #[test]
-fn all_contracts_are_accepted_before_echo_or_business_exposure() {
+fn all_contracts_are_accepted_before_selection_or_business_exposure() {
     let fixture = Fixture::new();
     let request = fixture.request("calculation");
     let (_keys, runtime) = fixture.runtime();
     let mut session = runtime.start_session(&request).unwrap();
-    get_governance(&mut session).unwrap();
-    echo(&mut session).unwrap();
     select(&mut session, &["finance"]).unwrap();
     let turn = session.next_model_turn().unwrap();
     let body: Value = serde_json::from_slice(&turn.request_json).unwrap();
@@ -133,7 +129,7 @@ fn all_contracts_are_accepted_before_echo_or_business_exposure() {
         json!(0.25)
     );
     assert_eq!(
-        context["applicable_source_governance"]["dataset_bindings"]
+        context["applicable_source_governance"]["sources"][0]["governance"]["dataset_bindings"]
             .as_array()
             .unwrap()
             .len(),
@@ -159,19 +155,19 @@ fn either_contract_can_refuse_and_capacity_is_released() {
             .unwrap()]
             .into();
         let (_keys, runtime) = fixture.runtime();
-        let mut session = runtime.start_session(&request).unwrap();
         assert_eq!(
-            get_governance(&mut session).unwrap_err().code(),
+            runtime.start_session(&request).unwrap_err().code(),
             "tn_governed_use_denied"
         );
-        assert_eq!(session.state(), State::Failed);
-        assert!(session.next_model_turn().is_err());
-        assert!(runtime.start_session(&request).is_ok());
+        assert_eq!(
+            runtime.start_session(&request).unwrap_err().code(),
+            "tn_governed_use_denied"
+        );
     }
 }
 
 #[test]
-fn lost_contract_binding_or_ancestor_refuses_before_echo() {
+fn lost_contract_binding_or_ancestor_refuses_before_selection() {
     for publication in ["lost_contract", "lost_binding", "unreached_origins"] {
         let mut fixture = Fixture::new();
         let request = fixture.request(publication);
@@ -181,45 +177,21 @@ fn lost_contract_binding_or_ancestor_refuses_before_echo() {
             .unwrap()
             .into();
         let (_keys, runtime) = fixture.runtime();
-        let mut session = runtime.start_session(&request).unwrap();
         assert_eq!(
-            get_governance(&mut session).unwrap_err().code(),
+            runtime.start_session(&request).unwrap_err().code(),
             "tn_governed_use_denied"
         );
-        assert_eq!(session.state(), State::Failed);
     }
 }
 
 #[test]
-fn altered_echo_or_unapproved_group_cannot_open_business_data() {
-    for bad_echo in [true, false] {
-        let fixture = Fixture::new();
-        let request = fixture.request("calculation");
-        let (_keys, runtime) = fixture.runtime();
-        let mut session = runtime.start_session(&request).unwrap();
-        get_governance(&mut session).unwrap();
-        if bad_echo {
-            let turn = session.next_model_turn().unwrap();
-            let body: Value = serde_json::from_slice(&turn.request_json).unwrap();
-            let mut args: Value = serde_json::from_str(
-                body["messages"].as_array().unwrap().last().unwrap()["content"]
-                    .as_str()
-                    .unwrap(),
-            )
-            .unwrap();
-            args["governance"]["dataset_bindings"] = json!([]);
-            assert_eq!(
-                accept(&mut session, turn, "continue_with_governance", args)
-                    .unwrap_err()
-                    .code(),
-                "tn_governance_echo_mismatch"
-            );
-        } else {
-            echo(&mut session).unwrap();
-            assert!(select(&mut session, &["audit"]).is_err());
-        }
-        assert_eq!(session.state(), State::Failed);
-    }
+fn unapproved_group_cannot_open_business_data() {
+    let fixture = Fixture::new();
+    let request = fixture.request("calculation");
+    let (_keys, runtime) = fixture.runtime();
+    let mut session = runtime.start_session(&request).unwrap();
+    assert!(select(&mut session, &["audit"]).is_err());
+    assert_eq!(session.state(), State::Failed);
 }
 
 #[test]

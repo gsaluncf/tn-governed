@@ -5,8 +5,8 @@ use std::fs;
 
 use serde_json::{json, Value};
 use tn_runtime::{
-    parse_and_verify_request, ActionOutcome, GovernedRuntime, ModelTurn, NativeToolResult,
-    ParsedToolCall, RequestLimits, RuntimeConfig, Session,
+    parse_and_verify_request, GovernedRuntime, ModelTurn, NativeToolResult, ParsedToolCall,
+    RequestLimits, RuntimeConfig, Session,
 };
 use tn_test_tools::{build_real_tn_fixture, RealTnFixture};
 
@@ -70,40 +70,6 @@ impl SessionHarness {
             request_digest,
             governance,
             commitments,
-        }
-    }
-
-    pub fn get_governance_result(&self) -> OwnedToolResult {
-        OwnedToolResult {
-            id: b"call-governance-1".to_vec(),
-            name: b"get_governance".to_vec(),
-            arguments: canonical_json(&json!({
-                "request_digest": self.request_digest,
-                "row_hash": self.row_hash,
-            })),
-            raw: br#"<tool_call>{"name":"get_governance"}</tool_call>"#.to_vec(),
-            content: Vec::new(),
-            call_count: 1,
-            truncated: false,
-            stop_limit: false,
-        }
-    }
-
-    pub fn commitment_echo_result(&self) -> OwnedToolResult {
-        OwnedToolResult {
-            id: b"call-echo-2".to_vec(),
-            name: b"continue_with_governance".to_vec(),
-            arguments: canonical_json(&json!({
-                "governance": self.governance,
-                "governance_commitments": self.commitments,
-                "request_digest": self.request_digest,
-                "row_hash": self.row_hash,
-            })),
-            raw: br#"<tool_call>{"name":"continue_with_governance"}</tool_call>"#.to_vec(),
-            content: Vec::new(),
-            call_count: 1,
-            truncated: false,
-            stop_limit: false,
         }
     }
 
@@ -241,26 +207,6 @@ pub fn prepare_and_begin(turn: &ModelTurn, prompt: &[u8], n_predict: u32, task_i
         .unwrap();
 }
 
-pub fn advance_to_echo(harness: &mut SessionHarness) -> ModelTurn {
-    let turn = harness.session.next_model_turn().unwrap();
-    prepare_and_begin(&turn, b"rendered-governance-read", 256, 11);
-    let result = harness.get_governance_result();
-    harness
-        .session
-        .accept_model_action(turn.permit, result.native())
-        .map(|outcome| assert!(matches!(outcome, ActionOutcome::Continue)))
-        .unwrap();
-    harness.session.next_model_turn().unwrap()
-}
-
 pub fn advance_to_selection(harness: &mut SessionHarness) -> ModelTurn {
-    let turn = advance_to_echo(harness);
-    prepare_and_begin(&turn, b"rendered-commitment-echo", 1536, 12);
-    let result = harness.commitment_echo_result();
-    harness
-        .session
-        .accept_model_action(turn.permit, result.native())
-        .map(|outcome| assert!(matches!(outcome, ActionOutcome::Continue)))
-        .unwrap();
     harness.session.next_model_turn().unwrap()
 }

@@ -20,7 +20,7 @@ fn model_action_phases_have_the_exact_native_numbers() {
 }
 
 #[test]
-fn exact_echo_leads_to_a_value_free_section_selection_turn() {
+fn verified_governance_leads_to_a_value_free_section_selection_turn() {
     let mut harness = SessionHarness::new(USER_REQUEST);
 
     let turn = advance_to_selection(&mut harness);
@@ -31,10 +31,10 @@ fn exact_echo_leads_to_a_value_free_section_selection_turn() {
     assert_eq!(body["parallel_tool_calls"], false);
 
     let messages = body["messages"].as_array().unwrap();
-    assert_eq!(
-        messages[0]["content"],
-        "This is a server-governed action interaction. Call exactly one available tool and return no prose. Copy server-provided trusted fields exactly. Generate only the requested output fields. The server validates, executes, emits, and releases every action."
-    );
+    assert!(messages[0]["content"]
+        .as_str()
+        .unwrap()
+        .contains("Governance in the current request applies to every decision"));
     let selection_request = messages.last().unwrap()["content"].as_str().unwrap();
     let selection_request: Value = serde_json::from_str(selection_request).unwrap();
     assert_eq!(selection_request["user_request"], USER_REQUEST);
@@ -53,7 +53,6 @@ fn exact_echo_leads_to_a_value_free_section_selection_turn() {
         "123 Pine Ln",
         "P-98765",
         "FIRM-42",
-        "proprietary Precisely",
         "governance_commitments",
     ] {
         assert!(!exact_body.contains(forbidden), "leaked {forbidden}");
@@ -105,63 +104,37 @@ fn selected_values_and_next_action_are_derived_from_the_exact_selection() {
 }
 
 #[test]
-fn compliance_tool_schema_pins_the_trusted_source_and_action() {
+fn compliance_tool_schema_contains_no_runtime_owned_arguments() {
     let mut harness = SessionHarness::new(USER_REQUEST);
-    let selection_turn = advance_to_selection(&mut harness);
-    prepare_and_begin(&selection_turn, b"rendered-constant-selection", 2048, 29);
-    let selection = harness.section_selection_result(&["precisely"]);
+    let selection = advance_to_selection(&mut harness);
+    prepare_and_begin(&selection, b"selected", 2048, 1);
+    let result = harness.section_selection_result(&["precisely"]);
     harness
         .session
-        .accept_model_action(selection_turn.permit, selection.native())
+        .accept_model_action(selection.permit, result.native())
         .unwrap();
-
-    let action_turn = harness.session.next_model_turn().unwrap();
-    let body: Value = serde_json::from_slice(&action_turn.request_json).unwrap();
-    let properties = &body["tools"][0]["function"]["parameters"]["properties"];
+    let turn = harness.session.next_model_turn().unwrap();
+    let body: Value = serde_json::from_slice(&turn.request_json).unwrap();
     assert_eq!(
-        properties["source_event_id"]["const"],
-        source_event_id(&harness)
+        body["tools"][0]["function"]["parameters"],
+        json!({"type":"object", "properties":{}, "additionalProperties":false})
     );
-    assert_eq!(properties["action"]["const"], "derived_html_report");
 }
 
 #[test]
-fn emission_tool_schema_pins_server_owned_derivation_values() {
-    let (harness, emit_turn, proposal) = selected_ready_to_emit();
-    let body: Value = serde_json::from_slice(&emit_turn.request_json).unwrap();
-    let parameters = &body["tools"][0]["function"]["parameters"];
-    let governance = &parameters["properties"]["governance"]["properties"];
-
+fn emission_tool_schema_requests_business_content_only() {
+    let (_harness, turn, _proposal) = selected_ready_to_emit();
+    let body: Value = serde_json::from_slice(&turn.request_json).unwrap();
     assert_eq!(
-        parameters["properties"]["event_type"]["const"],
-        "report.generated"
-    );
-    assert_eq!(
-        governance["instruction"]["const"],
-        "Generate only the configured derived report."
-    );
-    assert_eq!(
-        governance["source_lineage"]["properties"]["source_event_id"]["const"],
-        source_event_id(&harness)
-    );
-    assert_eq!(
-        governance["source_lineage"]["properties"]["derived_from_row_hash"]["const"],
-        harness.row_hash
-    );
-    assert_eq!(
-        governance["compliance_evidence"]["properties"]["event_id"]["const"],
-        proposal["governance"]["compliance_evidence"]["event_id"]
-    );
-    assert_eq!(
-        governance["compliance_evidence"]["properties"]["action"]["const"],
-        "derived_html_report"
+        body["tools"][0]["function"]["parameters"],
+        json!({"type":"object", "properties":{"report_html":{"type":"string","minLength":1}}, "required":["report_html"], "additionalProperties":false})
     );
 }
 
 #[test]
 fn attribution_gate_checks_the_human_visible_html_text() {
     let (mut harness, emit_turn, mut proposal) = selected_ready_to_emit();
-    proposal["public_sections"]["default"]["report_html"] = json!(
+    proposal["report_html"] = json!(
         "<article><p>Wildfire Risk Score: 92</p><p aria-hidden=\"false\" style=\"display: block\"><strong>Source:</strong> Risk assessment derived from Precisely Wildfire Risk Data.</p></article>"
     );
     prepare_and_begin(&emit_turn, b"rendered-visible-attribution", 2048, 30);
@@ -180,7 +153,7 @@ fn attribution_gate_checks_the_human_visible_html_text() {
 fn raw_text_tag_like_strings_do_not_hide_visible_attribution() {
     let html = "<article><script>const marker = \"<template>\";</script><p>Source: Risk assessment derived from Precisely Wildfire Risk Data.</p></article>";
     let (mut harness, emit_turn, mut proposal) = selected_ready_to_emit();
-    proposal["public_sections"]["default"]["report_html"] = json!(html);
+    proposal["report_html"] = json!(html);
     prepare_and_begin(&emit_turn, b"rendered-raw-text-attribution", 2048, 30);
     let emission = harness.action_result(
         "raw-text-attribution-script",
@@ -259,7 +232,7 @@ fn hidden_attribution_in_non_rendered_html_is_rejected_without_output_emission()
             .join("logs")
             .join("tn.ndjson");
         let output_before = std::fs::read(&output_log).unwrap();
-        proposal["public_sections"]["default"]["report_html"] = json!(html);
+        proposal["report_html"] = json!(html);
         prepare_and_begin(&emit_turn, b"rendered-hidden-attribution", 2048, 30);
         let emission =
             harness.action_result(&format!("hidden-attribution-{case}"), "emit_governed_record", proposal);
@@ -300,16 +273,9 @@ fn section_selection_rejects_empty_duplicate_unknown_and_public_metadata_names()
 
 #[test]
 fn wrong_action_is_terminal_in_every_state() {
-    for state in [
-        "governance_read",
-        "commitment_echo",
-        "section_selection",
-        "governed_action",
-    ] {
+    for state in ["section_selection", "governed_action"] {
         let mut harness = SessionHarness::new(USER_REQUEST);
         let turn = match state {
-            "governance_read" => harness.session.next_model_turn().unwrap(),
-            "commitment_echo" => support::advance_to_echo(&mut harness),
             "section_selection" => advance_to_selection(&mut harness),
             "governed_action" => {
                 let selection_turn = advance_to_selection(&mut harness);
@@ -329,8 +295,6 @@ fn wrong_action_is_terminal_in_every_state() {
             _ => unreachable!(),
         };
         let n_predict = match state {
-            "governance_read" => 256,
-            "commitment_echo" => 1536,
             "section_selection" | "governed_action" => 2048,
             _ => unreachable!(),
         };
@@ -360,8 +324,8 @@ fn incomplete_multiple_call_and_prose_action_results_fail_terminally() {
     ] {
         let mut harness = SessionHarness::new(USER_REQUEST);
         let turn = harness.session.next_model_turn().unwrap();
-        prepare_and_begin(&turn, b"rendered-invalid-native-result", 256, 34);
-        let mut result = harness.get_governance_result();
+        prepare_and_begin(&turn, b"rendered-invalid-native-result", 2048, 34);
+        let mut result = harness.section_selection_result(&["firm_data"]);
         match name {
             "incomplete" => result.stop_limit = true,
             "multiple" => result.call_count = 2,
@@ -390,11 +354,8 @@ fn selected_section_tools_are_mandatory_scoped_and_single_use() {
         .unwrap();
     let firm_action = firm.session.next_model_turn().unwrap();
     prepare_and_begin(&firm_action, b"rendered-illegal-compliance", 2048, 42);
-    let illegal_compliance = firm.action_result(
-        "illegal-compliance",
-        "log_compliance_creation",
-        json!({"source_event_id": source_event_id(&firm), "action": "derived_html_report"}),
-    );
+    let illegal_compliance =
+        firm.action_result("illegal-compliance", "log_compliance_creation", json!({}));
     assert_eq!(
         firm.session
             .accept_model_action(firm_action.permit, illegal_compliance.native())
@@ -434,14 +395,8 @@ fn selected_section_tools_are_mandatory_scoped_and_single_use() {
 
     let (mut duplicate, emit_turn, _) = selected_ready_to_emit();
     prepare_and_begin(&emit_turn, b"rendered-duplicate-compliance", 2048, 45);
-    let repeated = duplicate.action_result(
-        "duplicate-compliance",
-        "log_compliance_creation",
-        json!({
-            "source_event_id": source_event_id(&duplicate),
-            "action": "derived_html_report"
-        }),
-    );
+    let repeated =
+        duplicate.action_result("duplicate-compliance", "log_compliance_creation", json!({}));
     assert_eq!(
         duplicate
             .session
@@ -529,8 +484,7 @@ fn terminal_proposal_rejects_every_substituted_trusted_fact_and_server_owned_mem
             "unknown_proposal_member" => proposal["extra"] = json!(true),
             "unknown_governance_member" => proposal["governance"]["extra"] = json!(true),
             "missing_attribution" => {
-                proposal["public_sections"]["default"]["report_html"] =
-                    json!("<article><p>Score 92.</p></article>")
+                proposal["report_html"] = json!("<article><p>Score 92.</p></article>")
             }
             _ => unreachable!(),
         }
@@ -645,14 +599,8 @@ fn precisely_path_executes_real_tool_and_releases_the_exact_verified_tn_row() {
     let source_event_id = source["tn_row"]["event_id"].as_str().unwrap();
     let compliance_turn = harness.session.next_model_turn().unwrap();
     prepare_and_begin(&compliance_turn, b"rendered-compliance", 2048, 14);
-    let compliance = harness.action_result(
-        "call-compliance-4",
-        "log_compliance_creation",
-        json!({
-            "source_event_id": source_event_id,
-            "action": "derived_html_report"
-        }),
-    );
+    let compliance =
+        harness.action_result("call-compliance-4", "log_compliance_creation", json!({}));
     assert!(matches!(
         harness
             .session
@@ -769,7 +717,6 @@ fn precisely_path_executes_real_tool_and_releases_the_exact_verified_tn_row() {
         [
             "admission",
             "governance_opened",
-            "governance_echo_matched",
             "sections_selected",
             "tool_executed",
             "receipt_inserted",
@@ -785,9 +732,9 @@ fn precisely_path_executes_real_tool_and_releases_the_exact_verified_tn_row() {
             .iter()
             .map(|event| event.ordinal)
             .collect::<Vec<_>>(),
-        (1..=10).collect::<Vec<_>>()
+        (1..=9).collect::<Vec<_>>()
     );
-    assert!(release.trace[1..4]
+    assert!(release.trace[2..4]
         .iter()
         .all(|event| event.task_id.is_some() && event.slot_id.is_some()));
     let public_trace = serde_json::to_string(&release.trace).unwrap();
@@ -890,30 +837,8 @@ fn firm_only_path_emits_without_precisely_governance_tool_or_attribution() {
         .any(|event| event.event == "tool_executed"));
 }
 
-fn report_proposal(html: &str, lineage: Option<Value>, evidence: Option<Value>) -> Value {
-    let mut governance = json!({
-        "instruction": "Generate only the configured derived report.",
-        "use_for": "Creating the governed HTML report requested by the user.",
-        "do_not_use_for": "Any ungoverned output or unrelated purpose.",
-        "consequences": "Reject the report and release no output when validation fails.",
-        "on_violation_or_error": "Abort the governed session and record the failing gate."
-    });
-    if let Some(lineage) = lineage {
-        governance["source_lineage"] = lineage;
-    }
-    if let Some(evidence) = evidence {
-        governance["compliance_evidence"] = evidence;
-    }
-    json!({
-        "event_type": "report.generated",
-        "public_sections": {"default": {"report_html": html}},
-        "governance": governance
-    })
-}
-
-fn source_event_id(harness: &SessionHarness) -> String {
-    let source: Value = serde_json::from_slice(&harness.raw_request).unwrap();
-    source["tn_row"]["event_id"].as_str().unwrap().to_string()
+fn report_proposal(html: &str, _lineage: Option<Value>, _evidence: Option<Value>) -> Value {
+    json!({"report_html": html})
 }
 
 fn selected_ready_to_emit() -> (SessionHarness, tn_runtime::ModelTurn, Value) {
@@ -927,14 +852,8 @@ fn selected_ready_to_emit() -> (SessionHarness, tn_runtime::ModelTurn, Value) {
         .unwrap();
     let compliance_turn = harness.session.next_model_turn().unwrap();
     prepare_and_begin(&compliance_turn, b"rendered-compliance-helper", 2048, 52);
-    let compliance = harness.action_result(
-        "helper-compliance",
-        "log_compliance_creation",
-        json!({
-            "source_event_id": source_event_id(&harness),
-            "action": "derived_html_report"
-        }),
-    );
+    let compliance =
+        harness.action_result("helper-compliance", "log_compliance_creation", json!({}));
     harness
         .session
         .accept_model_action(compliance_turn.permit, compliance.native())

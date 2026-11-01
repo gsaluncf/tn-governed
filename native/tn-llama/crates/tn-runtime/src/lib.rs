@@ -6,6 +6,7 @@ mod chain_store;
 mod client_trace;
 mod config;
 mod contract;
+mod decision_context;
 mod envelope;
 mod error;
 mod execution_binding;

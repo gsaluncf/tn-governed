@@ -97,7 +97,6 @@ fn model_references_verified_provenance_while_runtime_retains_the_full_graph() {
     let request = fixture.request("calculation");
     let (_keys, runtime) = fixture.runtime();
     let mut session = runtime.start_session(&request).unwrap();
-    get_governance(&mut session).unwrap();
     let turn = session.next_model_turn().unwrap();
     let body: Value = serde_json::from_slice(&turn.request_json).unwrap();
     let args: Value = serde_json::from_str(
@@ -106,21 +105,30 @@ fn model_references_verified_provenance_while_runtime_retains_the_full_graph() {
             .unwrap(),
     )
     .unwrap();
-    let reference = &args["governance"]["source_lineage"];
+    let reference =
+        &args["applicable_source_governance"]["sources"][0]["governance"]["source_lineage"];
     assert_eq!(reference["schema"], "tn.governance-reference.v1");
     assert_eq!(reference["entry_count"], 20);
     assert_eq!(reference["source_object_id"], identity);
-    assert_eq!(
-        reference["field_commitment"],
-        args["governance_commitments"]["source_lineage"]
-    );
-    accept(&mut session, turn, "continue_with_governance", args.clone()).unwrap();
-    select(&mut session, &["finance"]).unwrap();
+    assert!(reference["field_commitment"]
+        .as_str()
+        .unwrap()
+        .starts_with("hmac-sha256:"));
+    accept(
+        &mut session,
+        turn,
+        "select_sections",
+        json!({"sections":["finance"]}),
+    )
+    .unwrap();
     let turn = session.next_model_turn().unwrap();
     let body: Value = serde_json::from_slice(&turn.request_json).unwrap();
     let content: Value =
         serde_json::from_str(body["messages"][1]["content"].as_str().unwrap()).unwrap();
-    assert_eq!(content["applicable_source_governance"], args["governance"]);
+    assert_eq!(
+        content["applicable_source_governance"],
+        args["applicable_source_governance"]
+    );
     let tn_runtime::ActionOutcome::GovernedRelease(release) = accept(
         &mut session,
         turn,
@@ -153,7 +161,7 @@ fn model_references_verified_provenance_while_runtime_retains_the_full_graph() {
 }
 
 #[test]
-fn altered_provenance_reference_cannot_satisfy_the_echo_gate() {
+fn altered_provenance_reference_cannot_prepare_a_model_task() {
     for field in [
         "entry_count",
         "source_object_id",
@@ -165,33 +173,29 @@ fn altered_provenance_reference_cannot_satisfy_the_echo_gate() {
         let request = fixture.request("calculation");
         let (_keys, runtime) = fixture.runtime();
         let mut session = runtime.start_session(&request).unwrap();
-        get_governance(&mut session).unwrap();
         let turn = session.next_model_turn().unwrap();
-        let body: Value = serde_json::from_slice(&turn.request_json).unwrap();
-        let mut args: Value = serde_json::from_str(
-            body["messages"].as_array().unwrap().last().unwrap()["content"]
-                .as_str()
-                .unwrap(),
-        )
-        .unwrap();
+        let mut body: Value = serde_json::from_slice(&turn.request_json).unwrap();
+        let mut context: Value =
+            serde_json::from_str(body["messages"][1]["content"].as_str().unwrap()).unwrap();
+        let reference = &mut context["applicable_source_governance"]["sources"][0]["governance"]
+            ["source_lineage"];
         if field == "missing" {
-            args["governance"]["source_lineage"]
-                .as_object_mut()
-                .unwrap()
-                .remove("entry_count");
+            reference.as_object_mut().unwrap().remove("entry_count");
         } else {
-            args["governance"]["source_lineage"][field] = if field == "entry_count" {
-                json!(19)
-            } else {
-                json!("changed")
-            };
+            reference[field] = json!("substituted");
         }
+        body["messages"][1]["content"] = json!(context.to_string());
         assert_eq!(
-            accept(&mut session, turn, "continue_with_governance", args)
+            turn.permit
+                .prepare(
+                    &serde_json::to_vec(&body).unwrap(),
+                    b"altered provenance",
+                    &support::literal_runnable_manifest(2048)
+                )
                 .unwrap_err()
                 .code(),
-            "tn_governance_echo_mismatch"
+            "tn_turn_binding_mismatch"
         );
-        assert!(session.next_model_turn().is_err());
+        assert_eq!(session.state(), tn_runtime::State::Failed);
     }
 }

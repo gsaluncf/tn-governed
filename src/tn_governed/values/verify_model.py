@@ -2,14 +2,15 @@
 
 import base64
 import hashlib
-from html.parser import HTMLParser
 import json
+from html.parser import HTMLParser
 
 import tn
 from tn.canonical import _canonical_bytes
 from tn_llama_client.clients import NativeOutputReader
 from tn_llama_client.protocol import NativeModelRelease
 
+from ..context_evidence import inspect_governance_context
 from .evidence import EvidenceError
 from .model import runtime_limits_from_config
 
@@ -21,6 +22,15 @@ def require(condition, message):
 
 def sha(raw):
     return hashlib.sha256(raw).hexdigest()
+
+
+def verified_context_observation(audit, trace, *, run_id, request_digest, source_id):
+    evidence = inspect_governance_context(
+        audit, trace, run_id=run_id, request_digest=request_digest, source_id=source_id,
+    )
+    require(evidence.verified,
+            "native governance context evidence failed: " + "; ".join(evidence.errors))
+    return evidence.to_dict()
 
 
 class PlainReportText(HTMLParser):
@@ -131,6 +141,12 @@ def verify_model(root, run, records, by_id, rules, nodes, bindings, store, catal
             and rd["required_disclosure"] == notice and rd["claims"] == bindings[key]["claims"],
             "model result changed its source, conditions, or claim subjects")
     release = NativeModelRelease.from_http_json(base64.b64decode(responses[0]["body_b64"]))
+    trace_paths = sorted((root / "native-model/model-traces").glob("*.ndjson"))
+    trace = [json.loads(line) for path in trace_paths
+             for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    observations["governance_context"] = verified_context_observation(
+        audit, trace, run_id=release.run_id, request_digest=request_digest, source_id=source.id,
+    )
     require(release.output_object.id == model["output_object_id"] == rd["output_object_id"]
             and [o.id for o in release.tool_objects] == model["tool_object_ids"] == rd["tool_object_ids"]
             and len(release.tool_objects) == 1, "report or compliance identity differs from signed result")
@@ -160,8 +176,6 @@ def verify_model(root, run, records, by_id, rules, nodes, bindings, store, catal
                 "review display differs from its signed pending request")
         require((root / review["queue_entry"]).read_bytes() == store.get(review_id),
                 "pending queue does not contain the exact signed review request")
-        trace = [json.loads(line) for path in (root / "native-model/model-traces").glob("*.ndjson")
-                 for line in path.read_text().splitlines()]
         authorized = {(r["run_id"], r["llama_task_id"], r["llama_slot_id"], json.loads(r["facts_json"]).get("phase"))
                       for r in audit if r["kind"] == "turn_begin_authorized"}
         def turn_key(r):
