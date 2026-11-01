@@ -104,6 +104,31 @@ class Resolution:
     packet: ResolutionPacket
 
 
+@dataclass(frozen=True)
+class QueryResolution:
+    """Independently admitted assignments for every query source dependency."""
+
+    resolutions: tuple[Resolution, ...]
+
+    @property
+    def policies(self):
+        return tuple({policy.revision_id: policy for resolution in self.resolutions
+                      for policy in resolution.policies.values()}.values())
+
+    @property
+    def packets(self):
+        return tuple((resolution.table, resolution.packet) for resolution in self.resolutions)
+
+    @property
+    def sources(self):
+        return tuple({"database": "main", "table": resolution.table, "column": column,
+                      "assignment_id": resolution.assignment_id,
+                      "revision_id": policy.revision_id,
+                      "scope": resolution.columns[column]["scope"]}
+                     for resolution in self.resolutions
+                     for column, policy in resolution.policies.items())
+
+
 class AssignedRules:
     def __init__(self, resolver, *, actor, application, purpose, writers):
         self.resolver, self.actor = resolver, actor
@@ -132,6 +157,10 @@ class AssignedRules:
                 reasons.append("requester/application/purpose is outside source assignment")
             if request.operation not in rule["operations"]:
                 reasons.append(f"source assignment does not permit {request.operation}")
+            for parameter in request.parameters:
+                if isinstance(parameter, dict) and parameter.get("schema") == "tn.sql-query.v1":
+                    if parameter.get("lineage_precision") not in rule.get("sql_lineage", []):
+                        reasons.append("source assignment does not permit this SQL lineage precision")
             if request.operation == "reveal" and request.destination not in rule["destinations"]:
                 reasons.append("destination is outside source assignment")
             if request.operation == "model_handoff":
@@ -308,6 +337,64 @@ class UnityGovernance:
             self.registry.register_edition(dataset, edition, record.id, bundle)
         return {"dataset": dataset, "edition": edition, "record_id": record.id,
                 "source_object_id": obj.id}
+
+    def resolve_query(self, dependencies, *, actor, application, purpose, expected_source,
+                      operation="select", packets=None):
+        """Resolve every source with native authority checks before reading values."""
+        from .query import SourceColumn
+        dependencies = tuple(dependencies)
+        if not dependencies or any(not isinstance(source, SourceColumn)
+                                   or source.database != "main" for source in dependencies):
+            raise OperationDenied("query dependencies require enrolled source columns")
+        tables = {}
+        for source in sorted(set(dependencies)):
+            tables.setdefault(source.table, []).append(source.column)
+        carried = None if packets is None else dict(packets)
+        if carried is not None and (len(carried) != len(packets) or set(carried) != set(tables)):
+            raise OperationDenied("query packets differ from the discovered source tables")
+        return QueryResolution(tuple(self.resolve(table, columns, actor=actor,
+            application=application, purpose=purpose, expected_source=expected_source,
+            operation=operation, packet=None if carried is None else carried[table])
+            for table, columns in tables.items()))
+
+    def publish_result_edition(self, obj, resolution, *, query_id, binding_id, directory,
+                               application, purpose):
+        """Bind a relation to every source contract, retaining its original scope."""
+        if not isinstance(resolution, QueryResolution) or not resolution.policies:
+            raise TypeError("query result requires admitted multi-source assignments")
+        sources = resolution.sources
+        contracts = {(source["revision_id"], source["scope"]) for source in sources}
+        dataset, edition = "sql.query." + query_id, binding_id[7:]
+        uses = [tn.UseContext(application, purpose, op)
+                for op in [*sorted(OPERATIONS), "inspect-claims", "verify"]]
+        additional = None
+        for source_resolution in resolution.resolutions:
+            for column in source_resolution.policies:
+                allowed = {tuple(use[key] for key in ("application", "purpose", "operation"))
+                           for use in source_resolution.columns[column]["rule"].get("additional_uses", [])}
+                additional = allowed if additional is None else additional & allowed
+        present = {(use.application, use.purpose, use.operation) for use in uses}
+        uses.extend(tn.UseContext(*use) for use in sorted((additional or set()) - present))
+        revisions = {}
+        for source_resolution in resolution.resolutions:
+            for identity, wire in source_resolution.packet.revision_wires:
+                if identity in revisions and revisions[identity] != wire:
+                    raise OperationDenied("query assignments disagree on a policy revision")
+                revisions[identity] = wire
+        draft = tn.DatasetEditionDraft(dataset, edition, obj, ["values", "evidence"],
+            [tn.ContractBinding(revision, scope) for revision, scope in sorted(contracts)],
+            uses, binding_id, [])
+        record_obj = self.session.seal(draft.into_draft(self.administration))
+        record = tn.DatasetEdition.from_opened(self._open(record_obj, "dataset_edition"))
+        self.store.put(record_obj)
+        bundle = write_edition_bundle(Path(directory) / "result", dataset=dataset, edition=edition,
+            record_id=record.id, edition_wire=record_obj.forward(),
+            revision_wires=list(revisions.items()), evaluators={})
+        transports = self.registry.register_editions(query_id,
+            [(dataset, edition, record.id, bundle)], directory, create_namespace=False)
+        info = {"dataset": dataset, "edition": edition, "record_id": record.id,
+                "source_object_id": obj.id}
+        return info, transports[0]
 
     def publish_query_editions(self, query_id, publications, *, directory, application, purpose):
         infos, registrations = [], []

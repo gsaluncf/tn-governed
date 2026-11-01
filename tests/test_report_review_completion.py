@@ -4,6 +4,7 @@ The transport returns constructed tool and report publications. No model runs.
 """
 
 import hashlib
+import json
 import sqlite3
 from contextlib import ExitStack, closing
 from types import SimpleNamespace
@@ -126,8 +127,8 @@ def report_workflow(tmp_path, monkeypatch):
         events, releases = [], []
         native_open = reader.open
 
-        def open_report(release):
-            opened = native_open(release)
+        def open_report(release, **expectations):
+            opened = native_open(release, **expectations)
             events.append("recipient-accepted")
             return opened
 
@@ -163,41 +164,48 @@ def report_workflow(tmp_path, monkeypatch):
                         for policy in release.policies)
             )
 
-        def construct_release():
-            data = sessions["model-reader"].receive(
+        def construct_release(tool_payloads=None, *, request_digest="sha256:" + "a" * 64):
+            source_data = sessions["model-reader"].receive(
                 source, use=use, groups=["values"],
                 decide=lambda admission: context.catalog.accepts(admission, context.policy_dag),
             )
-            tool_data = data.copy()
+            data = source_data.copy()
             run_id = "report-request-" + str(len(releases) + 1)
-            tool_data.set(None, {
-                "run_id": run_id, "request_digest": "sha256:" + "a" * 64,
-                "tool_name": requirements["required_tool"], "model_tool_call_id": "creation-log",
-                "source_object_id": source.id, "source_writer": source.writer,
-                "source_type": source.object_type, "selected_sections": ["values"],
-                "action": use.operation,
-            }, group="default")
-            tool_data.select(["default"])
-            tool = sessions["model-writer"].release(
-                tool_data, use=use, to=requirements["report_destination"],
-                decide=accept_release,
-                object_type="compliance.creation.logged",
-            )
-            events.append("tool-released")
-            data.include(sessions["model-writer"].receive(
-                tool, use=use, groups=["default"],
-                decide=lambda admission: context.catalog.accepts(admission, context.policy_dag),
-            ))
+            tools = []
+            for index, supplied in enumerate(({},) if tool_payloads is None else tool_payloads):
+                fields = dict(supplied)
+                object_type = fields.pop("object_type", "compliance.creation.logged")
+                payload = {
+                    "run_id": run_id, "request_digest": request_digest,
+                    "tool_name": requirements["required_tool"],
+                    "model_tool_call_id": "creation-log-" + str(index),
+                    "source_object_id": source.id, "source_writer": source.writer,
+                    "source_type": source.object_type, "selected_sections": ["values"],
+                    "action": use.operation,
+                }
+                payload.update(fields)
+                tool_data = source_data.copy()
+                tool_data.set(None, payload, group="default")
+                tool_data.select(["default"])
+                tool = sessions["model-writer"].release(
+                    tool_data, use=use, to=requirements["report_destination"],
+                    decide=accept_release, object_type=object_type,
+                )
+                events.append("tool-released")
+                data.include(sessions["model-writer"].receive(
+                    tool, use=use, groups=["default"],
+                    decide=lambda admission: context.catalog.accepts(admission, context.policy_dag),
+                ))
+                tools.append(tool)
             html = f"<p>{NOTICE}</p><p>ACME internal report.</p>"
             data.set(None, {"report_html": html}, group="default")
             data.select(["default"])
             output = sessions["model-writer"].release(
                 data, use=use, to=requirements["report_destination"],
-                decide=accept_release,
-                object_type="report.generated",
+                decide=accept_release, object_type="report.generated",
             )
             events.append("report-released")
-            release = NativeModelRelease(run_id, source.id, output.id, output, [], (tool,))
+            release = NativeModelRelease(run_id, source.id, output.id, output, [], tuple(tools))
             releases.append(release)
             return release
 
@@ -211,6 +219,15 @@ def report_workflow(tmp_path, monkeypatch):
                 assert destination == requirements["report_destination"]
                 return construct_release()
 
+            def submit_request(self, body):
+                from tn_llama_client.protocol import model_request_digest
+
+                request = json.loads(body)
+                assert request["tn_object"].encode() == source.forward()
+                assert request["use"] == requirements["use"]
+                assert request["destination"] == requirements["report_destination"]
+                return construct_release(request_digest=model_request_digest(body))
+
         monkeypatch.setattr("tn_governed.llama.GovernedLlamaClient", Client)
         endpoint = NativeModelEndpoint(
             context=context, value=value, base_url="http://unused", api_key="test",
@@ -221,6 +238,7 @@ def report_workflow(tmp_path, monkeypatch):
             context=context, value=value, endpoint=endpoint, reader=reader, events=events,
             releases=releases, root=tmp_path, queue=queue,
             record_count=len(context.recorder.records()), source=source,
+            construct_release=construct_release,
         )
 
 
@@ -339,3 +357,271 @@ def test_review_record_failure_stops_before_queue_and_success_record(report_work
         "Decision", "ModelHandoff", "Failure",
     ]
     assert not (workflow.root / "review-queue").exists()
+
+
+class TrackedRecipient:
+    def __init__(self, session):
+        self.session = session
+        self.opened = []
+
+    def __getattr__(self, name):
+        return getattr(self.session, name)
+
+    def receive(self, publication, **kwargs):
+        result = self.session.receive(publication, **kwargs)
+        self.opened.append(publication.id)
+        return result
+
+
+def evidence_reader(workflow, *, expectations, required_tools=(), expected_request_digest=None):
+    from tn_llama_client.clients import NativeOutputReader
+
+    original = workflow.reader
+    session = TrackedRecipient(original.session)
+    return NativeOutputReader(
+        session, expected_source=original.expected_source,
+        expected_writer=original.expected_writer, use=original.use,
+        destination=original.destination, release_use=original.release_use,
+        catalog=original.catalog, policy_dag=original.policy_dag,
+        resolve_ancestor=original.resolve_ancestor, decide=original.decide,
+        tool_expectations=expectations, required_tools=required_tools,
+        expected_request_digest=expected_request_digest,
+    ), session
+
+
+def test_required_logging_evidence_blocks_source_only_report(report_workflow):
+    workflow = report_workflow
+    release = workflow.construct_release(())
+    session = TrackedRecipient(workflow.reader.session)
+    workflow.reader.session = session
+    with pytest.raises(PermissionError, match="required tool"):
+        workflow.reader.open(release)
+    assert release.output_object.id not in session.opened
+
+
+@pytest.mark.parametrize("with_optional_tool", [False, True])
+def test_optional_evidence_does_not_create_a_required_action(report_workflow, with_optional_tool):
+    from tn_llama_client.clients import ToolEvidenceExpectation
+
+    workflow = report_workflow
+    release = workflow.construct_release(
+        ({"tool_name": "record_usage"},) if with_optional_tool else (),
+    )
+    reader, session = evidence_reader(workflow, expectations=(
+        ToolEvidenceExpectation("record_usage", ("values",), "compliance.creation.logged"),
+    ))
+    opened = reader.open(release)
+    assert opened.get("report_html", group="default").endswith("<p>ACME internal report.</p>")
+    assert session.opened[-1] == release.output_object.id
+
+
+@pytest.mark.parametrize("include_second", [False, True])
+def test_each_required_tool_needs_its_own_verified_completion(report_workflow, include_second):
+    from tn_llama_client.clients import ToolEvidenceExpectation
+
+    workflow = report_workflow
+    payloads = [{"tool_name": "record_usage", "object_type": "usage.recorded"}]
+    if include_second:
+        payloads.append({"tool_name": "record_delivery", "object_type": "delivery.recorded"})
+    release = workflow.construct_release(tuple(payloads))
+    reader, session = evidence_reader(workflow, expectations=(
+        ToolEvidenceExpectation("record_usage", ("values",), "usage.recorded"),
+        ToolEvidenceExpectation("record_delivery", ("values",), "delivery.recorded"),
+    ), required_tools=("record_usage", "record_delivery"))
+    if include_second:
+        reader.open(release)
+        assert session.opened == [tool.id for tool in release.tool_objects] + [release.output_object.id]
+    else:
+        with pytest.raises(PermissionError, match="required tool"):
+            reader.open(release)
+        assert release.output_object.id not in session.opened
+
+
+@pytest.mark.parametrize("wrong_field", [
+    {"tool_name": "unrecognized"},
+    {"source_object_id": "sha256:" + "b" * 64},
+    {"source_writer": "another-writer"},
+    {"source_type": "another-type"},
+    {"run_id": "another-request"},
+    {"action": "another-action"},
+    {"selected_sections": ["evidence"]},
+    {"object_type": "another-tool-type"},
+])
+def test_required_tool_evidence_must_match_the_request(report_workflow, wrong_field):
+    workflow = report_workflow
+    release = workflow.construct_release((wrong_field,))
+    session = TrackedRecipient(workflow.reader.session)
+    workflow.reader.session = session
+    with pytest.raises((PermissionError, ValueError)):
+        workflow.reader.open(release)
+    assert release.output_object.id not in session.opened
+
+
+def test_one_tool_call_cannot_satisfy_two_required_tools(report_workflow):
+    from tn_llama_client.clients import ToolEvidenceExpectation
+
+    workflow = report_workflow
+    release = workflow.construct_release((
+        {"tool_name": "record_usage", "model_tool_call_id": "same-call"},
+        {"tool_name": "record_delivery", "model_tool_call_id": "same-call"},
+    ))
+    reader, session = evidence_reader(workflow, expectations=(
+        ToolEvidenceExpectation("record_usage", ("values",), "compliance.creation.logged"),
+        ToolEvidenceExpectation("record_delivery", ("values",), "compliance.creation.logged"),
+    ), required_tools=("record_usage", "record_delivery"))
+    with pytest.raises(ValueError, match="call identity"):
+        reader.open(release)
+    assert release.output_object.id not in session.opened
+
+
+def test_tool_completions_must_belong_to_one_request(report_workflow):
+    workflow = report_workflow
+    release = workflow.construct_release(({}, {"request_digest": "sha256:" + "b" * 64}))
+    session = TrackedRecipient(workflow.reader.session)
+    workflow.reader.session = session
+    with pytest.raises(ValueError, match="request digest"):
+        workflow.reader.open(release)
+    assert release.output_object.id not in session.opened
+
+
+def test_required_tools_must_have_validation_expectations(report_workflow):
+    with pytest.raises(ValueError, match="required tool"):
+        evidence_reader(report_workflow, expectations=(), required_tools=("record_usage",))
+
+
+@pytest.mark.parametrize("fields", [
+    {"name": ""},
+    {"name": " record_usage"},
+    {"name": "record\nusage"},
+    {"object_type": ""},
+    {"selected_sections": ()},
+    {"selected_sections": ("values", "values")},
+    {"selected_sections": ("",)},
+])
+def test_evidence_expectations_reject_ambiguous_identifiers(fields):
+    from tn_llama_client.clients import ToolEvidenceExpectation
+
+    configuration = {
+        "name": "record_usage", "selected_sections": ("values",),
+        "object_type": "usage.recorded",
+    }
+    configuration.update(fields)
+    with pytest.raises(ValueError):
+        ToolEvidenceExpectation(**configuration)
+
+
+def test_evidence_expectations_snapshot_mutable_section_configuration():
+    from tn_llama_client.clients import ToolEvidenceExpectation
+
+    sections = ["values"]
+    expectation = ToolEvidenceExpectation("record_usage", sections, "usage.recorded")
+    sections.append("evidence")
+    assert expectation.selected_sections == ("values",)
+
+
+def test_conflicting_tool_validation_configuration_is_rejected(report_workflow):
+    from tn_llama_client.clients import ToolEvidenceExpectation
+
+    with pytest.raises(ValueError, match="unique names"):
+        evidence_reader(report_workflow, expectations=(
+            ToolEvidenceExpectation("record_usage", ("values",), "usage.recorded"),
+            ToolEvidenceExpectation("record_usage", ("evidence",), "usage.recorded"),
+        ))
+
+
+@pytest.mark.parametrize("configured", [False, True])
+def test_trusted_request_digest_rejects_another_prompt_before_report_open(report_workflow, configured):
+    from tn_llama_client.clients import ToolEvidenceExpectation
+
+    workflow = report_workflow
+    release = workflow.construct_release(({"tool_name": "record_usage"},))
+    expected = "sha256:" + "b" * 64
+    reader, session = evidence_reader(workflow, expectations=(
+        ToolEvidenceExpectation("record_usage", ("values",), "compliance.creation.logged"),
+    ), expected_request_digest=expected if configured else None)
+    with pytest.raises(ValueError, match="request digest"):
+        reader.open(release, **({} if configured else {"expected_request_digest": expected}))
+    assert release.output_object.id not in session.opened
+
+
+def test_trusted_request_digest_accepts_matching_signed_completion(report_workflow):
+    from tn_llama_client.clients import ToolEvidenceExpectation
+
+    workflow = report_workflow
+    release = workflow.construct_release(({"tool_name": "record_usage"},))
+    reader, session = evidence_reader(workflow, expectations=(
+        ToolEvidenceExpectation("record_usage", ("values",), "compliance.creation.logged"),
+    ), expected_request_digest="sha256:" + "a" * 64)
+    reader.open(release, expected_request_digest="sha256:" + "a" * 64)
+    assert session.opened[-1] == release.output_object.id
+
+
+def test_trusted_request_digest_requires_signed_evidence_even_without_required_names(report_workflow):
+    workflow = report_workflow
+    release = workflow.construct_release(())
+    reader, session = evidence_reader(workflow, expectations=(),
+        expected_request_digest="sha256:" + "a" * 64)
+    with pytest.raises(PermissionError, match="request.*evidence"):
+        reader.open(release)
+    assert session.opened == []
+
+
+def test_per_call_request_digest_cannot_override_configured_expectation(report_workflow):
+    workflow = report_workflow
+    release = workflow.construct_release()
+    reader, session = evidence_reader(workflow, expectations=(),
+        expected_request_digest="sha256:" + "a" * 64)
+    with pytest.raises(ValueError, match="configured request digest"):
+        reader.open(release, expected_request_digest="sha256:" + "b" * 64)
+    assert session.opened == []
+
+
+@pytest.mark.parametrize("invalid", ["", "a" * 64, "sha256:" + "A" * 64, 1])
+def test_trusted_request_digest_must_be_canonical(report_workflow, invalid):
+    with pytest.raises(ValueError, match="request digest"):
+        evidence_reader(report_workflow, expectations=(), expected_request_digest=invalid)
+    reader, session = evidence_reader(report_workflow, expectations=())
+    with pytest.raises(ValueError, match="request digest"):
+        reader.open(report_workflow.construct_release(()), expected_request_digest=invalid)
+    assert session.opened == []
+
+
+def test_request_digest_matches_native_canonical_request_binding(report_workflow):
+    from tn.canonical import _canonical_bytes
+    from tn_llama_client.protocol import build_model_request, model_request_digest
+
+    workflow = report_workflow
+    prompt = "Describe the supplied company — café."
+    reader = workflow.reader
+    body = build_model_request(workflow.source, prompt, reader.release_use,
+                               destination=reader.destination)
+    expected = "sha256:" + hashlib.sha256(b"tn.llama.request.v2\0" + _canonical_bytes({
+        "object_id": workflow.source.id,
+        "use": workflow.endpoint.requirements["use"],
+        "destination": reader.destination,
+        "messages": [{"role": "user", "content": prompt}],
+    })).hexdigest()
+    assert model_request_digest(body) == expected
+    changed = json.loads(body)
+    changed["messages"][0]["content"] += " Again."
+    assert model_request_digest(json.dumps(changed).encode()) != expected
+
+
+def test_model_endpoint_rejects_replayed_report_for_a_different_prompt(report_workflow, monkeypatch):
+    workflow = report_workflow
+    call(workflow)
+    prior_release = workflow.releases[-1]
+
+    class ReplayClient:
+        def __init__(self, *_args):
+            pass
+
+        def submit_request(self, _body):
+            return prior_release
+
+    session = TrackedRecipient(workflow.reader.session)
+    workflow.reader.session = session
+    monkeypatch.setattr("tn_governed.llama.GovernedLlamaClient", ReplayClient)
+    with workflow.context, pytest.raises(ValueError, match="request digest"):
+        workflow.endpoint.generate(workflow.value, prompt="Describe a different reporting period.")
+    assert prior_release.output_object.id not in session.opened

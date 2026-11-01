@@ -12,6 +12,7 @@ from .evidence import EvidenceError
 from .numeric import TNNumeric
 from .numeric_codec import KINDS, NUMERIC_TYPES, encode, decode, record_value
 from .metadata import DeclaredMetadata, describe
+from .obligations import ObligationRun, run_obligations
 from .runtime import Assessment, Context as StringContext, ObligationResult, Request
 from .string import OperationDenied, TNString, ValueReference, _active
 
@@ -160,28 +161,27 @@ class Context(StringContext):
         return [self._metadata(value, _reads=reads, _records=records) for value in values]
 
     def _decision(self, request, call_id):
-        discharged = []
+        actions = ObligationRun()
+        cause = None
         try:
             assessment = self.evaluator(request)
-            if not isinstance(assessment, Assessment) or type(assessment.permit) is not bool:
+            if (not isinstance(assessment, Assessment) or type(assessment.permit) is not bool
+                    or not isinstance(assessment.reason, str)
+                    or not isinstance(assessment.obligations, tuple)
+                    or any(not isinstance(name, str) or not name for name in assessment.obligations)):
                 raise ValueError("an explicit assessment is required")
             permitted = assessment.permit
             if request.operation == "reveal" and not request.destination:
                 assessment = Assessment(False, "exposure requires a named destination")
                 permitted = False
             if permitted:
-                for name in assessment.obligations:
-                    handler = self.obligations.get(name)
-                    item = handler(request) if handler else None
-                    ok = isinstance(item, ObligationResult) and item.satisfied is True and bool(item.evidence)
-                    discharged.append({"obligation": name, "satisfied": bool(ok),
-                                       "evidence": item.evidence if ok else None})
-                    if not ok:
-                        permitted = False
-                        break
+                actions = run_obligations(request, assessment.obligations, self.obligations)
+                permitted = actions.complete
+                cause = actions.error
             details = {"permitted": permitted, "requested_permit": assessment.permit,
-                       "reason": assessment.reason, "obligations": list(assessment.obligations),
-                       "discharged": discharged, "parameters": list(request.parameters),
+                       "reason": "decision could not be completed" if cause else assessment.reason,
+                       "obligations": list(assessment.obligations),
+                       **actions.record_details(), "parameters": list(request.parameters),
                        "decimal_context": {"precision": getcontext().prec, "rounding": getcontext().rounding,
                            "Emin": getcontext().Emin, "Emax": getcontext().Emax,
                            "clamp": getcontext().clamp, "capitals": getcontext().capitals,
@@ -192,12 +192,13 @@ class Context(StringContext):
                        "claim_judgments": [list(j) for j in assessment.claim_judgments]}
         except Exception as exc:
             permitted = False
+            cause = exc
             details = {"permitted": False, "reason": "decision could not be completed",
-                       "error_type": type(exc).__name__, "discharged": discharged}
+                       **actions.record_details(), "error_type": type(exc).__name__}
         identity = self._append("Decision", request, call_id, details)
         if not permitted:
             self._append("Refusal", request, call_id, {"decision_id": identity, "reason": details["reason"]})
-            raise OperationDenied(f"{request.operation} refused; decision {identity}")
+            raise OperationDenied(f"{request.operation} refused; decision {identity}") from cause
         return identity
 
     def _prepare(self, operation, values, destination, parameters, call_id):

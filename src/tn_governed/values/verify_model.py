@@ -178,13 +178,9 @@ def verify_model(root, run, records, by_id, rules, nodes, bindings, store, catal
             use=use, destination=model["destination"], release_use=tn.UseContext(**model["use"]),
             catalog=catalog, policy_dag=dag, resolve_ancestor=resolve,
             decide=lambda ctx: ctx.use_context == use,
-            expected_tool_name=section["required_tool"], expected_tool_sections=("values",))
+            expected_tool_name=section["required_tool"], expected_tool_sections=("values",),
+            required_tools=(section["required_tool"],), expected_request_digest=request_digest)
         opened = reader.open(release)
-        for tool in release.tool_objects:
-            tool_data = recipient.receive(tool, use=use, groups=["default"],
-                decide=lambda ctx, tool=tool: reader._accept(ctx, tool))
-            require(tool_data.get("request_digest", group="default") == request_digest,
-                    "signed native compliance action belongs to another request/prompt")
         # This is independent artifact inspection after recipient admission. The
         # application release decision already happened in the native service.
         html = opened.get("report_html", group="default")

@@ -14,6 +14,8 @@ from uuid import uuid4
 import tn
 
 from .evidence import EvidenceError, EvidenceRecorder
+from .obligations import ObligationResult as ObligationResult
+from .obligations import ObligationRun, run_obligations
 from .string import (
     OperationDenied, StringMetadataProvider, TNString, ValueReference, _active, _exposure,
 )
@@ -49,12 +51,6 @@ class Assessment:
     reason: str
     obligations: tuple[str, ...] = ()
     claim_judgments: tuple[tuple[str, str], ...] = ()
-
-
-@dataclass(frozen=True)
-class ObligationResult:
-    satisfied: bool
-    evidence: str
 
 
 @dataclass(frozen=True)
@@ -214,6 +210,8 @@ class Context:
     def _prepare(self, operation, values, destination, parameters, call_id):
         base = Request(self.application, self.purpose, operation,
                        tuple(v.reference for v in values), (), (), (), destination, parameters)
+        actions = ObligationRun()
+        cause = None
         try:
             metadata = [self._metadata(value) for value in values]
             claims = {claim.id: claim for _, _, cs in metadata for claim in cs}
@@ -229,23 +227,16 @@ class Context:
                 raise ValueError("evaluator did not return a valid explicit assessment")
             if operation == "reveal" and (not isinstance(destination, str) or not destination):
                 assessment = Assessment(False, "exposure requires a named destination")
-            discharged = []
             permitted = assessment.permit
             if permitted:
-                for name in assessment.obligations:
-                    handler = self.obligations.get(name)
-                    result = handler(request) if handler else None
-                    ok = (isinstance(result, ObligationResult) and result.satisfied is True
-                          and isinstance(result.evidence, str) and bool(result.evidence))
-                    discharged.append({"obligation": name, "satisfied": ok,
-                                       "evidence": result.evidence if ok else None})
-                    if not ok:
-                        permitted = False
-                        break
+                actions = run_obligations(request, assessment.obligations, self.obligations)
+                permitted = actions.complete
+                cause = actions.error
             details = {
                 "permitted": permitted, "requested_permit": assessment.permit,
-                "reason": assessment.reason, "obligations": list(assessment.obligations),
-                "discharged": discharged, "parameters": list(parameters),
+                "reason": "decision could not be completed" if cause else assessment.reason,
+                "obligations": list(assessment.obligations),
+                **actions.record_details(), "parameters": list(parameters),
                 "policies": [{"authority": p.governed_by, "policy": p.policy_ref,
                               "revision": p.revision_id} for p in request.policies],
                 "considered_claims": [claim.id for claim in request.claims],
@@ -254,13 +245,14 @@ class Context:
         except Exception as exc:
             # A failed decision is not an authorization; avoid logging arbitrary exception text.
             request, metadata, permitted = base, [], False
+            cause = exc
             details = {"permitted": False, "reason": "decision could not be completed",
-                       "error_type": type(exc).__name__}
+                       **actions.record_details(), "error_type": type(exc).__name__}
         decision_id = self._append("Decision", request, call_id, details)
         if not permitted:
             self._append("Refusal", request, call_id, {"decision_id": decision_id,
                                                        "reason": details["reason"]})
-            raise OperationDenied(f"{operation} was not permitted; decision {decision_id}")
+            raise OperationDenied(f"{operation} was not permitted; decision {decision_id}") from cause
         return request, metadata, decision_id
 
     def _open_values(self, request, values):

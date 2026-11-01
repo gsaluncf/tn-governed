@@ -1,12 +1,11 @@
-"""Read-only SQL gateway: resolve governance, authorize, query, publish primitives.
+"""Read-only SQL gateway with catalog-bound query-result publication.
 
-The supported grammar accepts direct-column SELECT ... FROM ... LIMIT
-with an optional bound limit. Expressions, joins, and predicates need their own
-control-dependency mapping and are rejected rather than assigned guessed lineage.
+SQLite determines the accepted query language and source dependencies. Direct
+column projections retain their primitive publication format; other queries
+produce a governed relation with an indexed schema and explicit lineage fidelity.
 """
 
 from dataclasses import dataclass
-from contextlib import closing
 import hashlib
 from pathlib import Path
 import re
@@ -14,8 +13,8 @@ import sqlite3
 from uuid import uuid4
 
 from .numeric_codec import KINDS
+from .query import SQLiteQuery, contributor_manifest, digest, encode_sql
 from .runtime import Request
-from .string import OperationDenied
 
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SELECT = re.compile(r"^\s*select\s+([A-Za-z0-9_,\s]+)\s+from\s+([A-Za-z_][A-Za-z0-9_]*)"
@@ -84,12 +83,13 @@ class GovernedCursor:
 
 class GovernedSQL:
     def __init__(self, database, *, gateway, consumer, edition_publisher, directory, detect_types=0,
-                 batch_size=64):
+                 batch_size=64, functions=(), lineage_provider=None):
         if type(batch_size) is not int or not 1 <= batch_size <= 64:
             raise ValueError("SQL publication batch size must be between 1 and 64")
         self.database = Path(database).resolve()
         self.batch_size = batch_size
         self.detect_types = detect_types
+        self.functions, self.lineage_provider = tuple(functions), lineage_provider
         self.gateway, self.consumer, self.edition_publisher = gateway, consumer, edition_publisher
         self.directory = Path(directory)
         self.executions, self.editions, self.published_values = [], [], []
@@ -98,9 +98,77 @@ class GovernedSQL:
         return TableQuery(self, name)
 
     def execute(self, sql, parameters=()):
+        with SQLiteQuery(self.database, sql, parameters, functions=self.functions,
+                         detect_types=self.detect_types) as prepared:
+            match = SELECT.fullmatch(sql)
+            if match is not None and self.lineage_provider is None:
+                columns = [item.strip() for item in match.group(1).split(",")]
+                direct = {(match.group(2), column) for column in columns}
+                discovered = {(source.table, source.column) for source in prepared.dependencies}
+                if (len(columns) == len(set(columns)) and direct == discovered
+                        and all(IDENTIFIER.fullmatch(column) for column in columns)):
+                    return self._execute_direct(sql, parameters, prepared)
+            return self._execute_query(prepared)
+
+    def execute_query(self, sql, parameters=()):
+        """Return a governed relation for any authorized read-only SQLite query."""
+        with SQLiteQuery(self.database, sql, parameters, functions=self.functions,
+                         detect_types=self.detect_types) as prepared:
+            return self._execute_query(prepared)
+
+    def _execute_query(self, prepared):
+        from .query_result import GovernedQueryResult, publish_result
+        gateway = self.gateway
+        plan = prepared.track_contributors() if self.lineage_provider is None else None
+        resolution = gateway.resolver.resolve_query(prepared.dependencies, actor=gateway.actor,
+            application=gateway.application, purpose=gateway.purpose, expected_source=prepared.identity)
+        provider = self.lineage_provider
+        query_id = uuid4().hex
+        binding = {"schema": "tn.sql-query.v1", "query_id": query_id, "sql": prepared.sql,
+                   "parameters": prepared.parameter_binding, "snapshot": prepared.identity,
+                   "sources": list(resolution.sources), "engine": "sqlite",
+                   "engine_version": sqlite3.sqlite_version,
+                   "functions": [function.to_dict() for function in prepared.used_functions],
+                   "lineage_provider": plan.identifier if provider is None else provider.identifier,
+                   "lineage_precision": "conservative" if provider is None else provider.precision}
+        if plan is not None:
+            binding["lineage_execution"] = {"schema": "tn.sqlite-lineage.v1",
+                "statement": plan.sql or prepared.sql,
+                "parameter_binding": {key: encode_sql(value)
+                                      for key, value in plan.parameters.items()}
+                                     if isinstance(plan.parameters, dict) else prepared.parameter_binding}
+        request = Request(gateway.application, gateway.purpose, "select", (), (),
+                          resolution.policies, (), parameters=(binding,))
+        decision = gateway._decision(request, query_id)
+        try:
+            raw = prepared.execute()
+            result_binding = {**binding, "output_schema": raw.schema}
+            lineage = (prepared.result_lineage(result_binding, raw) if provider is None
+                       else contributor_manifest(result_binding, raw, provider))
+            gateway._append("SQLRead", request, query_id, {"decision_id": decision,
+                "query_id": query_id, "row_count": len(raw.rows), "source": prepared.identity,
+                "assignment_ids": [item.assignment_id for item in resolution.resolutions],
+                "binding_id": digest(result_binding)})
+            self.executions.append({"query_id": query_id, "rows": len(raw.rows),
+                                    "binding_id": digest(result_binding)})
+            publication, result_id, binding_id = publish_result(gateway, raw, result_binding,
+                lineage, request=request, decision_id=decision, query_id=query_id)
+            info, transport = self.edition_publisher.publish_result_edition(publication, resolution,
+                query_id=query_id, binding_id=binding_id, directory=self.directory / query_id,
+                application=self.consumer.application, purpose=self.consumer.purpose)
+            result = GovernedQueryResult(self.consumer, object_id=publication.id, decision_id=decision,
+                result_id=result_id, resolution=resolution, source=prepared.identity,
+                edition=info, transport=transport)
+            prepared._assert_snapshot()
+            self.editions.append(info)
+            return result
+        except Exception as exc:
+            gateway._append("Failure", request, query_id,
+                            {"decision_id": decision, "error_type": type(exc).__name__})
+            raise
+
+    def _execute_direct(self, sql, parameters, prepared):
         match = SELECT.fullmatch(sql)
-        if match is None:
-            raise NotImplementedError("this driver supports direct-column SELECT FROM LIMIT only")
         columns, table, limit = match.groups()
         columns = [item.strip() for item in columns.split(",")]
         if len(set(columns)) != len(columns) or any(not IDENTIFIER.fullmatch(item) for item in columns):
@@ -110,7 +178,7 @@ class GovernedSQL:
                 raise ValueError("LIMIT ? requires one nonnegative integer")
         elif parameters:
             raise ValueError("no parameters are accepted without LIMIT ?")
-        identity = source_identity(self.database)
+        identity = prepared.identity
         gateway = self.gateway
         resolution = gateway.resolver.resolve(table, columns, actor=gateway.actor,
             application=gateway.application, purpose=gateway.purpose, expected_source=identity)
@@ -119,13 +187,7 @@ class GovernedSQL:
                           tuple(resolution.policies.values()), (), parameters=(sql, list(parameters), resolution.assignment_id))
         decision = gateway._decision(request, query_id)
         try:
-            # The first SQL connection/statement happens after a durable, completed permit.
-            with closing(sqlite3.connect(self.database.as_uri() + "?mode=ro", uri=True, detect_types=self.detect_types)) as connection:
-                connection.execute("PRAGMA query_only = ON")
-                connection.execute("BEGIN")
-                raw_rows = connection.execute(sql, parameters).fetchall()
-                if source_identity(self.database) != identity:
-                    raise OperationDenied("SQL source changed since its signed governance assignment")
+            raw_rows = prepared.execute().rows
             gateway._append("SQLRead", request, query_id, {"decision_id": decision,
                 "query_id": query_id, "row_count": len(raw_rows), "source": identity,
                 "assignment_id": resolution.assignment_id})

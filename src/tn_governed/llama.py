@@ -8,7 +8,9 @@ from pathlib import Path
 
 import tn
 from tn_llama_client.clients import GovernedLlamaClient, TnOutputReader
-from tn_llama_client.protocol import ReportRelease, SourceRecord, build_governed_request
+from tn_llama_client.protocol import (
+    ReportRelease, SourceRecord, build_governed_request, build_model_request, model_request_digest,
+)
 from tn_llama_client.transcript import HttpTranscript
 
 from .tn_flow import (
@@ -38,11 +40,22 @@ _POLICY_FIELDS = (
 def submit_governed_report(
     object: tn.GovernedObject, *, prompt: str, use: tn.UseContext, destination: str,
     base_url: str, api_key: str, transcript_path: Path, output_reader, publication_store,
+    bind_request: bool = False,
 ):
-    """Send the released publication, then admit the native report at its recipient."""
+    """Send the publication and admit its report, optionally requiring request evidence.
+
+    bind_request requires a signed tool completion carrying the submitted request
+    digest. Workflows without tool calls leave this option disabled.
+    """
     client = GovernedLlamaClient(base_url, api_key, HttpTranscript(transcript_path))
-    release = client.submit_model(object, prompt, use, destination=destination)
-    report = output_reader.open(release)
+    if bind_request:
+        body = build_model_request(object, prompt, use, destination=destination)
+        expected_digest = model_request_digest(body)
+        release = client.submit_request(body)
+        report = output_reader.open(release, expected_request_digest=expected_digest)
+    else:
+        release = client.submit_model(object, prompt, use, destination=destination)
+        report = output_reader.open(release)
     for tool in getattr(release, "tool_objects", ()):
         publication_store.put(tool)
     publication_store.put(release.output_object)

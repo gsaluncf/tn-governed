@@ -1,5 +1,6 @@
 """Closed wire-format helpers for governed tn-llama requests."""
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -88,6 +89,32 @@ def build_model_request(object, prompt: str, use, *, destination: str) -> bytes:
         "destination": destination,
         "messages": [{"role": "user", "content": prompt}], "stream": False,
     }, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def model_request_digest(body: bytes) -> str:
+    """Bind a submitted v2 request using the native protocol's canonical digest."""
+    import tn
+    from tn.canonical import _canonical_bytes
+
+    value = json.loads(body, object_pairs_hook=_without_duplicate_keys)
+    required = {"protocol", "tn_object", "use", "destination", "messages", "stream"}
+    if (not isinstance(value, dict) or set(value) != required
+            or value["protocol"] != "tn.llama.request.v2" or value["stream"] is not False
+            or not isinstance(value["use"], dict)
+            or not isinstance(value["messages"], list) or len(value["messages"]) != 1
+            or not isinstance(value["messages"][0], dict)
+            or set(value["messages"][0]) != {"role", "content"}
+            or value["messages"][0]["role"] != "user"):
+        raise ValueError("request digest requires the exact native v2 request shape")
+    source = tn.GovernedObject.parse(value["tn_object"])
+    use = tn.UseContext(**value["use"])
+    # The shared builder validates the same source, prompt, use, and destination
+    # that are about to be transported, including their exact native types.
+    build_model_request(source, value["messages"][0]["content"], use,
+                        destination=value["destination"])
+    bound = {"object_id": source.id, "use": value["use"],
+             "destination": value["destination"], "messages": value["messages"]}
+    return "sha256:" + hashlib.sha256(b"tn.llama.request.v2\0" + _canonical_bytes(bound)).hexdigest()
 
 
 @dataclass(frozen=True)

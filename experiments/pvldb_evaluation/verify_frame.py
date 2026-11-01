@@ -369,6 +369,14 @@ def verify_frame(root):
                      and actual.decision_id == recorded["decision_id"] and actual.reason == recorded["reason"],
                      "offline OPA replay differs from the signed operation observation")
         _require(observed_pairs == expected_pairs, "not every contributing contract covered every dataframe stage")
+        if "audit" in facts:
+            from tn_polars.audit import verify_audit
+
+            verify_audit(facts["audit"], rows=[{"amount": expected_amount}],
+                         expected_sources={item["object_id"] for item in facts["input_references"]},
+                         expected_artifacts=artifacts, evaluator_for=lambda revision: evaluators[revision])
+            _require(facts["audit"]["input_references"] == facts["input_references"],
+                     "dataframe audit input references differ from the signed Result")
 
         output_commitments = {}
         for label, expected in (("dataframe_result", expected_amount), ("amount", expected_amount + run["evaluation"]["depth"])):

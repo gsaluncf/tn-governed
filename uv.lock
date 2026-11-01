@@ -96,6 +96,15 @@ wheels = [
 ]
 
 [[package]]
+name = "cloudpickle"
+version = "3.1.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/27/fb/576f067976d320f5f0114a8d9fa1215425441bb35627b1993e5afd8111e5/cloudpickle-3.1.2.tar.gz", hash = "sha256:7fda9eb655c9c230dab534f1983763de5835249750e85fbcef43aaa30a9a2414", size = 22330, upload-time = "2025-11-03T09:25:26.604Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/88/39/799be3f2f0f38cc727ee3b4f1445fe6d5e4133064ec2e4115069418a5bb6/cloudpickle-3.1.2-py3-none-any.whl", hash = "sha256:9acb47f6afd73f60dc1df93bb801b472f05ff42fa6c84167d25cb206be1fbf4a", size = 22228, upload-time = "2025-11-03T09:25:25.534Z" },
+]
+
+[[package]]
 name = "colorama"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -153,46 +162,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/d4/aa/f3f6e0de7e6253b8baa8b2d8fb9d50924fa75cee3d4624bd4bc1208ee923/cryptography-50.0.2-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:ce47f66801c20ec6c6632453bb5960fe38939e9306970b48b3a5a26de7745d94", size = 5058280, upload-time = "2026-09-30T15:29:44.827Z" },
     { url = "https://files.pythonhosted.org/packages/f6/b6/a1faf3a27ae9405fb34b1713cc73b2d8a26b04d5c561578fa2e6ef3e5bb9/cryptography-50.0.2-cp39-abi3-win_amd64.whl", hash = "sha256:4e81d95e5bafc2d6e34e4bed780e53e4d5b9a2f928573428aa4d35fbec1eb0de", size = 3854095, upload-time = "2026-09-30T15:29:46.782Z" },
 ]
-
-[[package]]
-name = "tn-governed"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "numpy" },
-    { name = "polars" },
-    { name = "python-dotenv" },
-    { name = "tn-llama-client" },
-    { name = "tn-polars" },
-    { name = "tn-proto" },
-    { name = "wasmtime" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "ruff" },
-]
-engine-service = [
-    { name = "fastapi" },
-    { name = "uvicorn" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "fastapi", marker = "extra == 'engine-service'", specifier = ">=0.115,<1" },
-    { name = "numpy", specifier = ">=2,<3" },
-    { name = "polars", specifier = "==1.39.3" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4,<9" },
-    { name = "python-dotenv", specifier = ">=1.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12,<1" },
-    { name = "tn-llama-client", editable = "dependencies/tn-llama-client" },
-    { name = "tn-polars", editable = "dependencies/tn-polars" },
-    { name = "tn-proto", path = "vendor/wheels/648ec96686e59efaa0b82af88cd8b1126568b15ce43718c8089cdaa7811de2f4/tn_proto-2026.9.10b2.dev2-cp39-abi3-win_amd64.whl" },
-    { name = "uvicorn", marker = "extra == 'engine-service'", specifier = ">=0.34,<1" },
-    { name = "wasmtime", specifier = ">=25" },
-]
-provides-extras = ["engine-service", "dev"]
 
 [[package]]
 name = "fastapi"
@@ -723,6 +692,15 @@ wheels = [
 ]
 
 [[package]]
+name = "sqlglot"
+version = "28.10.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1c/66/b2b300f325227044aa6f511ea7c9f3109a1dc74b13a0897931c1754b504e/sqlglot-28.10.1.tar.gz", hash = "sha256:66e0dae43b4bce23314b80e9aef41b8c88fea0e17ada62de095b45262084a8c5", size = 5739510, upload-time = "2026-02-09T23:36:23.671Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/55/ff/5a768b34202e1ee485737bfa167bd84592585aa40383f883a8e346d767cc/sqlglot-28.10.1-py3-none-any.whl", hash = "sha256:214aef51fd4ce16407022f81cfc80c173409dab6d0f6ae18c52b43f43b31d4dd", size = 597053, upload-time = "2026-02-09T23:36:21.385Z" },
+]
+
+[[package]]
 name = "sse-starlette"
 version = "3.5.1"
 source = { registry = "https://pypi.org/simple" }
@@ -749,6 +727,50 @@ wheels = [
 ]
 
 [[package]]
+name = "tn-governed"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "jsonschema" },
+    { name = "numpy" },
+    { name = "polars" },
+    { name = "python-dotenv" },
+    { name = "sqlglot" },
+    { name = "tn-llama-client" },
+    { name = "tn-polars" },
+    { name = "tn-proto" },
+    { name = "wasmtime" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "ruff" },
+]
+engine-service = [
+    { name = "fastapi" },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", marker = "extra == 'engine-service'", specifier = ">=0.115,<1" },
+    { name = "jsonschema", specifier = "==4.26.0" },
+    { name = "numpy", specifier = ">=2,<3" },
+    { name = "polars", specifier = "==1.39.3" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4,<9" },
+    { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12,<1" },
+    { name = "sqlglot", specifier = "==28.10.1" },
+    { name = "tn-llama-client", editable = "dependencies/tn-llama-client" },
+    { name = "tn-polars", editable = "dependencies/tn-polars" },
+    { name = "tn-proto", path = "vendor/wheels/648ec96686e59efaa0b82af88cd8b1126568b15ce43718c8089cdaa7811de2f4/tn_proto-2026.9.10b2.dev2-cp39-abi3-win_amd64.whl" },
+    { name = "uvicorn", marker = "extra == 'engine-service'", specifier = ">=0.34,<1" },
+    { name = "wasmtime", specifier = ">=25" },
+]
+provides-extras = ["engine-service", "dev"]
+
+[[package]]
 name = "tn-llama-client"
 version = "0.1.0"
 source = { editable = "dependencies/tn-llama-client" }
@@ -764,6 +786,7 @@ name = "tn-polars"
 version = "2026.9.11b1"
 source = { editable = "dependencies/tn-polars" }
 dependencies = [
+    { name = "cloudpickle" },
     { name = "polars" },
     { name = "python-dotenv" },
     { name = "tn-proto" },
@@ -772,6 +795,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cloudpickle", specifier = "==3.1.2" },
     { name = "polars", specifier = "==1.39.3" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "tn-proto", specifier = "==2026.9.10b2.dev2" },

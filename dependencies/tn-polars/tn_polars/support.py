@@ -6,10 +6,12 @@ These columns are never exposed as business data or accepted from callers.
 """
 
 from dataclasses import dataclass, replace
+import io
 import json
 from uuid import uuid4
 
 import polars as pl
+import polars.selectors as selectors
 
 
 def _name():
@@ -50,6 +52,8 @@ def expression_shape(expression):
             return UNKNOWN
         kind, value = next(iter(node.items()))
         if kind == "Column":
+            return ROW
+        if kind == "Selector":
             return ROW
         if kind == "Literal":
             # Polars serializes Series and container literals too. Only these
@@ -109,7 +113,8 @@ def expression_shape(expression):
         return UNKNOWN
 
     try:
-        return visit(json.loads(expression.meta.serialize(format="json")))
+        return visit(expression if isinstance(expression, dict)
+                     else json.loads(expression.meta.serialize(format="json")))
     except Exception:
         return UNKNOWN
 
@@ -118,6 +123,60 @@ def expression_kind(expression):
     """Adapter compatibility view: contains a reducer, and proven output shape."""
     shape = expression_shape(expression)
     return shape in {REDUCED, MIXED}, shape in {SCALAR, ROW, REDUCED}
+
+
+def business_expressions(expressions, schema):
+    """Expand native selectors against business columns before adding row metadata."""
+    def expand(node):
+        if isinstance(node, dict):
+            if set(node) == {"Selector"}:
+                selector = pl.Expr.deserialize(io.StringIO(json.dumps(node)), format="json")
+                names = selectors.expand_selector(schema, selector, strict=False)
+                return {"Selector": {"ByName": {"names": list(names), "strict": True}}}
+            return {key: expand(value) for key, value in node.items()}
+        if isinstance(node, list):
+            return [expand(value) for value in node]
+        return node
+    result = []
+    for expression in expressions:
+        if expression_shape(expression) == UNKNOWN:
+            result.append(expression)
+            continue
+        original = json.loads(expression.meta.serialize(format="json"))
+        expanded = expand(original)
+        result.append(expression if original == expanded else
+                      pl.Expr.deserialize(io.StringIO(json.dumps(expanded)), format="json"))
+    return result
+
+
+def window_partitions(expressions):
+    partitions = []
+
+    def prove(node):
+        if isinstance(node, dict):
+            if "Over" in node:
+                window = node["Over"]
+                keys = window["partition_by"]
+                if (window["order_by"] is not None or window["mapping"] != "GroupsToRows"
+                        or not keys or any(not isinstance(key, dict) or set(key) != {"Column"}
+                                           for key in keys)
+                        or expression_shape(window["function"]) != REDUCED):
+                    raise ValueError("window does not establish whole-partition support")
+                partitions.append(tuple(key["Column"] for key in keys))
+                return {"Column": "window_result"}
+            return {key: prove(value) for key, value in node.items()}
+        if isinstance(node, list):
+            return [prove(value) for value in node]
+        return node
+
+    try:
+        for expression in expressions:
+            proof = prove(json.loads(expression.meta.serialize(format="json")))
+            if expression_shape(proof) not in {SCALAR, ROW}:
+                return None
+        return tuple(dict.fromkeys(partitions)) if partitions else None
+    except (ValueError, TypeError, KeyError):
+        return None
 
 
 @dataclass(frozen=True)
@@ -155,6 +214,47 @@ class Support:
             metadata = [_flat(name).implode().alias(name) for name in self.hidden]
             return self.apply(self.frame.select(*expressions, *metadata))
         return self.apply(self.frame.select(*expressions, *self.hidden))
+
+    def windowed(self, expressions, *, project=False):
+        partitions = window_partitions(expressions)
+        if partitions is None or not self.known:
+            return None
+        frame, ids, groups = self.frame, dict(self.ids), dict(self.groups)
+        candidates = {}
+        for name, source in self.ids.items():
+            candidates.setdefault(source, []).append(name)
+        for keys in partitions:
+            additions = []
+            for name, source in self.ids.items():
+                target = _name()
+                additions.append(_flat(name).unique().implode().over(list(keys)).alias(target))
+                candidates.setdefault(source, []).append(target)
+            for revision, sources in self.policy_sources.items():
+                names = [name for name, source in self.ids.items() if source in sources]
+                if names:
+                    target = _name()
+                    members = pl.concat_list([pl.col(name) for name in names])
+                    additions.append(members.list.explode(keep_nulls=False, empty_as_null=False)
+                        .drop_nulls().n_unique().cast(pl.UInt64).implode().over(list(keys)).alias(target))
+                    groups[target] = revision
+            frame = frame.with_columns(additions)
+        for source, names in candidates.items():
+            target = _name()
+            frame = frame.with_columns(pl.concat_list(names).list.drop_nulls().list.unique().alias(target))
+            ids = {name: value for name, value in ids.items() if value != source} | {target: source}
+        frame = (frame.select(*expressions, *ids, *groups) if project
+                 else frame.with_columns(expressions))
+        return Support(frame, ids, groups, self.policy_sources, True, True, self.shape_known)
+
+    def unique(self, keys, *, keep, maintain_order):
+        if not self.known:
+            return self.unknown(self.frame.unique(subset=keys, keep=keep,
+                                                  maintain_order=maintain_order))
+        metadata = [_flat(name).unique().implode().over(keys).alias(name) for name in self.ids]
+        metadata += [_flat(name).implode().over(keys).alias(name) for name in self.groups]
+        frame = self.frame.with_columns(metadata).unique(subset=keys, keep=keep,
+                                                         maintain_order=maintain_order)
+        return self.apply(frame)
 
     def aggregate(self, keys, expressions):
         known = self.known and all(expression_shape(key) in {SCALAR, ROW} for key in keys)

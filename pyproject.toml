@@ -15,6 +15,8 @@ dependencies = [
   "wasmtime>=25",
   "python-dotenv>=1.0",
   "numpy>=2,<3",
+  "sqlglot==28.10.1",
+  "jsonschema==4.26.0",
 ]
 
 [project.optional-dependencies]

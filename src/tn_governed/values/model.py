@@ -1,8 +1,4 @@
-"""Transport a governed primitive to the native model service.
-
-No payload reveal, prompt-side governance loop, or client-side report gate lives
-here. The native service owns model access, compliance, and visible attribution.
-"""
+"""Configure the report service and register review after recipient acceptance."""
 
 from dataclasses import dataclass
 import hashlib
@@ -134,7 +130,7 @@ class NativeModelEndpoint:
             release, opened = submit_governed_report(source, prompt=prompt, use=self.use,
                 destination=requirements["report_destination"], base_url=self.base_url, api_key=self.api_key,
                 transcript_path=self.directory / "model-http.ndjson", output_reader=self.output_reader,
-                publication_store=context.recorder.store)
+                publication_store=context.recorder.store, bind_request=True)
             # NativeOutputReader has already accepted the report's intended internal use.
             html = opened.get("report_html", group="default")
             review = None
@@ -247,5 +243,6 @@ def prepare_native_model(value, *, context, input_session, output_session, recip
         use=recipient_use, destination=requirements["report_destination"], release_use=model_use,
         catalog=context.catalog, policy_dag=context.policy_dag, resolve_ancestor=resolve,
         decide=lambda ctx: ctx.use_context == recipient_use,
-        expected_tool_name=requirements["required_tool"], expected_tool_sections=("values",))
+        expected_tool_name=requirements["required_tool"], expected_tool_sections=("values",),
+        required_tools=(requirements["required_tool"],))
     return path, reader, requirements

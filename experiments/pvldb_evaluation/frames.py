@@ -17,6 +17,7 @@ from uuid import uuid4
 
 import polars as pl
 import tn
+from tn_polars.audit import build_frame_audit, record_release
 from tn_polars.build import build_opa_wasm
 from tn_polars.frame import GovernedLazyFrame
 from tn_polars.opa import OpaModuleCache
@@ -249,7 +250,7 @@ def dataframe_calculate(context, rows):
         policies.validate_contracts(request)
         policies = PolicySet({revision: replace(entry,
             evaluator=_RecordingEvaluator(entry.evaluator, facts["opa_decisions"]))
-            for revision, entry in policies._entries.items()})
+            for revision, entry in policies._entries.items()}, audit=policies.audit)
         facts.update(source_editions=editions, source_cells=cells,
             input_columns={column: sorted(roots) for column, roots in sources.items()},
             policy_artifacts=[_artifact_facts(entry.artifacts) for entry in policies._entries.values()])
@@ -267,6 +268,7 @@ def dataframe_calculate(context, rows):
         facts["numeric_profile"] = deepcopy(profile)
         # All artifact verification and the OPA load decision precede this open.
         policies.decide("load", context.application, sources, set(), use)
+        policies.record_operation("load", {"input_references": facts["input_references"]})
         opened = context._open_values(request, values)
         data = context._merge_opened(values, opened)
         frame_rows = [{"name": opened[i][1], "value": opened[i + 1][1]}
@@ -284,8 +286,8 @@ def dataframe_calculate(context, rows):
                   .with_columns((pl.col("value") + 250).alias("adjusted")))
         result = result.select(pl.col("adjusted").sum().alias("amount"))
         materialized = result._support.frame.collect()
-        result._tn.policies.decide("release", "governed-runtime", result.sources,
-            result.row_sources, use, support=result._support, materialized=materialized)
+        record_release(result._tn.policies, result, materialized,
+                       use=use, audience="governed-runtime")
         amount = materialized.select("amount").item()
         if type(amount) is not KINDS[profile["kind"]]:
             raise TypeError("dataframe result changed the signed numeric kind")
@@ -295,6 +297,8 @@ def dataframe_calculate(context, rows):
         facts.update(output_columns={name: sorted(roots) for name, roots in result.sources.items()},
                      row_selection_sources=sorted(result.row_sources),
                      output={"column": "amount", "value": record_value(amount)})
+        facts["audit"] = build_frame_audit(result, materialized,
+                                           input_references=facts["input_references"])
         origins = []
         for _, binding, _ in metadata:
             for origin in binding["origins"]:

@@ -6,6 +6,20 @@ Applications can enforce access controls when reading a database and still lose 
 
 TN keeps that information connected to individual string and numeric values. A governed value carries the basis for accountable decisions about its use. Preserving a claim does not require every recipient to accept or obey it: the recipient evaluates the claimant and the claim under the authorities it recognizes and the requested use.
 
+The reusable interfaces cover SQL results, Polars plans, governed JSON artifacts, and multi-step tools. [Governed execution](docs/governed-execution.md) describes their shared authorization and evidence contracts; [tool workflows](docs/tool-workflows.md) includes provider and tool registration examples.
+
+| Capability | Interface and behavior |
+| --- | --- |
+| SQL | `GovernedSQL.execute_query` executes parameterized SQLite queries, resolves the contributing source assignments, and publishes typed results with value and selection dependencies. Predicates, joins, expressions, aggregates, windows, and registered functions use the [query-result path](docs/sql-query-results.md). |
+| Dataframes | `GovernedLazyFrame` supports expressions and relational operations; `PlanTransform` admits registered general lazy plans. Policies and original claims remain attached. Contributor precision is explicit in the endpoint decision. See the [adapter contract](dependencies/tn-polars/README.md). |
+| Tools | `ToolWorkflow` and `ToolRunner` authorize registered calls, validate local or remote results, retain dependencies across model turns, and require completed actions before release. |
+| Independent endpoints | `Endpoint.export` and `receive` transfer native publication bundles between separate stores. Each endpoint supplies its own keys, recognized authorities, and evaluator. |
+| Policies and claims | `AuthorityEvaluator` supports local conjunction or authority precedence and required-action dependencies. `attest` and `dispute` retain the original claim author and subject. |
+| Application boundaries | `GovernedBoundary` requires governed handles and verifies contributing ancestry. `Endpoint.reveal` authorizes and records an explicit transfer to ordinary values. |
+| Value evolution | `ValueHistory` records insertions, re-derivations, tombstones, and restorations with atomic predecessor checks and retained signed history. |
+
+The [pipeline correctness tests](tests/test_governed_pipeline.py) compose a SQL join, Polars processing, attributed claims, dependent tool calls, a required ledger action, and verification by a recipient with a separate store. Component tests cover denied operations, partial action failures, independent authority decisions, and contributor mappings.
+
 ## Quick Start
 
 Start with a policy supplied by the application owner. This example reads [internal_report.policy](examples/internal_report.policy) from a local file and creates governed values directly in Python. It uses the installed Python package and native TN runtime; Unity, OPA, and a model service are not required.
@@ -106,18 +120,33 @@ The installed `tn_governed.values` package provides `TNString`, `TNNumeric`, `Co
 | [numeric.py](src/tn_governed/values/numeric.py) | Numeric operators and preservation of the underlying Python numeric type |
 | [string.py](src/tn_governed/values/string.py) | Governed string methods, slicing, concatenation and exposure |
 | [primitives.py](src/tn_governed/values/primitives.py) | Authorization, opening values and publishing derived values |
+| [obligations.py](src/tn_governed/values/obligations.py) | Ordered required actions and retained completion evidence |
 | [sql.py](src/tn_governed/values/sql.py) | Resolving source governance and returning governed SQL cells |
+| [query.py](src/tn_governed/values/query.py) | SQLite source discovery, read snapshots, trusted functions, and contributor contracts |
+| [query_result.py](src/tn_governed/values/query_result.py) | Signed query results with positional cells and authorized disclosure |
+| [audit.py](dependencies/tn-polars/tn_polars/audit.py) | Dataframe operation records, evaluator decisions, contributor support, and output verification |
 | [frames.py](experiments/pvldb_evaluation/frames.py) | SQL cells through governed Polars and back to a governed number |
 | [numeric_profile.py](experiments/pvldb_evaluation/numeric_profile.py) | Exact dataframe types and range checks |
 | [policy_accumulation.py](experiments/pvldb_evaluation/policy_accumulation.py) | Policies, input references, claims, and disclosure after filtering and aggregation |
 | [Native server](native/tn-llama) | Rust governance runtime, TN cryptography, C++ integration and pinned llama.cpp patch |
 | [model.py](src/tn_governed/values/model.py) | Native transfer to the model service and registration of pending review |
+| [tool_evidence.py](dependencies/tn-llama-client/tn_llama_client/tool_evidence.py) | Configured tool names, input sections, and signed completion types |
 | [run.py](experiments/pvldb_evaluation/run.py) | Complete setup, execution and verification of the submission example |
 | [evidence.py](src/tn_governed/values/evidence.py) | Signed records of each context's operations |
 
 `TNString` subclasses `str`, with a locator in the inherited string buffer. Its protected content is in the TN publication. `TNNumeric` refers to an encrypted number. It preserves `int`, `float`, and `Decimal` behavior by applying operations to the underlying values inside the authorized runtime. Scalar complex results are also supported. The SQL/dataframe example supports integers, floats and decimals.
 
 Compute and expose are separate operations. For example, an authorized `upper()` returns a governed string. `reveal(context, destination=...)` returns an ordinary value only after the context permits that exposure and the endpoint can decrypt the content. Metadata operations use declared facts where available.
+
+`GovernedSQL.execute_query(sql, parameters)` returns a governed relation. SQLite prepares the query without executing its expressions; the gateway resolves signed assignments for the discovered value and control dependencies before execution. The publication binds the query, typed parameters, database snapshot, source assignments, output schema, and contributor mapping. `fetchall()` returns positional `QueryCell` handles, so duplicate aliases and equal values remain distinct. `reveal(destination)` authorizes disclosure of the relation or a selected cell. `execute` retains primitive handles for direct-column projections and uses the relation interface for other queries.
+
+The built-in SQL dependency mapping tracks positive row contributors for instrumented base-table projections, joins, groups, and aggregate windows, while retaining snapshot-scoped selection and matching dependencies. Query shapes whose projection augmentation could alter semantics execute the original statement with source-scoped dependencies and unknown row support. Each source assignment must permit the recorded precision through its `sql_lineage` rule. An endpoint can configure a `LineageProvider` with a mapper and validator for precise row and cell dependencies; the gateway checks output coverage and assigned sources while retaining the full query policy union. `SQLFunction` registrations identify trusted user-defined functions and their additional source dependencies. These interfaces use the database engine's query language and the endpoint's configured provenance capabilities.
+
+An endpoint evaluator returns an `Assessment` with its decision and ordered required actions. The endpoint supplies each action handler. A handler completes an action by returning `ObligationResult(True, evidence_reference)` with a nonempty string reference. If a later handler fails, the signed decision retains earlier completion references and identifies the failed action; protected processing stops. This record does not roll back external actions. Their handlers own retry, idempotency, and compensation behavior.
+
+Native dataframe releases carry `tn_polars_audit` beside their rows. The audit records source editions, policy-artifact hashes, operation parameters, evaluator requests and decisions, output bindings, and contributor support. `open_audited_frame` authenticates the publication and checks these bindings. Supply hashes from accepted editions through `expected_artifacts`; the optional `evaluator_for` resolver replays recorded policy requests. The verifier inspects recorded expressions without executing them.
+
+`NativeOutputReader` separates accepted tool evidence from mandatory completions. Supply `ToolEvidenceExpectation` records through `tool_expectations`, and name the prerequisites in `required_tools`. Each required name must have valid signed completion evidence before report content opens. An empty required set supports workflows without tool prerequisites; configured optional evidence is still validated when supplied. `expected_request_digest` additionally binds signed completions to a trusted submitted request. `submit_governed_report(..., bind_request=True)` derives that digest from the request it sends and supplies it during recipient admission.
 
 ## Setup
 

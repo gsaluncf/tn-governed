@@ -18,3 +18,6 @@ dist/
 *.egg-info/
 
 !README.md
+!docs/governed-execution.md
+!docs/tool-workflows.md
+!docs/sql-query-results.md

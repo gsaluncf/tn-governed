@@ -37,8 +37,10 @@ class ValueReference:
 
     def __post_init__(self):
         object_digest(self.object_id)
-        if not isinstance(self.field, str) or not self.field or self.group not in {"strings", "values"}:
-            raise ValueError("invalid string field reference")
+        if any(not isinstance(value, str) or not value or value != value.strip()
+               or any(ord(character) < 32 or ord(character) == 127 for character in value)
+               for value in (self.field, self.group)):
+            raise ValueError("invalid native publication field reference")
 
     def to_dict(self):
         return {"object_id": self.object_id, "group": self.group, "field": self.field}

@@ -13,6 +13,7 @@ from types import MappingProxyType
 import polars as pl
 
 from .admission import SchemaPinViolation, _pin_dtypes, _pin_message
+from .audit import AuditTrail, build_frame_audit, record_release
 from .policy import CompiledPolicy
 from .release import PolicyDenied
 
@@ -44,8 +45,10 @@ class _PolicyEntry:
 class PolicySet:
     """All contributing evaluators, keyed by exact native policy revision."""
 
-    def __init__(self, entries):
+    def __init__(self, entries, *, audit=None):
         self._entries = MappingProxyType(dict(entries))
+        self.audit = audit if audit is not None else AuditTrail()
+        self.claims = ()
 
     @classmethod
     def for_selection(cls, entries, selection, *, module_cache=None):
@@ -76,30 +79,63 @@ class PolicySet:
                          else entry.evaluator(module_cache=module_cache))
             accepted[revision] = _PolicyEntry(policy, evaluator, artifacts,
                 frozenset({selection.source_object_id}), deepcopy(profile.get("dtypes")))
-        return cls(accepted)
+        record = selection.record
+        audit = AuditTrail().append("source", {
+            "source_id": selection.source_object_id, "dataset": record.dataset,
+            "edition": record.edition, "edition_record_id": record.id,
+            "policy_revisions": sorted(accepted),
+        })
+        return cls(accepted, audit=audit)
 
     @property
     def revision_ids(self):
         return tuple(sorted(self._entries))
 
     def copy(self):
-        return PolicySet(self._entries)
+        result = PolicySet(self._entries, audit=self.audit)
+        result.claims = self.claims
+        return result
 
     def include(self, other):
         merged = dict(self._entries)
         for revision, entry in other._entries.items():
             if revision in merged:
                 current = merged[revision]
-                if (current.artifacts != entry.artifacts
-                        or current.policy.to_dict() != entry.policy.to_dict()):
+                if current.artifacts != entry.artifacts:
                     raise _refusal("Conflicting evaluator artifacts for the same signed revision")
-                entry = _PolicyEntry(current.policy, current.evaluator, current.artifacts,
+                policy = current.policy
+                if current.policy.to_dict() != entry.policy.to_dict():
+                    local = (isinstance(current.artifacts, dict)
+                             and current.artifacts.get("kind") == "endpoint-evaluator")
+                    if (not local or current.policy.release != entry.policy.release
+                            or any(current.policy.fields[name] != entry.policy.fields[name]
+                                   for name in current.policy.fields.keys() & entry.policy.fields.keys())):
+                        raise _refusal("Conflicting evaluator profiles for the same signed revision")
+                    policy = CompiledPolicy(current.policy.schema, current.policy.policy_ref,
+                        current.policy.fields | entry.policy.fields, current.policy.release)
+                entry = _PolicyEntry(policy, current.evaluator, current.artifacts,
                     current.source_ids | entry.source_ids, current.dtypes)
             merged[revision] = entry
-        return PolicySet(merged)
+        result = PolicySet(merged, audit=self.audit.merge(other.audit))
+        claims = {item["id"]: item for item in self.claims}
+        for item in other.claims:
+            if item["id"] in claims and claims[item["id"]] != item:
+                raise _refusal("Claim identity has conflicting attributed records")
+            claims[item["id"]] = item
+        result.claims = tuple(claims[key] for key in sorted(claims))
+        return result
+
+    def record_operation(self, operation, parameters=None):
+        decisions = self.audit.records()[-len(self._entries):]
+        self.audit = self.audit.append("operation", {
+            "name": operation, "parameters": parameters or {},
+            "policy_revisions": list(self.revision_ids),
+            "authorization": [event["id"] for event in decisions],
+        })
 
     def validate_contracts(self, context):
-        actual = {policy.revision_id: policy for policy in context.policies}
+        from .authority import policy_identity
+        actual = {policy_identity(policy): policy for policy in context.policies}
         if set(actual) != set(self._entries):
             raise _refusal("The source's complete contract set differs from its evaluators")
         for revision, entry in self._entries.items():
@@ -133,7 +169,8 @@ class PolicySet:
                   for entry in self._entries.values()]
         return "confidential" if "confidential" in levels else "internal" if "internal" in levels else "public"
 
-    def decide(self, operation, audience, sources, row_sources, use, *, support=None, materialized=None):
+    def decide(self, operation, audience, sources, row_sources, use, *, support=None, materialized=None,
+               parameters=None):
         decisions = []
         for revision, entry in self._entries.items():
             columns = []
@@ -149,7 +186,15 @@ class PolicySet:
                 "use": {"application": use.application, "purpose": use.purpose,
                         "operation": use.operation},
             }
+            if parameters is not None:
+                request["parameters"] = deepcopy(parameters)
+            if self.claims:
+                request["claims"] = deepcopy(list(self.claims))
             decision = entry.evaluator.decide(request)
+            self.audit = self.audit.append("policy-decision", {
+                "request": request, "allow": decision.allow,
+                "reason": decision.reason, "decision_id": decision.decision_id,
+            })
             if type(decision.allow) is not bool or not decision.allow:
                 raise _refusal(f"Contract {revision} refused {operation}: {decision.reason}")
             decisions.append(decision)
@@ -163,23 +208,32 @@ class TnBoundary:
     use: object
     group: str
     rows_field: str
+    output_type: str | None = None
 
     def copy(self):
-        return TnBoundary(self.data.copy(), self.policies.copy(), self.use, self.group, self.rows_field)
+        return TnBoundary(self.data.copy(), self.policies.copy(), self.use, self.group,
+                          self.rows_field, self.output_type)
 
     def include(self, other):
         if self.use != other.use:
             raise _refusal("Joined TN inputs require the same admitted application use")
         data = self.data.copy()
         data.include(other.data)
-        return TnBoundary(data, self.policies.include(other.policies), self.use, self.group, self.rows_field)
+        return TnBoundary(data, self.policies.include(other.policies), self.use, self.group,
+                          self.rows_field, self.output_type)
 
 
 def load_from_tn(wire, *, session, use, selection, policies, decide, group="finance",
-                 rows_field="rows"):
+                 rows_field="rows", verify_claim=None):
+    import tn
     from .frame import GovernedLazyFrame
+    from .relations import _claims
     _check_use(use)
     policy_set = PolicySet.for_selection(policies, selection)
+    obj = wire if isinstance(wire, tn.GovernedObject) else tn.GovernedObject.parse(wire)
+    if "evidence" in obj.envelope and group != "evidence":
+        metadata = session.receive(obj, use=use, groups=["evidence"], decide=decide)
+        policy_set.claims = _claims(metadata, ["evidence"], verify_claim)
     # Schema is known from verified evaluator profiles before any business open.
     declared = set().union(*(set(entry.policy.fields) for entry in policy_set._entries.values()))
     sources = {name: {root_name(selection.source_object_id, name)} for name in declared}
@@ -190,6 +244,13 @@ def load_from_tn(wire, *, session, use, selection, policies, decide, group="fina
         return decide(context)
 
     data = session.receive(wire, use=use, groups=[group], selection=selection, decide=accept)
+    carried_claims = _claims(data, [group], verify_claim)
+    if carried_claims:
+        combined = {item["id"]: item for item in policy_set.claims}
+        combined.update({item["id"]: item for item in carried_claims})
+        policy_set.claims = tuple(combined.values())
+        policy_set.decide("load", use.application, sources, set(), use)
+    policy_set.record_operation("load", {"group": group, "rows_field": rows_field})
     # Native mutable containers are projected only after receive succeeded.
     rows = deepcopy(data.get(rows_field, group=group))
     if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
@@ -201,18 +262,20 @@ def load_from_tn(wire, *, session, use, selection, policies, decide, group="fina
         tn_boundary=TnBoundary(data, policy_set, use, group, rows_field))
 
 
-def release_tn(frame, *, use, to, decide, object_type=None, group=None, rows_field=None):
+def release_tn(frame, *, use, to, decide, object_type=None, group=None, rows_field=None,
+               metadata_group=None):
     _check_use(use)
     boundary = frame._tn
     if boundary is None:
         raise _refusal("A TN release requires a frame loaded through native TN admission")
     group = group or boundary.group
     rows_field = rows_field or boundary.rows_field
-    if rows_field == "tn_polars_lineage":
+    if rows_field in {"tn_polars_lineage", "tn_polars_audit", "tn_polars_claims"}:
         raise _refusal("The output rows field is reserved for signed Polars lineage")
     materialized = frame._support.frame.collect()
-    decisions = boundary.policies.decide("release", to, frame.sources, frame.row_sources, use,
-                                        support=frame._support, materialized=materialized)
+    policies = boundary.policies.copy()
+    decisions = record_release(policies, frame, materialized, use=use, audience=to,
+                               parameters={"group": group, "rows_field": rows_field})
     # Work on an independent native object so a refused release cannot change
     # this frame, its siblings, or their retained source publications.
     data = boundary.data.copy()
@@ -224,7 +287,16 @@ def release_tn(frame, *, use, to, decide, object_type=None, group=None, rows_fie
         "policy_revisions": list(boundary.policies.revision_ids),
         "decisions": [item.decision_id for item in decisions],
     }
-    data.set(None, {rows_field: rows, "tn_polars_lineage": lineage}, group=group)
-    data.select([group])
+    audit = build_frame_audit(frame, materialized, policies=policies)
+    data.set(None, {rows_field: rows, "tn_polars_lineage": lineage, "tn_polars_audit": audit,
+                    "tn_polars_claims": deepcopy(list(policies.claims))}, group=group)
+    selected_groups = [group]
+    if metadata_group is None and (policies.claims or "evidence" in boundary.data.snapshot.envelope):
+        metadata_group = "evidence"
+    if metadata_group is not None and metadata_group != group:
+        data.set(None, {"tn_polars_claims": deepcopy(list(policies.claims)),
+                        "tn_polars_audit": audit}, group=metadata_group)
+        selected_groups.append(metadata_group)
+    data.select(selected_groups)
     return data.release(use=use, to=to, decide=decide,
-                        object_type=object_type or data.object_type)
+                        object_type=object_type or boundary.output_type or data.object_type)

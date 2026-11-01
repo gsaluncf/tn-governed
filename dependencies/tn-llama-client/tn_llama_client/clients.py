@@ -6,6 +6,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 
 import tn.reader
 from tn.canonical import _canonical_bytes
@@ -20,6 +21,7 @@ from .protocol import (
     build_governed_request,
     build_model_request,
 )
+from .tool_evidence import ToolEvidenceExpectation
 from .transcript import HttpTranscript
 
 
@@ -243,7 +245,22 @@ class TnOutputReader:
 
 
 class NativeOutputReader:
-    """Admit a v2 report through an independent native recipient session."""
+    """Admit a report only after its configured tool evidence has been verified.
+
+    Tool expectations validate supplied completions. Required tools name the
+    subset whose evidence must be present before report content is opened.
+    Pass ToolEvidenceExpectation records in tool_expectations and their names
+    in required_tools. Each record binds a name, input sections, and publication
+    type; the reader also checks the source, release context, and run identity.
+    Supplied completions must use distinct call identities and one request digest.
+
+    required_tools defaults to empty for workflows without required tool calls.
+    The legacy expected_tool_name/sections/object_type arguments configure one
+    optional expectation; name it in required_tools to require its completion.
+    expected_request_digest binds completion to a trusted submitted request and
+    requires signed tool evidence. An open-call digest cannot replace a different
+    configured digest. Leaving both unset preserves workflows without tool calls.
+    """
 
     def __init__(
         self, session, *, expected_source, expected_writer, use, destination,
@@ -252,6 +269,9 @@ class NativeOutputReader:
         expected_tool_object_type="compliance.creation.logged",
         expected_tool_name=None,
         expected_tool_sections=None,
+        tool_expectations=(),
+        required_tools=(),
+        expected_request_digest=None,
     ):
         import tn
         if not isinstance(expected_source, tn.GovernedObject) or not isinstance(use, tn.UseContext):
@@ -274,6 +294,40 @@ class NativeOutputReader:
         self.expected_tool_sections = (
             None if expected_tool_sections is None else tuple(expected_tool_sections)
         )
+        expectations = {}
+        for expectation in tool_expectations:
+            if not isinstance(expectation, ToolEvidenceExpectation):
+                raise TypeError("tool expectations must be ToolEvidenceExpectation records")
+            if expectation.name in expectations:
+                raise ValueError("tool expectations must have unique names")
+            expectations[expectation.name] = expectation
+        if expected_tool_name is not None or expected_tool_sections is not None:
+            legacy = ToolEvidenceExpectation(
+                expected_tool_name, self.expected_tool_sections, expected_tool_object_type,
+            )
+            configured = expectations.get(legacy.name)
+            if configured is not None and configured != legacy:
+                raise ValueError("tool expectation differs from the single-tool configuration")
+            expectations[legacy.name] = legacy
+        if isinstance(required_tools, str):
+            raise TypeError("required tools must be a sequence of configured names")
+        required = tuple(required_tools)
+        if any(not isinstance(name, str) or name not in expectations for name in required):
+            raise ValueError("every required tool must have a configured evidence expectation")
+        if len(set(required)) != len(required):
+            raise ValueError("required tools must have unique names")
+        if required and release_use is None:
+            raise ValueError("required tool evidence needs the expected release use")
+        self.tool_expectations = MappingProxyType(expectations)
+        self.required_tools = frozenset(required)
+        self.expected_request_digest = self._request_digest(expected_request_digest)
+
+    @staticmethod
+    def _request_digest(value):
+        if value is not None and (not isinstance(value, str)
+                                  or not re.fullmatch(r"sha256:[0-9a-f]{64}", value)):
+            raise ValueError("expected request digest must be a canonical sha256 identity")
+        return value
 
     @staticmethod
     def _has_exact_sources(sources, expected_objects) -> bool:
@@ -324,11 +378,7 @@ class NativeOutputReader:
             and self.decide(admission)
         )
 
-    def _validate_tool_payload(self, release, payload) -> None:
-        if self.expected_tool_name is None or self.expected_tool_sections is None:
-            raise ValueError(
-                "native tool validation requires the configured tool name and selected sections"
-            )
+    def _validate_tool_payload(self, release, tool, payload):
         required = {
             "run_id", "request_digest", "tool_name", "model_tool_call_id",
             "source_object_id", "source_writer", "source_type",
@@ -344,21 +394,32 @@ class NativeOutputReader:
         if any(ord(character) < 32 or ord(character) == 127
                for character in payload["model_tool_call_id"]):
             raise ValueError("native tool payload call identity contains controls")
+        expectation = self.tool_expectations.get(payload["tool_name"])
+        if expectation is None:
+            raise PermissionError("native tool is not configured for recipient admission")
+        if tool.object_type != expectation.object_type:
+            raise ValueError("native tool publication type differs from its configured tool")
         expected_action = self.release_use.operation if self.release_use is not None else None
         expected = {
             "run_id": release.run_id,
-            "tool_name": self.expected_tool_name,
+            "tool_name": expectation.name,
             "source_object_id": self.expected_source.id,
             "source_writer": self.expected_source.writer,
             "source_type": self.expected_source.object_type,
-            "selected_sections": list(self.expected_tool_sections),
+            "selected_sections": list(expectation.selected_sections),
             "action": expected_action,
         }
         if expected_action is None or any(payload[name] != value for name, value in expected.items()):
             raise ValueError("native tool payload differs from the configured request")
+        return expectation.name, payload["model_tool_call_id"], payload["request_digest"]
 
-    def open(self, release: NativeModelRelease):
+    def open(self, release: NativeModelRelease, *, expected_request_digest=None):
         import tn
+        expected_digest = self._request_digest(expected_request_digest)
+        if (expected_digest is not None and self.expected_request_digest is not None
+                and expected_digest != self.expected_request_digest):
+            raise ValueError("open request digest differs from the configured request digest")
+        expected_digest = expected_digest or self.expected_request_digest
         if not isinstance(release, NativeModelRelease):
             raise TypeError("native recipient requires a version 2 release")
         output = release.output_object
@@ -383,6 +444,10 @@ class NativeOutputReader:
             or len({tool.id for tool in tool_objects}) != len(tool_objects)
         ):
             raise TypeError("native release tools must be unique verified GovernedObjects")
+        if self.required_tools and not tool_objects:
+            raise PermissionError("native report lacks required tool completion evidence")
+        if expected_digest is not None and not tool_objects:
+            raise PermissionError("native report lacks signed request binding evidence")
         expected_parents = (self.expected_source, *tool_objects)
         sources = view.governance.sources
         if not self._has_exact_sources(sources, expected_parents):
@@ -397,8 +462,9 @@ class NativeOutputReader:
         for tool in tool_objects:
             if tool.writer != self.expected_writer:
                 raise PermissionError("native tool writer is not the configured model publisher")
-            if tool.object_type != self.expected_tool_object_type:
-                raise ValueError("native tool publication has the wrong object type")
+            if not any(tool.object_type == expected.object_type
+                       for expected in self.tool_expectations.values()):
+                raise ValueError("native tool publication has an unconfigured object type")
             if set(tool.group_names) != {"default", "tn.agents"}:
                 raise ValueError("native tool publication must contain only default and tn.agents")
             tool_view = self.session.governance(tool)
@@ -421,6 +487,7 @@ class NativeOutputReader:
             return self.resolve_ancestor(identity)
 
         tn.LineageVerifier().verify(view, self.catalog, self.policy_dag, resolve)
+        completed, call_ids, request_digests = set(), set(), set()
         for tool in tool_objects:
             admitted = self.session.receive(
                 tool,
@@ -428,7 +495,20 @@ class NativeOutputReader:
                 groups=["default"],
                 decide=lambda admission, tool=tool: self._accept(admission, tool),
             )
-            self._validate_tool_payload(release, admitted.data)
+            name, call_id, request_digest = self._validate_tool_payload(
+                release, tool, admitted.data,
+            )
+            if expected_digest is not None and request_digest != expected_digest:
+                raise ValueError("native tool request digest differs from the trusted submitted request")
+            if call_id in call_ids:
+                raise ValueError("native tool completions reuse a model call identity")
+            call_ids.add(call_id)
+            request_digests.add(request_digest)
+            if len(request_digests) != 1:
+                raise ValueError("native tool completions have different request digests")
+            completed.add(name)
+        if not self.required_tools.issubset(completed):
+            raise PermissionError("native report lacks required tool completion evidence")
 
         return self.session.receive(
             output,
