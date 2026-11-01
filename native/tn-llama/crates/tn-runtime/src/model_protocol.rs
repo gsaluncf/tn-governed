@@ -17,6 +17,38 @@ pub(crate) const GOVERNANCE_READ_MAX_TOKENS: u32 = 256;
 
 pub(crate) const SYSTEM_CONTENT: &str = "This is a server-governed action interaction. Call exactly one available tool and return no prose. Copy server-provided trusted fields exactly. Generate only the requested output fields. The server validates, executes, emits, and releases every action.";
 
+pub(crate) fn governance_presentation(
+    plaintext: &BTreeMap<String, Value>,
+    commitments: &BTreeMap<String, String>,
+    source_object_id: &str,
+) -> Result<BTreeMap<String, Value>, TnLlamaError> {
+    // Only typed provenance collections are summarized. Policy text, attached
+    // contracts, claims, and extension fields retain their authenticated values.
+    let mut presentation = plaintext.clone();
+    for field in ["dataset_bindings", "source_lineage"] {
+        let Some(entries) = plaintext.get(field).and_then(Value::as_array) else {
+            continue;
+        };
+        if entries.len() <= 16 {
+            continue;
+        }
+        let commitment = commitments.get(field).ok_or_else(|| {
+            session_error(
+                "tn_session_state",
+                "verified provenance commitment is unavailable",
+            )
+        })?;
+        presentation.insert(
+            field.into(),
+            json!({
+                "schema":"tn.governance-reference.v1", "source_object_id":source_object_id,
+                "field":field, "entry_count":entries.len(), "field_commitment":commitment,
+            }),
+        );
+    }
+    Ok(presentation)
+}
+
 pub struct ParsedToolCall<'a> {
     pub id: &'a [u8],
     pub name: &'a [u8],
@@ -124,7 +156,7 @@ pub(crate) fn commitment_echo_body(
             "type": "function",
             "function": {
                 "name": "continue_with_governance",
-                "description": "Continue only by echoing the complete governance and commitment set exactly.",
+                "description": "Continue only by echoing the server's governance presentation and original commitment set exactly.",
                 "parameters": echo_parameters_schema(governance)
             }
         }]
@@ -743,4 +775,55 @@ fn runnable_manifest_error() -> TnLlamaError {
 
 pub(crate) fn session_error(code: &'static str, message: &'static str) -> TnLlamaError {
     TnLlamaError::new(code, AdmissionStage::Session, message)
+}
+
+#[cfg(test)]
+mod presentation_tests {
+    use super::*;
+
+    #[test]
+    fn reference_presentation_retains_every_nonstructural_field() {
+        let plaintext: BTreeMap<String, Value> = [
+            (
+                "dataset_bindings".into(),
+                json!((0..3126).collect::<Vec<_>>()),
+            ),
+            ("source_lineage".into(), json!([{"object_id":"source"}])),
+            ("instruction".into(), json!("Retain source conditions.")),
+            (
+                "attached_policies".into(),
+                json!([{"fields":{"use_for":"Research"}}]),
+            ),
+            (
+                "claims".into(),
+                json!([{"issuer":"authority", "statement":"Review first"}]),
+            ),
+            ("custom_condition".into(), json!({"purpose":"analysis"})),
+        ]
+        .into();
+        let commitments = plaintext
+            .keys()
+            .map(|name| (name.clone(), format!("hash:{name}")))
+            .collect();
+        let presented = governance_presentation(&plaintext, &commitments, "sha256:input").unwrap();
+        for (name, value) in &plaintext {
+            if name != "dataset_bindings" {
+                assert_eq!(&presented[name], value);
+            }
+        }
+        assert_eq!(presented["dataset_bindings"]["entry_count"], 3126);
+        assert_eq!(
+            presented["dataset_bindings"]["source_object_id"],
+            "sha256:input"
+        );
+        assert_eq!(
+            presented["dataset_bindings"]["field_commitment"],
+            "hash:dataset_bindings"
+        );
+        assert!(serde_json::to_vec(&presented).unwrap().len() < 1000);
+        assert_eq!(
+            plaintext["dataset_bindings"].as_array().unwrap().len(),
+            3126
+        );
+    }
 }

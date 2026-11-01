@@ -5,9 +5,9 @@ for each source and preserves earlier group obligations through further grouping
 These columns are never exposed as business data or accepted from callers.
 """
 
-from dataclasses import dataclass, replace
 import io
 import json
+from dataclasses import dataclass, replace
 from uuid import uuid4
 
 import polars as pl
@@ -20,6 +20,10 @@ def _name():
 
 def _flat(name):
     return pl.col(name).list.explode(keep_nulls=False, empty_as_null=False).drop_nulls()
+
+
+def _sources(identity):
+    return frozenset({identity}) if isinstance(identity, str) else identity
 
 
 SCALAR, ROW, REDUCED, MIXED, UNKNOWN = "scalar", "row", "reduced", "mixed", "unknown"
@@ -196,6 +200,78 @@ class Support:
             pl.concat_list(pl.concat_str(pl.lit(source + "::"), pl.col(name))).alias(name))
         return cls(tracked, {name: source}, {}, {policy: frozenset({source}) for policy in policies})
 
+    @classmethod
+    def from_contributors(cls, frame, contributors, policy_sources, *, row_count):
+        """Pack source-qualified rows by shared policy membership.
+
+        Contributors are ``(output_row, source_id, source_row)`` tuples. A row
+        token retains its original publication identity even when several
+        publications share one hidden column. Storage grows with contributors
+        and policy-membership groups, rather than rows times publications.
+        """
+        if type(row_count) is not int or row_count < 0:
+            raise ValueError("row_count must be a nonnegative integer")
+        policies = {revision: frozenset(sources) for revision, sources in policy_sources.items()}
+        memberships = {}
+        for revision, sources in policies.items():
+            for source in sources:
+                if not isinstance(source, str) or not source or "::" in source:
+                    raise ValueError("source identities must be nonempty and exclude ::")
+                memberships.setdefault(source, set()).add(revision)
+        packed, identities = {}, {}
+        for source, revisions in memberships.items():
+            identity = frozenset(revisions)
+            identities.setdefault(identity, set()).add(source)
+        for row, source, ordinal in contributors:
+            if (type(row) is not int or not 0 <= row < row_count
+                    or not isinstance(source, str) or not source or "::" in source
+                    or type(ordinal) is not int or ordinal < 0):
+                raise ValueError("contributors require valid row coordinates and source identities")
+            identity = frozenset(memberships.get(source, ()))
+            identities.setdefault(identity, set()).add(source)
+            if identity not in packed:
+                packed[identity] = [[] for _ in range(row_count)]
+            packed[identity][row].append(f"{source}::{ordinal}")
+        columns, ids = [], {}
+        for identity, sources in identities.items():
+            name = _name()
+            rows = packed.get(identity)
+            if rows is None:
+                rows = [[] for _ in range(row_count)]
+            columns.append(pl.Series(name, rows, dtype=pl.List(pl.String)))
+            ids[name] = frozenset(sources)
+        return cls(frame.with_columns(columns), ids, {}, policies)
+
+    def contributors_for(self, sources):
+        """Select exact row tokens under one policy, including overlapping packs."""
+        selected = []
+        for name, identity in self.ids.items():
+            members = _sources(identity)
+            overlap = members & sources
+            if not overlap:
+                continue
+            values = pl.col(name).fill_null(pl.lit([], dtype=pl.List(pl.String)))
+            if overlap != members:
+                source = pl.element().str.split_exact("::", 1).struct.field("field_0")
+                values = values.list.eval(pl.element().filter(source.is_in(sorted(overlap))))
+            selected.append(values)
+        return pl.concat_list(selected) if selected else None
+
+    def row_members(self, materialized):
+        """Expand packed tokens to the wire audit's original source-to-row map."""
+        for row in materialized.select(list(self.ids)).to_dicts():
+            members = {}
+            for name, identity in self.ids.items():
+                sources = _sources(identity)
+                for source in sources:
+                    members.setdefault(source, set())
+                for token in row[name] or []:
+                    source, separator, _ = token.partition("::")
+                    if not separator or source not in sources:
+                        raise ValueError("row support token names an unbound source")
+                    members[source].add(token)
+            yield {source: sorted(values) for source, values in sorted(members.items())}
+
     @property
     def hidden(self):
         return list(self.ids) + list(self.groups)
@@ -230,10 +306,9 @@ class Support:
                 additions.append(_flat(name).unique().implode().over(list(keys)).alias(target))
                 candidates.setdefault(source, []).append(target)
             for revision, sources in self.policy_sources.items():
-                names = [name for name, source in self.ids.items() if source in sources]
-                if names:
+                members = self.contributors_for(sources)
+                if members is not None:
                     target = _name()
-                    members = pl.concat_list([pl.col(name) for name in names])
                     additions.append(members.list.explode(keep_nulls=False, empty_as_null=False)
                         .drop_nulls().n_unique().cast(pl.UInt64).implode().over(list(keys)).alias(target))
                     groups[target] = revision
@@ -266,11 +341,10 @@ class Support:
         groups = dict(self.groups)
         for policy, sources in self.policy_sources.items():
             count_name = _name()
-            names = [name for name, source in self.ids.items() if source in sources]
-            if not names:
+            contributors = self.contributors_for(sources)
+            if contributors is None:
                 known = False
                 continue
-            contributors = pl.concat_list([pl.col(name).fill_null(pl.lit([], dtype=pl.List(pl.String))) for name in names])
             metadata.append(contributors.list.explode(keep_nulls=False, empty_as_null=False)
                             .drop_nulls().n_unique().cast(pl.UInt64).implode().alias(count_name))
             groups[count_name] = policy

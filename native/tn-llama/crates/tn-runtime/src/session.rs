@@ -12,9 +12,9 @@ use crate::contract::ReportContract;
 use crate::governance::{GovernanceReader, VerifiedGovernance};
 use crate::model_phase::Phase;
 use crate::model_protocol::{
-    commitment_echo_body, emit_governed_record_tool, governance_read_body, governed_action_body,
-    model_request_digest, rendered_prompt_digest, section_selection_body, session_error,
-    AcceptedCall, GovernedActionBodyInput, NativeToolResult, ToolExchange,
+    commitment_echo_body, emit_governed_record_tool, governance_presentation, governance_read_body,
+    governed_action_body, model_request_digest, rendered_prompt_digest, section_selection_body,
+    session_error, AcceptedCall, GovernedActionBodyInput, NativeToolResult, ToolExchange,
     GOVERNANCE_READ_MAX_TOKENS,
 };
 use crate::output_tn::{
@@ -555,7 +555,7 @@ impl Session {
                         &core.purpose,
                         core.row_hash(),
                         core.request_digest(),
-                        &governance.plaintext,
+                        &model_governance(&core)?,
                         &governance.commitments,
                         stored_call(first),
                         core.echo_max_tokens,
@@ -1330,6 +1330,22 @@ fn trusted_source_lineage(core: &SessionCore) -> Result<Option<SourceLineage>, T
     }))
 }
 
+fn model_governance(core: &SessionCore) -> Result<BTreeMap<String, Value>, TnLlamaError> {
+    let governance = core
+        .governance
+        .as_ref()
+        .ok_or_else(|| session_error("tn_session_state", "verified governance is unavailable"))?;
+    if core.governed.is_some() {
+        governance_presentation(
+            &governance.plaintext,
+            &governance.commitments,
+            core.governed_request().object.id(),
+        )
+    } else {
+        Ok(governance.plaintext.clone())
+    }
+}
+
 fn governed_action_request(core: &SessionCore) -> Result<Vec<u8>, TnLlamaError> {
     if core.governed.is_some() {
         let executed = core
@@ -1375,11 +1391,7 @@ fn governed_action_request(core: &SessionCore) -> Result<Vec<u8>, TnLlamaError> 
         return crate::model_protocol::governed_object_action_body(
             &core.user_content,
             &selected_values(core)?,
-            &core
-                .governance
-                .as_ref()
-                .expect("accepted governance")
-                .plaintext,
+            &model_governance(core)?,
             core.governed
                 .as_ref()
                 .and_then(|state| state.input.report_policy.as_ref()),
@@ -2358,10 +2370,11 @@ fn validate_echo_arguments(core: &SessionCore, arguments: &Value) -> Result<(), 
         .governance
         .as_ref()
         .ok_or_else(|| session_error("tn_session_state", "verified governance is unavailable"))?;
+    let expected_presentation = model_governance(core)?;
     let governance = object
         .get("governance")
         .and_then(Value::as_object)
-        .filter(|object| same_keys(object, &expected.plaintext))
+        .filter(|object| same_keys(object, &expected_presentation))
         .ok_or_else(tool_arguments_shape)?;
     let commitments = object
         .get("governance_commitments")
@@ -2371,7 +2384,7 @@ fn validate_echo_arguments(core: &SessionCore, arguments: &Value) -> Result<(), 
     if !commitments.values().all(Value::is_string) {
         return Err(tool_arguments_shape());
     }
-    for (field, expected_value) in &expected.plaintext {
+    for (field, expected_value) in &expected_presentation {
         let supplied_value = governance.get(field).expect("key sets checked");
         let expected_bytes = tn_core::canonical::canonical_bytes(expected_value)
             .map_err(|_| tool_arguments_shape())?;

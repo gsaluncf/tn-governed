@@ -18,7 +18,7 @@ fi
 source_root="$root/native/tn-llama"
 work="$root/.runtime/llama-build"
 upstream="$work/upstream"
-build="$work/$backend"
+build="${TN_LLAMA_BUILD_DIR:-$work/$backend}"
 revision=3f545beccee69d9975f466ec7e45fd9aacd8ba90
 mkdir -p "$work"
 if [[ ! -d "$upstream" ]]; then

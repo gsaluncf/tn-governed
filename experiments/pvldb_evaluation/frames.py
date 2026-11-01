@@ -32,7 +32,7 @@ from tn_governed.values.evidence import EvidenceError
 from tn_governed.values.numeric import TNNumeric
 from tn_governed.values.numeric_codec import KINDS, record_value
 from .numeric_profile import numeric_profile, polars_dtype, build_frame, check_fixed_plan_range
-from tn_governed.values.primitives import Context, OPERATIONS
+from tn_governed.values.primitives import Context, OPERATIONS, unique_origins
 from tn_governed.values.string import OperationDenied, TNString, _active
 
 
@@ -208,20 +208,12 @@ def _select_policies(context, metadata, values, use):
 
 def _row_support(lazy, cells, policies, row_count):
     """Bind row support to each cell publication, rather than one arbitrary input."""
-    columns, identities, members = [], {}, {}
-    for cell in cells:
-        source = cell["source_object_id"]
-        if source not in members:
-            members[source] = [[] for _ in range(row_count)]
-        rows = members[source]
-        ordinal = cell["source_row"]
-        rows[cell["row"]].append(f"{source}::{ordinal}")
-    for source, rows in members.items():
-        name = "__tn_support_" + uuid4().hex
-        columns.append(pl.Series(name, rows, dtype=pl.List(pl.String)))
-        identities[name] = source
-    return Support(lazy.with_columns(columns), identities, {},
-                   {revision: entry.source_ids for revision, entry in policies._entries.items()})
+    return Support.from_contributors(
+        lazy,
+        ((cell["row"], cell["source_object_id"], cell["source_row"]) for cell in cells),
+        {revision: entry.source_ids for revision, entry in policies._entries.items()},
+        row_count=row_count,
+    )
 
 
 def dataframe_calculate(context, rows):
@@ -299,11 +291,8 @@ def dataframe_calculate(context, rows):
                      output={"column": "amount", "value": record_value(amount)})
         facts["audit"] = build_frame_audit(result, materialized,
                                            input_references=facts["input_references"])
-        origins = []
-        for _, binding, _ in metadata:
-            for origin in binding["origins"]:
-                if origin not in origins:
-                    origins.append(origin)
+        origins = unique_origins(origin for _, binding, _ in metadata
+                                 for origin in binding["origins"])
         output = context._publish(result._tn.data.copy(), content=amount, declared=None,
             claims=list(dict.fromkeys(claim.id for claim in request.claims)), origins=origins,
             values=values, request=request, decision_id=decision, call_id=call_id,

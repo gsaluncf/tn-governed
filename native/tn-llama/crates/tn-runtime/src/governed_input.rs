@@ -29,6 +29,16 @@ pub struct ContractPermission {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GovernedInputConfig {
+    #[serde(
+        default = "crate::config::default_lineage_max_objects",
+        deserialize_with = "crate::config::deserialize_lineage_max_objects"
+    )]
+    pub lineage_max_objects: usize,
+    #[serde(
+        default = "crate::config::default_lineage_max_depth",
+        deserialize_with = "crate::config::deserialize_lineage_max_depth"
+    )]
+    pub lineage_max_depth: usize,
     #[serde(default)]
     pub report_contract: Option<tn_core::governed::ContractBinding>,
     pub native_reader_config_path: PathBuf,
@@ -38,6 +48,12 @@ pub struct GovernedInputConfig {
     pub trusted_writers: BTreeSet<String>,
     pub authority_writers: BTreeSet<String>,
     pub contracts: Vec<ContractPermission>,
+}
+
+impl GovernedInputConfig {
+    pub fn lineage_verifier(&self) -> tn_core::Result<LineageVerifier> {
+        LineageVerifier::new(self.lineage_max_objects, self.lineage_max_depth)
+    }
 }
 
 #[derive(Debug)]
@@ -137,6 +153,7 @@ pub(crate) struct GovernedInputRuntime {
     dag: PolicyDag,
     catalog: DatasetCatalog,
     retained: BTreeMap<String, GovernanceView>,
+    lineage: LineageVerifier,
 }
 
 impl GovernedInputRuntime {
@@ -144,6 +161,9 @@ impl GovernedInputRuntime {
         config: GovernedInputConfig,
         verifier: Arc<GovernanceReader>,
     ) -> Result<Self, TnLlamaError> {
+        let lineage = config
+            .lineage_verifier()
+            .map_err(|_| refused("tn_governed_config_invalid"))?;
         if !config.native_reader_config_path.is_absolute()
             || !config.metadata_store_path.is_absolute()
             || config.trusted_writers.is_empty()
@@ -269,6 +289,7 @@ impl GovernedInputRuntime {
             dag,
             catalog,
             retained,
+            lineage,
         })
     }
 
@@ -288,7 +309,7 @@ impl GovernedInputRuntime {
         if !self.accepts_contracts(context)? {
             return Ok(false);
         }
-        LineageVerifier::default().verify(view, &self.catalog, &self.dag, |id| {
+        self.lineage.verify(view, &self.catalog, &self.dag, |id| {
             self.retained
                 .get(id)
                 .cloned()
@@ -340,7 +361,7 @@ impl GovernedInputRuntime {
         {
             return Ok(false);
         }
-        LineageVerifier::default().verify(view, &self.catalog, &self.dag, |id| {
+        self.lineage.verify(view, &self.catalog, &self.dag, |id| {
             if let Some(parent) = parents.iter().find(|parent| id == parent.object().id()) {
                 return Ok((*parent).clone());
             }

@@ -13,6 +13,7 @@ import sqlite3
 from uuid import uuid4
 
 from .numeric_codec import KINDS
+from .primitives import MAX_SOURCE_PUBLICATION_CELLS
 from .query import SQLiteQuery, contributor_manifest, digest, encode_sql
 from .runtime import Request
 
@@ -84,8 +85,9 @@ class GovernedCursor:
 class GovernedSQL:
     def __init__(self, database, *, gateway, consumer, edition_publisher, directory, detect_types=0,
                  batch_size=64, functions=(), lineage_provider=None):
-        if type(batch_size) is not int or not 1 <= batch_size <= 64:
-            raise ValueError("SQL publication batch size must be between 1 and 64")
+        if type(batch_size) is not int or not 1 <= batch_size <= MAX_SOURCE_PUBLICATION_CELLS:
+            raise ValueError(
+                f"SQL publication batch size must be between 1 and {MAX_SOURCE_PUBLICATION_CELLS}")
         self.database = Path(database).resolve()
         self.batch_size = batch_size
         self.detect_types = detect_types

@@ -1,6 +1,7 @@
 """Configure the report service and register review after recipient acceptance."""
 
 from dataclasses import dataclass
+from collections.abc import Mapping
 import hashlib
 import json
 from pathlib import Path
@@ -10,11 +11,37 @@ from uuid import uuid4
 import tn
 import yaml
 from tn_llama_client.clients import NativeOutputReader
+from tn_llama_client.protocol import build_model_request
 
 from tn_governed.llama import submit_governed_report
 from tn_governed.publications import write_once
 
 from .string import OperationDenied, _active
+
+
+def resolve_runtime_limits(overrides=None):
+    """Validate endpoint resource bounds without deriving them from untrusted inputs."""
+    limits = {"max_request_bytes": 1024 * 1024, "max_message_bytes": 16 * 1024,
+              "lineage_max_objects": 1024, "lineage_max_depth": 64}
+    if overrides is not None:
+        if not isinstance(overrides, Mapping) or set(overrides) - set(limits):
+            raise ValueError("runtime limits contain unsupported settings")
+        limits.update(overrides)
+    if any(type(value) is not int or value < 1 for value in limits.values()):
+        raise ValueError("runtime limits must be positive integers")
+    if limits["lineage_max_objects"] > 65536 or limits["lineage_max_depth"] > 256:
+        raise ValueError("lineage limits exceed the native verifier bounds")
+    return limits
+
+
+def runtime_limits_from_config(config):
+    governed = config.get("governed_objects") or {}
+    return resolve_runtime_limits({
+        **{key: config[key] for key in ("max_request_bytes", "max_message_bytes")
+           if key in config},
+        **{key: governed[key] for key in ("lineage_max_objects", "lineage_max_depth")
+           if key in governed},
+    })
 
 
 def digest(path):
@@ -101,6 +128,8 @@ class NativeModelEndpoint:
         self.runtime_config = Path(runtime_config)
         self.runtime_digest = digest(runtime_config)
         self.use = tn.UseContext(**requirements["use"])
+        config = json.loads(self.runtime_config.read_bytes())
+        self.runtime_limits = runtime_limits_from_config(config)
 
     def generate(self, value, *, prompt, destination="internal-model"):
         context = self.context
@@ -119,6 +148,14 @@ class NativeModelEndpoint:
                 raise OperationDenied("model endpoint configuration changed after preparation")
             source = context.store_object(value.reference.object_id)
             _require_standalone_value(source, value.reference)
+            request_bytes = len(build_model_request(source, prompt, self.use,
+                                destination=requirements["report_destination"]))
+            message_bytes = len(prompt.encode("utf-8"))
+            for key, actual in (("max_request_bytes", request_bytes),
+                                ("max_message_bytes", message_bytes)):
+                if actual > self.runtime_limits[key]:
+                    raise ValueError(f"model {key} limit {self.runtime_limits[key]} bytes "
+                                     f"is smaller than the encoded request's {actual} bytes")
             handoff = context._append("ModelHandoff", request, call_id, {
                 "decision_id": decision, "subject": value.reference.to_dict(),
                 "delivery": "prepared-for-submit", "native_use": use_dict(self.use),
@@ -168,8 +205,10 @@ class NativeModelEndpoint:
 
 
 def prepare_native_model(value, *, context, input_session, output_session, recipient_session,
-                         input_config, output_config, directory, model, binary, translate=str):
+                         input_config, output_config, directory, model, binary, translate=str,
+                         runtime_limits=None):
     """Compile carried requirements into the native endpoint's configuration."""
+    limits = resolve_runtime_limits(runtime_limits)
     source = context.store_object(value.reference.object_id)
     _require_standalone_value(source, value.reference)
     metadata, _, _ = context._metadata(value)
@@ -184,7 +223,9 @@ def prepare_native_model(value, *, context, input_session, output_session, recip
         if obj.writer not in context.evaluator.writers:
             raise OperationDenied("unrecognized primitive ancestor writer")
         return input_session.governance(obj)
-    lineage = tn.LineageVerifier(max_objects=65536, max_depth=256).verify(input_session.governance(source), context.catalog, context.policy_dag, resolve)
+    lineage = tn.LineageVerifier(max_objects=limits["lineage_max_objects"],
+        max_depth=limits["lineage_max_depth"]).verify(input_session.governance(source),
+            context.catalog, context.policy_dag, resolve)
     revision_ids = list(dict.fromkeys(identity for a in context.resolver.assignments.values() for identity in a["revisions"]))
     edition_ids = [r.id for r in context.editions.values()]
     metadata_path = directory / "native-metadata.json"
@@ -209,6 +250,8 @@ def prepare_native_model(value, *, context, input_session, output_session, recip
         # values is selectable as model content under the report contract below.
         "expected_event_type": source.object_type, "allowed_input_groups": ["values", "evidence"],
         "governed_objects": {
+            "lineage_max_objects": limits["lineage_max_objects"],
+            "lineage_max_depth": limits["lineage_max_depth"],
             "native_reader_config_path": translate(input_config), "metadata_store_path": translate(metadata_path),
             "use_context": use_dict(model_use), "destinations": [requirements["report_destination"]],
             "trusted_writers": sorted(context.evaluator.writers), "authority_writers": [context.resolver.authority],
@@ -234,7 +277,8 @@ def prepare_native_model(value, *, context, input_session, output_session, recip
         "audit_path": translate(directory / "model-audit.ndjson"), "raw_trace_dir": translate(directory / "model-traces"),
         "build_id": "primitive-model-disclosure", "llama_source_revision": "3f545beccee69d9975f466ec7e45fd9aacd8ba90",
         "model_sha256": digest(model), "binary_sha256": digest(binary),
-        "max_request_bytes": 1024 * 1024, "max_message_bytes": 16 * 1024,
+        "max_request_bytes": limits["max_request_bytes"],
+        "max_message_bytes": limits["max_message_bytes"],
         "max_active_sessions": 1, "max_chain_namespaces": 8, "echo_max_tokens": 8192, "final_max_tokens": 2048,
     }
     path = directory / "runtime.json"
@@ -244,5 +288,7 @@ def prepare_native_model(value, *, context, input_session, output_session, recip
         catalog=context.catalog, policy_dag=context.policy_dag, resolve_ancestor=resolve,
         decide=lambda ctx: ctx.use_context == recipient_use,
         expected_tool_name=requirements["required_tool"], expected_tool_sections=("values",),
-        required_tools=(requirements["required_tool"],))
+        required_tools=(requirements["required_tool"],),
+        lineage_max_objects=limits["lineage_max_objects"],
+        lineage_max_depth=limits["lineage_max_depth"])
     return path, reader, requirements

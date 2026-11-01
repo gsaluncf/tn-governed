@@ -34,11 +34,59 @@ def wsl_command():
     return ["wsl", *(["-d", distribution] if distribution else []), "--"]
 
 
+def _signal_owned_wsl(pid, signal):
+    try:
+        result = subprocess.run(
+            [*wsl_command(), "kill", signal, "--", pid],
+            check=False, timeout=10, capture_output=True,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+        return result.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _stop_owned_server(process, *, wsl, pid_path):
+    """Signal the launcher's recorded Linux PID before stopping its WSL wrapper."""
+    try:
+        pid = pid_path.read_text(encoding="ascii").strip() if wsl else ""
+    except (OSError, UnicodeError):
+        pid = ""
+    owned_linux_pid = pid.isascii() and pid.isdecimal() and 1 < int(pid) < 2**31
+    if wsl and owned_linux_pid:
+        term_sent = _signal_owned_wsl(pid, "-TERM")
+        if term_sent:
+            try:
+                process.wait(timeout=10)
+                return
+            except subprocess.TimeoutExpired:
+                pass
+        _signal_owned_wsl(pid, "-KILL")
+        try:
+            process.wait(timeout=5)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+    elif process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+    if process.poll() is None:
+        process.kill()
+        process.wait(timeout=5)
+
+
 @contextmanager
 def governed_server(
-    *, binary: Path, model: Path, config: Path, port: int, api_key: str, wsl: bool = False
+    *, binary: Path, model: Path, config: Path, port: int, api_key: str, wsl: bool = False,
+    gpu_layers: int | None = None,
 ):
     """Start one native process, wait for readiness, and stop that owned process."""
+    if gpu_layers is not None and (type(gpu_layers) is not int or gpu_layers < 0):
+        raise ValueError("GPU layers must be a nonnegative integer or None")
     if not 1 <= port <= 65535 or not api_key.strip():
         raise ValueError("a valid local port and API key are required")
     with socket.socket() as probe:
@@ -73,7 +121,7 @@ def governed_server(
         "0",
         "--no-cache-idle-slots",
         "--n-gpu-layers",
-        "99" if wsl else "0",
+        str(gpu_layers if gpu_layers is not None else (99 if wsl else 0)),
     ]
     environment = {
         key: value
@@ -81,7 +129,7 @@ def governed_server(
         if not key.startswith("LLAMA_")
         and key not in {"TN_LLAMA_CONFIG", "TN_LLAMA_EXPECTED_MODEL_SHA256"}
     }
-    config_root = directory / "server-config-root"
+    config_root = (directory / "server-config-root").resolve()
     config_root.mkdir(exist_ok=True)
     native_env = {
         "TN_LLAMA_CONFIG": translate(config),
@@ -105,7 +153,10 @@ def governed_server(
         ]
     else:
         environment.update(native_env)
-        environment.update({"APPDATA": str(config_root), "PROGRAMDATA": str(config_root)})
+        environment.update(
+            APPDATA=str(config_root), PROGRAMDATA=str(config_root),
+            XDG_CONFIG_HOME=str(config_root),
+        )
     with (
         (directory / "server.stdout.log").open("wb") as stdout,
         (directory / "server.stderr.log").open("wb") as stderr,
@@ -135,24 +186,7 @@ def governed_server(
                 time.sleep(0.25)
             yield base_url
         finally:
-            if process.poll() is None:
-                if wsl:
-                    pid = pid_path.read_text().strip() if pid_path.exists() else ""
-                    if pid.isdigit() and int(pid) > 1:
-                        subprocess.run(
-                            [*wsl_command(), "kill", "-TERM", "--", pid],
-                            check=False,
-                            timeout=10,
-                            capture_output=True,
-                            creationflags=subprocess.CREATE_NO_WINDOW,
-                        )
-                else:
-                    process.terminate()
-                try:
-                    process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=5)
+            _stop_owned_server(process, wsl=wsl, pid_path=pid_path)
 
 
 def run_native_reference(

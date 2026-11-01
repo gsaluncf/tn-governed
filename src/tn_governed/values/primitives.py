@@ -18,6 +18,7 @@ from .string import OperationDenied, TNString, ValueReference, _active
 
 VALUE_TYPE = "experiment.primitive"
 SCHEMA = "tn.primitive-bindings.v1"
+MAX_SOURCE_PUBLICATION_CELLS = 4096
 BINARY = {
     "add": operator.add, "subtract": operator.sub, "multiply": operator.mul,
     "true_divide": operator.truediv, "divmod": divmod,
@@ -32,6 +33,25 @@ OPERATIONS = frozenset({
     "conjugate", "real", "imag", "numerator", "denominator", "as_integer_ratio",
     "is_integer", "truth", "power_mod", "quantize", "sqrt", "normalize", "exp", "ln", "log10", *BINARY,
 })
+
+
+def _origin_key(value):
+    if isinstance(value, dict):
+        return (dict, frozenset((key, _origin_key(item)) for key, item in value.items()))
+    if isinstance(value, (list, tuple)):
+        return (type(value), tuple(_origin_key(item) for item in value))
+    return (None, value)
+
+
+def unique_origins(origins):
+    """Retain each first origin using structural equality and dictionary key independence."""
+    result, seen = [], set()
+    for origin in origins:
+        key = _origin_key(origin)
+        if key not in seen:
+            seen.add(key)
+            result.append(origin)
+    return result
 
 
 class Context(StringContext):
@@ -294,8 +314,9 @@ class Context(StringContext):
         and use this endpoint's same provisioned group readers and policy.
         """
         cells = tuple(cells)
-        if not cells or len(cells) > 64:
-            raise ValueError("source publication requires between 1 and 64 cells")
+        if not cells or len(cells) > MAX_SOURCE_PUBLICATION_CELLS:
+            raise ValueError(
+                f"source publication requires between 1 and {MAX_SOURCE_PUBLICATION_CELLS} cells")
         if request.operation != "select" or not any(policy.matches_contract(p) for p in request.policies):
             raise ValueError("source policy must be covered by the query request")
         first_content, first_source = cells[0]
@@ -360,11 +381,8 @@ class Context(StringContext):
         request, metadata, decision = self._prepare(operation, values, destination, parameters, call_id)
         try:
             claims = list(dict.fromkeys(c.id for c in request.claims))
-            origins = []
-            for _, binding, _ in metadata:
-                for origin in binding["origins"]:
-                    if origin not in origins:
-                        origins.append(origin)
+            origins = unique_origins(origin for _, binding, _ in metadata
+                                     for origin in binding["origins"])
             literals = []
             if operation in {"copy", "attest"}:
                 data, binding, _ = metadata[0]

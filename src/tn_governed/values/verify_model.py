@@ -11,6 +11,7 @@ from tn_llama_client.clients import NativeOutputReader
 from tn_llama_client.protocol import NativeModelRelease
 
 from .evidence import EvidenceError
+from .model import runtime_limits_from_config
 
 
 def require(condition, message):
@@ -87,6 +88,7 @@ def verify_model(root, run, records, by_id, rules, nodes, bindings, store, catal
     require(sha(config_bytes) == model["runtime_config_sha256"] == hd["runtime_config_sha256"],
             "native configuration differs from recorded handoff")
     config = json.loads(config_bytes)
+    limits = runtime_limits_from_config(config)
     section = config["report_contract"]["section_rules"]["values"]
     require(section["required_attribution"] == notice and section["propagate_source_governance"] is True
             and all(section["required_tool"] == m["required_tool"] for m in declarations),
@@ -179,7 +181,9 @@ def verify_model(root, run, records, by_id, rules, nodes, bindings, store, catal
             catalog=catalog, policy_dag=dag, resolve_ancestor=resolve,
             decide=lambda ctx: ctx.use_context == use,
             expected_tool_name=section["required_tool"], expected_tool_sections=("values",),
-            required_tools=(section["required_tool"],), expected_request_digest=request_digest)
+            required_tools=(section["required_tool"],), expected_request_digest=request_digest,
+            lineage_max_objects=limits["lineage_max_objects"],
+            lineage_max_depth=limits["lineage_max_depth"])
         opened = reader.open(release)
         # This is independent artifact inspection after recipient admission. The
         # application release decision already happened in the native service.

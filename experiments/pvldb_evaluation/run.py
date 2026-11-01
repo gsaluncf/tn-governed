@@ -38,6 +38,7 @@ from tn_governed.values.provision import provision
 from tn_governed.values.sql import GovernedSQL, source_identity
 from .frames import DataframeContext, DataframeGovernance, dataframe_calculate
 from .metrics import stage as profile_stage
+from .performance_env import implementation_library, model_uses_wsl, native_module_path
 
 
 CLAIM = "Suitable for identifying the synthetic company in this internal demonstration report."
@@ -121,7 +122,8 @@ class _Operations:
 def run_case(root, mode, rows=1, depth=1, branches=1, model=False, claim=True,
              unity_url="http://127.0.0.1:8080", binary=None, model_path=None,
              port=18325, numeric_type="int", decimal_precision=38, decimal_scale=4, storage="sqlite",
-             sdk_build_record=None):
+             sdk_build_record=None, runtime_limits=None, gpu_layers=None,
+             completion_handler=None, sql_batch_size=64):
     """Return a case summary and preserve the verifier's run manifest.
 
     A model attempt uses one fresh server and one native request. Failures remain
@@ -133,6 +135,11 @@ def run_case(root, mode, rows=1, depth=1, branches=1, model=False, claim=True,
         raise ValueError("rows and branches must be positive integers")
     if type(depth) is not int or depth < 0:
         raise ValueError("depth must be a nonnegative integer")
+    if completion_handler is not None and not callable(completion_handler):
+        raise ValueError("completion_handler must be callable")
+    from tn_governed.values.primitives import MAX_SOURCE_PUBLICATION_CELLS
+    if type(sql_batch_size) is not int or not 1 <= sql_batch_size <= MAX_SOURCE_PUBLICATION_CELLS:
+        raise ValueError("sql_batch_size exceeds the supported publication size")
     repository = Path(__file__).resolve().parents[2]
     root = Path(root).resolve()
     root.mkdir(parents=True, exist_ok=False)
@@ -146,6 +153,7 @@ def run_case(root, mode, rows=1, depth=1, branches=1, model=False, claim=True,
         "with_model": bool(model), "with_claim": bool(claim), "completed": False,
         "verified": False, "timings_seconds": timings, "error": None,
         "publication_storage": storage,
+        "sql_batch_size": sql_batch_size,
     }
     if numeric_type not in {"int", "float", "Decimal"}:
         raise ValueError("unsupported source numeric type")
@@ -166,13 +174,16 @@ def run_case(root, mode, rows=1, depth=1, branches=1, model=False, claim=True,
         build_record = Path(sdk_build_record or repository / "config/sdk-build.json")
         build_bytes = build_record.read_bytes()
         sdk = json.loads(build_bytes)
-        native_module = Path(tn.__file__).parent / "_native.pyd"
+        native_module = native_module_path()
         if (importlib.metadata.version("tn-proto") != sdk["version"]
                 or digest(native_module) != sdk["install"]["native_module_sha256"]):
             raise RuntimeError("installed TN runtime differs from the selected build record")
         write_once(root / "sdk-build.json", build_bytes)
         if model and (not binary.is_file() or not model_path.is_file()):
             raise FileNotFoundError("configured native model binary or GGUF is missing")
+        model_wsl = model_uses_wsl(binary)
+        translate = wsl_path if model_wsl else str
+        implementation = implementation_library(binary) if model else None
         if mode == "explicit":
             from .explicit import ExplicitOperations  # noqa: F401 - Validate the adapter before provisioning.
 
@@ -227,7 +238,8 @@ def run_case(root, mode, rows=1, depth=1, branches=1, model=False, claim=True,
                         rules, application=APPLICATION, purpose=PURPOSE, actor="analyst", resolver=resolution)
             context = contexts["worker"]
             db = GovernedSQL(database, gateway=contexts["gateway"], consumer=context,
-                             edition_publisher=publisher, directory=root / "editions", detect_types=sqlite3.PARSE_DECLTYPES)
+                             edition_publisher=publisher, directory=root / "editions",
+                             detect_types=sqlite3.PARSE_DECLTYPES, batch_size=sql_batch_size)
             outputs, internal, report, config_path = {}, None, None, None
             requirements = None
             try:
@@ -273,14 +285,15 @@ def run_case(root, mode, rows=1, depth=1, branches=1, model=False, claim=True,
                             input_session=sessions["model-reader"], output_session=sessions["model-writer"],
                             recipient_session=sessions["recipient"], input_config=paths["model-reader"],
                             output_config=output_paths["model-writer"], directory=native_dir,
-                            model=model_path, binary=binary, translate=wsl_path)
+                            model=model_path, binary=binary, translate=translate,
+                            runtime_limits=runtime_limits)
                     api_key = uuid4().hex
                     stage = "server_start"
                     with ExitStack() as model_stack:
                         with _timed(timings, stage):
                             base_url = model_stack.enter_context(governed_server(
                                 binary=binary, model=model_path, config=config_path,
-                                port=port, api_key=api_key, wsl=True))
+                                port=port, api_key=api_key, wsl=model_wsl, gpu_layers=gpu_layers))
                         endpoint = NativeModelEndpoint(context=context, value=brief, base_url=base_url,
                             api_key=api_key, output_reader=reader, directory=native_dir,
                             requirements=requirements, runtime_config=config_path)
@@ -289,6 +302,14 @@ def run_case(root, mode, rows=1, depth=1, branches=1, model=False, claim=True,
                             report = endpoint.generate(brief, prompt=PROMPT)
                         write_once(root / "report.html", report.report_html.encode())
                         write_once(root / "review.json", json.dumps(report.review.to_dict(), indent=2).encode())
+                if completion_handler is not None:
+                    stage = "completion"
+                    with _timed(timings, "completion_wall"):
+                        completion = completion_handler(context, report, brief, root)
+                    summary["completion"] = completion
+                    timings["tools"] = completion["processing_seconds"]
+                    if not completion.get("completed") or not completion.get("verified"):
+                        raise RuntimeError("completion handler did not produce verified output")
                 summary["completed"] = True
             except Exception as exc:
                 summary["error"] = _error(exc, stage)
@@ -352,7 +373,8 @@ def run_case(root, mode, rows=1, depth=1, branches=1, model=False, claim=True,
                         "runtime_config": "native-model/runtime.json", "runtime_config_sha256": digest(config_path),
                         "model_path": str(model_path), "model_sha256": digest(model_path),
                         "binary_path": str(binary), "binary_sha256": digest(binary),
-                        "implementation_sha256": digest(binary.parent / "libllama-server-impl.so"),
+                        "implementation_path": str(implementation),
+                        "implementation_sha256": digest(implementation),
                         "tool_object_ids": [obj.id for obj in report.release.tool_objects] if report else [],
                         "result_record_id": report.result_record_id if report else None,
                         "review": report.review.to_dict() if report and report.review else None,

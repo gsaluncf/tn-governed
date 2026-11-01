@@ -272,12 +272,19 @@ class NativeOutputReader:
         tool_expectations=(),
         required_tools=(),
         expected_request_digest=None,
+        lineage_max_objects=1024,
+        lineage_max_depth=64,
     ):
         import tn
         if not isinstance(expected_source, tn.GovernedObject) or not isinstance(use, tn.UseContext):
             raise TypeError("recipient requires its exact native source and UseContext")
         if release_use is not None and not isinstance(release_use, tn.UseContext):
             raise TypeError("release use must be a native UseContext")
+        if (type(lineage_max_objects) is not int or not 1 <= lineage_max_objects <= 65536
+                or type(lineage_max_depth) is not int or not 1 <= lineage_max_depth <= 256):
+            raise ValueError("lineage limits require 1..65536 objects and 1..256 depth")
+        self.lineage_verifier = tn.LineageVerifier(max_objects=lineage_max_objects,
+                                                  max_depth=lineage_max_depth)
         self.session = session
         self.expected_source = expected_source
         self.expected_writer = expected_writer
@@ -476,7 +483,7 @@ class NativeOutputReader:
                 raise PermissionError("native tool does not reference the exact model input")
             if not self._has_same_contracts(tool_view, source_view):
                 raise PermissionError("native tool did not preserve source contracts and bindings")
-            tn.LineageVerifier().verify(
+            self.lineage_verifier.verify(
                 tool_view, self.catalog, self.policy_dag, self.resolve_ancestor,
             )
             tool_views[tool.id] = tool_view
@@ -486,7 +493,7 @@ class NativeOutputReader:
                 return tool_views[identity]
             return self.resolve_ancestor(identity)
 
-        tn.LineageVerifier().verify(view, self.catalog, self.policy_dag, resolve)
+        self.lineage_verifier.verify(view, self.catalog, self.policy_dag, resolve)
         completed, call_ids, request_digests = set(), set(), set()
         for tool in tool_objects:
             admitted = self.session.receive(

@@ -1,11 +1,46 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 use crate::contract::ReportContract;
 
 pub const TEST_DEVICE_IDENTITY: &str = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+
+pub(crate) fn default_lineage_max_objects() -> usize {
+    1024
+}
+
+pub(crate) fn default_lineage_max_depth() -> usize {
+    64
+}
+
+pub(crate) fn deserialize_lineage_max_objects<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_bounded_limit(deserializer, 65536)
+}
+
+pub(crate) fn deserialize_lineage_max_depth<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_bounded_limit(deserializer, 256)
+}
+
+fn deserialize_bounded_limit<'de, D>(deserializer: D, maximum: usize) -> Result<usize, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = usize::deserialize(deserializer)?;
+    if !(1..=maximum).contains(&value) {
+        return Err(serde::de::Error::custom(format!(
+            "lineage limit must be in 1..={maximum}"
+        )));
+    }
+    Ok(value)
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RequestLimits {

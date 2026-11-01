@@ -492,6 +492,41 @@ The SQL-to-string time covers the query, dataframe calculation, scalar operation
 
 `measurements.json` contains every observation and the median, minimum, and maximum for each configuration. The experiment checks the calculated result and runs the production offline verifiers for each TN execution. It also records the exact size of the final TN publication.
 
+## Scale, recipients, and tool depth
+
+`config/performance.json` defines 1,000/10,000/100,000 input rows, 1/4/8 concurrent recipients on a 10,000-row publication, and application-tool depths 1/3/5 on 1,000 rows. Scale and depth use five measured repetitions after one warmup per configuration. Recipients use 30 measured rounds after one warmup. `config/performance-smoke.json` exercises the same driver with eight rows, one repetition, two recipient rounds, and depths 1/3.
+
+Build CPU servers from the pinned llama.cpp revision. The ordinary build disables the TN integration while retaining the inference engine:
+
+```powershell
+wsl -d Ubuntu -- bash /mnt/c/path/to/tn-governed/scripts/build_llama.sh cpu
+wsl -d Ubuntu -- bash /mnt/c/path/to/tn-governed/scripts/build_plain_llama.sh
+```
+
+Copy `config/performance-environment.example.json` to `.runtime/performance-local.json` and set the local Python, OPA, model, server, Unity URL, and WSL distribution. Start Unity using the setup instructions, then run:
+
+```powershell
+.\scripts\run-performance.ps1 -PreflightOnly
+.\scripts\run-performance.ps1 -Profile smoke
+.\scripts\run-performance.ps1 -Profile full
+```
+
+The scale workload performs the SQL query, source publication and admission, claim attachment, governed Polars filtering/sorting/aggregation, scalar composition, explicit disclosure, model preparation, native generation, recipient acceptance, and review registration. The plain path executes the same ordinary SQL/Polars/scalar calculation and generates an HTML report from the same business input. Both use the same GGUF, CPU execution, disabled prompt caching, temperature zero, and a 2,048-token report ceiling. TN also executes its governance protocol turns and required actions. Raw model transcripts and ordinary token counts are retained.
+
+Reported processing time sums the query through disclosure and the generation/release stages. Database creation, enrollment, catalog assignment, native endpoint configuration (including model-file hashing and ancestry serialization), model startup, offline verification, and artifact export are timed separately and excluded from processing latency. Each scale case creates fresh sessions, stores, and a model process; the operating-system file cache is retained. Warmup observations remain in the raw files and are excluded from summaries. Mode order alternates across repetitions.
+
+Recipients run in separate spawned processes with distinct signing identities, reader kits, stores, local catalogs, and evaluators. Each request hydrates the retained scalar, verifies its ancestry, authorizes disclosure, decrypts, records the decision, and checks the value. Enrollment, store transfer, and catalog admission precede the timed interval. Batch wall time includes dispatch, barrier synchronization, and result collection. Throughput is successful requests divided by total measured batch wall time; median and nearest-rank p95 use individual successful request latencies. Failed attempts remain visible.
+
+Each tool-depth trial executes the full data/model path afresh. Depth counts the native compliance tool plus dependent review-registration tools. The latter consume the accepted report and then each predecessor receipt; a signed ledger action gates release. Governance-read, commitment-echo, section-selection, and report-emission turns are protocol steps rather than application-tool depth. The tool endpoint applies an explicit local grant for the named application, purpose, operations, and destinations while retaining the source contracts and claims.
+
+`experiment.json` records parameters, hardware, versions, source and binary hashes, and timing boundaries. `samples.jsonl`, `scale.json`, recipient `rounds.jsonl`, and tool trial files retain observations and signed evidence. Byte accounting distinguishes the scalar publication from unique retained native bytes, including snapshots, metadata, and signed records; decimal KB means 1,000 bytes. Signed recorder counts and native model tool publications are separate quantities. Run directories contain local synthetic enrollment material and remain excluded from Git.
+
+Runtime resource bounds are explicit profile parameters. Python preparation, native admission, recipient acceptance, and offline verification use the configured lineage limits. The submitted request's actual serialized size is checked against its configured byte limit before model transport.
+
+Both profiles use 256 compatible cells per SQL publication, retaining a distinct field reference and signed result for each cell. The 100,000-row workload therefore uses 782 source publications and 200,000 direct cell references. Profile validation checks the required dataset-binding count against the native bound before processing begins.
+
+The runtime retains and verifies full native governance and ancestry. In the model presentation, provenance arrays with more than 16 entries become references bound to the source publication, field, entry count, and authenticated field commitment. Policy text, attached contracts, claims, conditions, and extension fields remain present. Echo validation checks the exact presentation and original commitments; released publications retain the complete source bindings.
+
 ## Check policy accumulation
 
 After Python setup, configure OPA as described in [Setup](#setup). Run the six cases in a directory that does not already exist:

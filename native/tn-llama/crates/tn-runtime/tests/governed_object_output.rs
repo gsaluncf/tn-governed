@@ -5,6 +5,36 @@ use serde_json::json;
 use tn_runtime::ActionOutcome;
 
 #[test]
+fn output_verification_retains_the_configured_lineage_bound() {
+    for limit in [4, 4096] {
+        let mut fixture = Fixture::new();
+        fixture
+            .config
+            .governed_objects
+            .as_mut()
+            .unwrap()
+            .lineage_max_objects = limit;
+        let request = fixture.request("calculation");
+        let (_keys, runtime) = fixture.runtime();
+        let mut session = runtime.start_session(&request).unwrap();
+        get_governance(&mut session).unwrap();
+        echo(&mut session).unwrap();
+        select(&mut session, &["finance"]).unwrap();
+        let turn = session.next_model_turn().unwrap();
+        let output = accept(
+            &mut session,
+            turn,
+            "emit_governed_record",
+            json!({"report_html":"<p>25%.</p>"}),
+        );
+        assert_eq!(
+            matches!(output, Ok(ActionOutcome::GovernedRelease(_))),
+            limit == 4096
+        );
+    }
+}
+
+#[test]
 fn independent_output_reader_failure_releases_no_wire() {
     let fixture = Fixture::new();
     let request = fixture.request("calculation");

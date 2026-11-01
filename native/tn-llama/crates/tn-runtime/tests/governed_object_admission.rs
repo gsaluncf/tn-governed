@@ -5,6 +5,24 @@ use serde_json::{json, Value};
 use tn_runtime::{GovernedRuntime, State};
 
 #[test]
+fn admission_enforces_configured_lineage_bound() {
+    for limit in [1, 4096] {
+        let mut fixture = Fixture::new();
+        fixture
+            .config
+            .governed_objects
+            .as_mut()
+            .unwrap()
+            .lineage_max_objects = limit;
+        let request = fixture.request("calculation");
+        let (_keys, runtime) = fixture.runtime();
+        let mut session = runtime.start_session(&request).unwrap();
+        let result = get_governance(&mut session);
+        assert_eq!(result.is_ok(), limit == 4096);
+    }
+}
+
+#[test]
 fn missing_configured_section_terminalizes_and_releases_capacity() {
     let mut fixture = Fixture::new();
     let request = fixture.request("calculation");

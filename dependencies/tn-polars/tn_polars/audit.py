@@ -155,12 +155,7 @@ class AuditTrail:
 def _support_record(support, materialized):
     rows = None
     if support.known:
-        rows = []
-        for row in materialized.select(list(support.ids)).to_dicts():
-            members = {}
-            for name, source in support.ids.items():
-                members.setdefault(source, set()).update(row[name] or [])
-            rows.append({source: sorted(values) for source, values in sorted(members.items())})
+        rows = list(support.row_members(materialized))
         if not support.ids:
             rows = [{} for _ in range(materialized.height)]
     return {

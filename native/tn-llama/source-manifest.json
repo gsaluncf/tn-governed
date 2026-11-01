@@ -49,7 +49,7 @@
     },
     {
       "path": "crates/tn-runtime/src/config.rs",
-      "sha256": "d447df2f09e7d8b17a3d53315dc79182b1fe094e362fb35457229c337947dfcf"
+      "sha256": "94dbf51232f22a9ae4a9cb7bb4e8124dc7d2905fd624e8272ea7824075862882"
     },
     {
       "path": "crates/tn-runtime/src/contract.rs",
@@ -81,7 +81,7 @@
     },
     {
       "path": "crates/tn-runtime/src/governed_input.rs",
-      "sha256": "fd9ef140d3e00dd0cc1d6bd3cc9f422bd9a5f5bd2a8a327a2db12a17656a7bed"
+      "sha256": "94d40ed6cc3e6e6c9f153dac613a849c8c37a96e61e6f732165955f4bb719124"
     },
     {
       "path": "crates/tn-runtime/src/lib.rs",
@@ -93,7 +93,7 @@
     },
     {
       "path": "crates/tn-runtime/src/model_protocol.rs",
-      "sha256": "e8dc18c0812152d94f6386de23ff3d2d888acdb8ee1ceaa31442bbe74cad25ab"
+      "sha256": "4584c3438f1006fad6f1c18d5780e7d99524c412acf20caa82ae22c1d2b89bec"
     },
     {
       "path": "crates/tn-runtime/src/output_tn.rs",
@@ -109,7 +109,7 @@
     },
     {
       "path": "crates/tn-runtime/src/session.rs",
-      "sha256": "4f9ad984b04beb4d8a6f132907d2c57c50b2f6f1828dbdfd0678b68864ff5174"
+      "sha256": "0b5e7f3d38a6737e39c6c896f23d68cc000619045cfe320319dbdf515ea4f157"
     },
     {
       "path": "crates/tn-runtime/src/tools.rs",
@@ -161,19 +161,23 @@
     },
     {
       "path": "crates/tn-runtime/tests/governed_object_admission.rs",
-      "sha256": "3c065c60a770f759810ef0c7551f4ad6a344647e31fb61fd5ebe50f663bee3f0"
+      "sha256": "ecba02d0f27cd6375a71a5c29a18c95334bba982b4ffef87ca8681ac251ea18d"
     },
     {
       "path": "crates/tn-runtime/tests/governed_object_output.rs",
-      "sha256": "c9db757893f112c1beeb7e08e9b8f8c9bf2dd0a730461b11526efadf01429b0e"
+      "sha256": "2b6a8daa157e4ebb817edcd8a613712e5d493c683fb5a2071272788119d0b35d"
     },
     {
       "path": "crates/tn-runtime/tests/governed_object_request.rs",
-      "sha256": "51b618542abc2688c3c5839afae1f490ceff0e4793b8352edac6ce2c3d8e847a"
+      "sha256": "4158fd2c5d2e07fab76fb37be936440b652d39aaa29e96ad97f0e5124a0620f1"
     },
     {
       "path": "crates/tn-runtime/tests/governed_object_tools.rs",
       "sha256": "84331f5e0216f2b7f24c0b477b717f4b2fb2a73e433f17bc46439f69529ede81"
+    },
+    {
+      "path": "crates/tn-runtime/tests/governed_presentation.rs",
+      "sha256": "dfb312ad1179742e11e21dc3cb17a2c433c49e5a0c4ae8e01bb5d951c6192425"
     },
     {
       "path": "crates/tn-runtime/tests/governed_registers.rs",
