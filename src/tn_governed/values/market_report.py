@@ -17,7 +17,8 @@ from uuid import uuid4
 
 import tn
 from tn_governed.native_run import governed_server, wsl_path
-from tn_governed.publications import PublicationStore, write_once
+from tn_governed.native_objects import NativeObjects
+from tn_governed.publications import write_once
 
 from .catalog import AssignedRules, UnityGovernance
 from .demo import handle
@@ -84,7 +85,7 @@ def main():
                       read_only_roles=("model-reader", "observer"))
     output_paths = provision(root / "output-sessions", roles=["model-writer", "recipient"],
                              groups=["tn.agents", "default"], read_only_roles=("recipient",))
-    store = PublicationStore(root / "publications")
+    store = NativeObjects()
     with ExitStack() as stack:
         sessions = {role: stack.enter_context(tn.Session.from_config(str(path)))
                     for role, path in {**paths, **output_paths}.items() if role != "observer"}
@@ -148,6 +149,7 @@ def main():
             write_once(root / "review.json", json.dumps(report.review.to_dict(), indent=2).encode())
             print(f"Report generated. needs_review={report.needs_review}; status={report.review.status}; assignee={report.review.assignee}", flush=True)
         finally:
+            store.export(root / "publications")
             tapes = {role: {**ctx.recorder.export(root / "tapes" / role), "path": "tapes/" + role}
                      for role, ctx in contexts.items()}
             manifest = {

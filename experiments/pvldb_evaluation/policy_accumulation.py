@@ -15,7 +15,7 @@ from unittest.mock import patch
 import tn
 from tn_polars.support import Support
 
-from tn_governed.publications import PublicationStore
+from tn_governed.native_objects import NativeObjects
 from tn_governed.values.catalog import AssignedRules, markdown
 from tn_governed.values.evidence import EvidenceRecorder, verify_tape
 from tn_governed.values.provision import provision
@@ -82,7 +82,7 @@ def run_case(directory, *, rows, survivors, sources):
         authority = sessions["catalog"]
         administration = authority.policy("experiment.administration")
         audit_policy = authority.policy("experiment.evidence")
-        store = PublicationStore(root / "publications")
+        store = NativeObjects()
         resolvers = {}
         for role, session in sessions.items():
             resolver = DataframeGovernance(
@@ -136,11 +136,11 @@ def run_case(directory, *, rows, survivors, sources):
 
         def observe_support(support, materialized, policy_ids=None):
             facts = support_facts(support, materialized, policy_ids)
-            members = {
-                identity: sorted({member for group in materialized[column].to_list()
-                                  for member in (group or [])})
-                for column, identity in support.ids.items()
-            }
+            members = {}
+            for row in support.row_members(materialized):
+                for identity, tokens in row.items():
+                    members.setdefault(identity, set()).update(tokens)
+            members = {identity: sorted(tokens) for identity, tokens in members.items()}
             support_observations.append({
                 "policy_ids": sorted(policy_ids or ()), "members": members, "facts": facts,
             })
@@ -226,6 +226,7 @@ def run_case(directory, *, rows, survivors, sources):
         assert repeated_claims == claims
         assert repeated_binding["parents"] == [result.reference.to_dict()] * 2
         assert repeated.reveal(context, destination="review-console") == survivors * 502
+        store.export(root / "publications")
         for role, ctx in contexts.items():
             verify_tape(
                 ctx.recorder.records(), session=authority, policy=audit_policy,

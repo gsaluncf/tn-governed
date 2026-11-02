@@ -14,6 +14,7 @@ from tn_llama_client.clients import NativeOutputReader
 from tn_llama_client.protocol import build_model_request
 
 from tn_governed.llama import submit_governed_report
+from tn_governed.native_objects import CarriedPublication, NativeObjects
 from tn_governed.publications import write_once
 
 from .string import OperationDenied, _active
@@ -113,6 +114,7 @@ class NativeReport:
     handoff_record_id: str
     result_record_id: str
     review: ReviewRequest | None = None
+    publication: CarriedPublication | None = None
 
     @property
     def needs_review(self):
@@ -197,7 +199,13 @@ class NativeModelEndpoint:
                 "report_html_sha256": hashlib.sha256(html.encode()).hexdigest(),
                 "review_request_id": review.record_id if review else None,
             })
-            return NativeReport(release.output_object, html, release, decision, handoff, result, review)
+            carried = None
+            if isinstance(context.recorder.store, NativeObjects):
+                carried = context.recorder.store.carry(release.output_object.id,
+                    parents=() if value.publication is None else (value.publication,),
+                    extra_ids=(decision, handoff, result, *(obj.id for obj in release.tool_objects),
+                               *((review.record_id,) if review is not None else ())))
+            return NativeReport(release.output_object, html, release, decision, handoff, result, review, carried)
         except Exception as exc:
             context._append("Failure", request, call_id, {"decision_id": decision,
                 "error_type": type(exc).__name__, "native_code": getattr(exc, "code", None)})
@@ -209,7 +217,9 @@ def prepare_native_model(value, *, context, input_session, output_session, recip
                          runtime_limits=None):
     """Compile carried requirements into the native endpoint's configuration."""
     limits = resolve_runtime_limits(runtime_limits)
-    source = context.store_object(value.reference.object_id)
+    context._adopt((value,))
+    source = (value.publication.object if value.publication is not None
+              else context.store_object(value.reference.object_id))
     _require_standalone_value(source, value.reference)
     metadata, _, claims = context._metadata(value)
     directory = Path(directory)

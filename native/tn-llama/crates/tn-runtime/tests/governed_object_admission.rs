@@ -119,7 +119,6 @@ fn all_contracts_are_accepted_before_selection_or_business_exposure() {
     let request = fixture.request("calculation");
     let (_keys, runtime) = fixture.runtime();
     let mut session = runtime.start_session(&request).unwrap();
-    select(&mut session, &["finance"]).unwrap();
     let turn = session.next_model_turn().unwrap();
     let body: Value = serde_json::from_slice(&turn.request_json).unwrap();
     let context: Value =

@@ -137,22 +137,14 @@ fn standalone_ffi_release(with_tool: bool) {
             tn_session_create(runtime, view(&request), &mut session, &mut error),
             TN_STATUS_OK
         );
-        for phase_index in 0..if with_tool { 3 } else { 2 } {
+        for phase_index in 0..1 {
             let (turn, phase, body) = next_turn(session);
-            assert_eq!(phase, if phase_index == 0 { 3 } else { 4 });
+            assert_eq!(phase, 4);
             let body_value: Value = serde_json::from_slice(&body).unwrap();
-            let (name, args) = match phase {
-                3 => ("select_sections", json!({"sections":["finance"]})),
-                4 if with_tool && phase_index == 1 => (
-                    "log_compliance_creation",
-                    json!({}),
-                ),
-                4 => (
-                    "emit_governed_record",
-                    json!({"report_html":"<p>Maximum drawdown is 25%.</p>"}),
-                ),
-                _ => unreachable!(),
-            };
+            let (name, args) = (
+                "emit_governed_record",
+                json!({"report_html":"<p>Maximum drawdown is 25%.</p>"}),
+            );
             let manifest =
                 literal_runnable_manifest(body_value["max_tokens"].as_u64().unwrap() as u32);
             assert_eq!(
@@ -227,7 +219,7 @@ fn standalone_ffi_release(with_tool: bool) {
                             .unwrap(),
                     )
                     .unwrap();
-                    assert_eq!(receipt["output_object_id"], tool.id());
+                    assert_eq!(receipt["result"]["output_object_id"], tool.id());
                 } else {
                     assert!(released.get("tool_objects").is_none());
                 }

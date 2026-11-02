@@ -21,6 +21,11 @@ _ACTION_EVENTS = {
     "standalone_use_completed",
     "source_chain_committed",
 }
+_RUNTIME_ACTION_EVENTS = {
+    "sections_selected_runtime",
+    "governed_tool_executed_runtime",
+    "tool_result_accepted_runtime",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,12 +129,13 @@ def _control(request, phase):
     return content, context
 
 
-def _has_selection_context(trace):
+def _has_decision_context(trace):
     for row in trace:
-        if row.get("phase") != 3 or not row.get("request_json_b64"):
+        phase = row.get("phase")
+        if phase not in _DECISION_PHASES or not row.get("request_json_b64"):
             continue
         try:
-            _control(_json(_bytes(row, "request_json_b64")), 3)
+            _control(_json(_bytes(row, "request_json_b64")), phase)
         except (ValueError, TypeError, KeyError, AttributeError):
             continue
         return True
@@ -238,7 +244,183 @@ def _check_artifacts(start, prepared, facts, source_id):
     _source(facts, source_id)
 
 
-def _check_context(audit, trace, *, run_id, request_digest, source_id):
+def _check_completion(audit, trace, binding, *, run_id, source_id, expected_release):
+    emitted = [row for row in audit if row.get("kind") == "output_emitted_and_read_back"]
+    completed = [
+        row for row in audit
+        if row.get("kind") in {"standalone_use_completed", "source_chain_committed"}
+    ]
+    _require(
+        len(emitted) == len(completed) == 1,
+        "report completion requires one emission and one terminal audit event",
+    )
+    facts = _facts(binding)
+    identity = _execution_key(binding, facts)
+    native = facts.get("source_object_id") is not None
+    _require(
+        facts.get("phase") == 4
+        and all(_execution_key(row, _facts(row)) == identity for row in (*emitted, *completed))
+        and completed[0]["kind"] == (
+            "standalone_use_completed" if native else "source_chain_committed"
+        )
+        and binding["sequence"] < emitted[0]["sequence"] < completed[0]["sequence"],
+        "report completion is not bound to the last governed decision",
+    )
+    _require(
+        not any(row.get("kind") == "terminal_error" for row in audit),
+        "completed report evidence contains a terminal error",
+    )
+    releases = [row for row in trace if row.get("kind") == "release"]
+    _require(len(releases) == 1, "report completion lacks one retained release")
+    release = releases[0]
+    _require(
+        release is trace[-1]
+        and release.get("run_id") == run_id
+        and release.get("phase") == 4
+        and release.get("task_id") == binding.get("llama_task_id")
+        and release.get("slot_id") == binding.get("llama_slot_id"),
+        "retained release is not the terminal result of the report inference",
+    )
+    payload = _json(_bytes(release, "parsed_content_b64"))
+    source_field = "source_object_id" if native else "source_row_hash"
+    output_field = "output_object_id" if native else "output_row_hash"
+    _require(
+        isinstance(payload, dict)
+        and payload.get("protocol") == ("tn.llama.release.v2" if native else "tn.llama.release.v1")
+        and payload.get("run_id") == run_id
+        and payload.get(source_field) == source_id
+        and isinstance(payload.get(output_field), str)
+        and bool(payload[output_field]),
+        "retained release does not identify the admitted source and output",
+    )
+    client_trace = payload.get("trace")
+    _require(
+        isinstance(client_trace, list) and all(isinstance(item, dict) for item in client_trace),
+        "retained release lacks its execution trace",
+    )
+    _check_released_actions(audit, client_trace, source_id=source_id, native=native)
+    readbacks = [item for item in client_trace if item.get("event") == "output_readback"]
+    deliveries = [item for item in client_trace if item.get("event") == "release"]
+    _require(
+        len(readbacks) == len(deliveries) == 1
+        and client_trace.index(readbacks[0]) < client_trace.index(deliveries[0])
+        and deliveries[0] is client_trace[-1]
+        and deliveries[0].get("state") == "complete"
+        and all(
+            item.get("task_id") == binding.get("llama_task_id")
+            and item.get("slot_id") == binding.get("llama_slot_id")
+            and item.get("row_hash") == payload[output_field]
+            and item.get("event_id") == (
+                payload[output_field] if native else payload.get("output_event_id")
+            )
+            for item in (*readbacks, *deliveries)
+        ),
+        "release trace does not bind the output publication to the report inference",
+    )
+    if expected_release is not None:
+        _require(
+            isinstance(expected_release, dict)
+            and _canonical_bytes(payload) == _canonical_bytes(expected_release),
+            "retained release differs from the received report publication",
+        )
+
+
+def _check_released_actions(audit, client_trace, *, source_id, native):
+    _ordered([{"sequence": item.get("ordinal")} for item in client_trace], "release trace")
+    action_kinds = {
+        "sections_selected": "sections_selected",
+        "sections_selected_runtime": "sections_selected_runtime",
+        "tool_executed": "governed_tool_executed",
+        "tool_executed_runtime": "governed_tool_executed_runtime",
+    }
+    actions = [item for item in client_trace if item.get("event") in action_kinds]
+    recorded = [row for row in audit if row.get("kind") in action_kinds.values()]
+    _require(
+        len(actions) == len(recorded),
+        "release action history differs from the retained audit history",
+    )
+    for item, row in zip(actions, recorded, strict=True):
+        _require(
+            action_kinds[item["event"]] == row["kind"]
+            and item.get("task_id") == row.get("llama_task_id")
+            and item.get("slot_id") == row.get("llama_slot_id")
+            and item.get("state") == "governed_action",
+            "release action differs from its authorized audit execution",
+        )
+        if item["event"].startswith("sections_selected"):
+            _require(
+                item.get("row_hash") == source_id,
+                "release selection belongs to another admitted source",
+            )
+    tools = [item for item in actions if item["event"].startswith("tool_executed")]
+    receipts = [item for item in client_trace if item.get("event") == "receipt_inserted"]
+    _require(len(tools) == len(receipts), "release tool history lacks exact inserted receipts")
+    for index, (tool, receipt) in enumerate(zip(tools, receipts, strict=True)):
+        next_tool = tools[index + 1]["ordinal"] if index + 1 < len(tools) else float("inf")
+        _require(
+            tool["ordinal"] < receipt["ordinal"] < next_tool
+            and all(isinstance(tool.get(key), str) and tool[key]
+                    for key in ("tool_name", "event_id", "row_hash"))
+            and all(receipt.get(key) == tool.get(key) for key in (
+                "task_id", "slot_id", "tool_name", "event_id", "row_hash", "selected_sections",
+            )),
+            "release receipt is not bound to its tool execution",
+        )
+    if native:
+        executed = [row for row in audit if row.get("kind") == "governed_tool_executed"]
+        accepted = [row for row in audit if row.get("kind") == "tool_result_accepted"]
+        _require(len(executed) == len(accepted), "native tool history lacks accepted results")
+        for execution, acceptance in zip(executed, accepted, strict=True):
+            facts, accepted_facts = _facts(execution), _facts(acceptance)
+            _require(
+                execution["sequence"] < acceptance["sequence"]
+                and _execution_key(execution, facts) == _execution_key(acceptance, accepted_facts)
+                and facts.get("content_digest") == accepted_facts.get("content_digest"),
+                "native tool result differs from its executed action",
+            )
+
+
+def _check_runtime_actions(audit, admission, bound, *, run_id, request_digest, source_id):
+    runtime = [row for row in audit if row.get("kind") in _RUNTIME_ACTION_EVENTS]
+    selection = [row for row in runtime if row["kind"] == "sections_selected_runtime"]
+    _require(len(selection) <= 1, "runtime section selection is duplicated")
+    if selection:
+        _require(
+            selection[0]["sequence"] < bound[0]["sequence"],
+            "runtime selection must precede model decisions",
+        )
+    emitted = [row for row in audit if row.get("kind") == "output_emitted_and_read_back"]
+    for row in runtime:
+        _identity(row, run_id, request_digest, source_id)
+        facts = _facts(row)
+        _require(
+            row.get("llama_task_id") is None and row.get("llama_slot_id") is None
+            and all(facts.get(key) is None for key in (
+                "phase", "turn_ordinal", "execution_identity", "model_request_digest",
+                "rendered_prompt_digest", "runnable_task_digest", "context_digest",
+            )),
+            "runtime action is incorrectly assigned to model inference",
+        )
+        _require(
+            admission["sequence"] < row["sequence"]
+            and all(row["sequence"] < item["sequence"] for item in emitted),
+            "runtime action is outside the admitted computation",
+        )
+    tools = [row for row in runtime if row["kind"] != "sections_selected_runtime"]
+    _require(len(tools) % 2 == 0, "runtime tool execution lacks its accepted result")
+    for executed, accepted in zip(tools[::2], tools[1::2], strict=True):
+        digest = _facts(executed).get("content_digest")
+        _require(
+            executed["kind"] == "governed_tool_executed_runtime"
+            and accepted["kind"] == "tool_result_accepted_runtime"
+            and isinstance(digest, str) and bool(digest)
+            and _facts(accepted).get("content_digest") == digest,
+            "runtime tool result is not bound to its execution",
+        )
+    return bool(selection)
+
+
+def _check_context(audit, trace, *, run_id, request_digest, source_id, expected_release):
     _require(
         all(isinstance(value, str) and value for value in (run_id, request_digest, source_id)),
         "expected source, request, and run identities are required",
@@ -273,6 +455,9 @@ def _check_context(audit, trace, *, run_id, request_digest, source_id):
         len(bound) == len(authorized) and bool(bound),
         "each decision needs one context binding and execution authorization",
     )
+    runtime_selected = _check_runtime_actions(
+        audit, admission, bound, run_id=run_id, request_digest=request_digest, source_id=source_id,
+    )
     executions = [
         row for row in trace if row.get("kind") in {"turn_prepared", "turn_started", "model_result"}
     ]
@@ -289,7 +474,10 @@ def _check_context(audit, trace, *, run_id, request_digest, source_id):
             _identity(row, run_id, request_digest, source_id)
         facts, begin_facts = _facts(binding), _facts(begin)
         phase = facts.get("phase")
-        _require(phase == (3 if index == 0 else 4), "selection must precede every governed action")
+        _require(
+            phase == (3 if index == 0 and not runtime_selected else 4),
+            "selection must precede every governed action",
+        )
         identity = _execution_key(binding, facts)
         _require(
             identity == _execution_key(begin, begin_facts) and identity not in seen,
@@ -368,23 +556,30 @@ def _check_context(audit, trace, *, run_id, request_digest, source_id):
                 facts.get(field) == bound_facts.get(field),
                 "action execution differs from its governance context binding",
             )
+    _check_completion(
+        audit, trace, bound[-1], run_id=run_id, source_id=source_id,
+        expected_release=expected_release,
+    )
     return tuple(task_ids), tuple(phases)
 
 
-def inspect_governance_context(audit, trace, *, run_id, request_digest, source_id):
-    """Inspect local process evidence; retain an explicit reader for echo-based runs."""
+def inspect_governance_context(
+    audit, trace, *, run_id, request_digest, source_id, expected_release=None,
+):
+    """Inspect complete local execution evidence, optionally bound to a received release."""
     protocol = "unrecognized"
     try:
         admissions = [row for row in audit if row.get("kind") == "governance_opened_and_verified"]
         uses_context = (
             any(row.get("kind") == "governance_context_bound" for row in audit)
             or any(_facts(row).get("governance_context_protocol") is not None for row in admissions)
-            or _has_selection_context(trace)
+            or _has_decision_context(trace)
         )
         if uses_context:
             protocol = CONTEXT_PROTOCOL
             task_ids, phases = _check_context(
-                audit, trace, run_id=run_id, request_digest=request_digest, source_id=source_id
+                audit, trace, run_id=run_id, request_digest=request_digest, source_id=source_id,
+                expected_release=expected_release,
             )
             return ContextEvidence(protocol, True, task_ids, phases)
         echoes = [row for row in audit if row.get("kind") == "commitments_matched"]

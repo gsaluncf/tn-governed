@@ -16,6 +16,7 @@ if [[ "$cuda" == ON ]]; then
     cuda_options+=("-DCMAKE_CUDA_ARCHITECTURES=${TN_CUDA_ARCHITECTURES:-native}")
 fi
 source_root="$root/native/tn-llama"
+python3 "$root/scripts/runtime_sources.py"
 work="$root/.runtime/llama-build"
 upstream="$work/upstream"
 build="${TN_LLAMA_BUILD_DIR:-$work/$backend}"

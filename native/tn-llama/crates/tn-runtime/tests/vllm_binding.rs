@@ -304,7 +304,7 @@ fn one_vllm_runtime_owns_independent_concurrent_sessions() {
     turn.permit
         .begin_vllm(identity(), &turn.request_json, b"rendered", &manifest())
         .unwrap();
-    assert_eq!(second.state(), State::SectionSelection);
+    assert_eq!(second.state(), State::GovernedAction);
     assert!(runtime.start_session(&request).is_ok());
     second.abort().unwrap();
 }

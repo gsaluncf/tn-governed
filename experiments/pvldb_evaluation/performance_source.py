@@ -1,8 +1,8 @@
 """Locally provisioned readers for retained SQL-to-report publications.
 
 Each reader has a distinct signing key, BTN reader kit, native session, catalog,
-evaluator and writable store. Source publisher states are read without mutation.
-Enrollment, store transfer and signed catalog admission happen outside request
+evaluator and native object collection. Source publisher states are read without mutation.
+Enrollment, publication transfer and signed catalog admission happen outside request
 timing. Recipient requests still verify the carried value and its lineage and
 make their own authorization decisions.
 """
@@ -12,8 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-import sqlite3
-from contextlib import ExitStack, closing, contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 import tn
@@ -22,6 +21,7 @@ from tn._native.btn import PublisherState
 from tn.signing import DeviceKey
 from tn_polars.registry import EditionRegistryEntry, _index_bundle, _load_edition
 
+from tn_governed.native_objects import NativeObjects
 from tn_governed.publications import open_publication_store
 from tn_governed.values.catalog import AssignedRules, ResolutionPacket, UnityGovernance
 from tn_governed.values.evidence import EvidenceRecorder
@@ -44,17 +44,9 @@ def _source_manifest(source):
     return manifest
 
 
-def _copy_store(source, destination):
-    database = source / "publications.sqlite3"
-    if database.exists():
-        destination.mkdir(parents=True)
-        with (
-            closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)) as origin,
-            closing(sqlite3.connect(destination / database.name)) as target,
-        ):
-            origin.backup(target)
-    else:
-        shutil.copytree(source, destination)
+def _transfer_publications(source, destination):
+    with open_publication_store(source, read_only=True) as archive:
+        NativeObjects.from_archive(archive).export(destination)
 
 
 def _prepare(source, destinations):
@@ -88,7 +80,7 @@ def _prepare(source, destinations):
             yaml.safe_dump(local_configuration), encoding="utf-8"
         )
         shutil.copytree(catalog / ".tn", session_root / ".tn")
-        _copy_store(source / "publications", destination / "publications")
+        _transfer_publications(source / "publications", destination / "publications")
         if (source / "editions").is_dir():
             shutil.copytree(source / "editions", destination / "editions")
         (destination / "run.json").write_bytes(manifest_bytes)
@@ -103,7 +95,7 @@ def _prepare(source, destinations):
 
 
 def prepare_recipient(source_directory, worker_directory):
-    """Create one reader with its own enrollment and retained publication store."""
+    """Create one reader with its own enrollment and received publication archive."""
     return _prepare(Path(source_directory).resolve(), [Path(worker_directory).resolve()])[0]
 
 
@@ -151,7 +143,8 @@ def open_recipient(worker_directory):
         session = stack.enter_context(tn.Session.from_config(str(root / "session" / "tn.yaml")))
         if session.did != checkpoint["identity"]:
             raise ValueError("recipient session identity differs from its enrollment checkpoint")
-        store = stack.enter_context(open_publication_store(root / "publications"))
+        with open_publication_store(root / "publications", read_only=True) as archive:
+            store = NativeObjects.from_archive(archive)
         authority = manifest["authority"]
         admin = tn.Governance.from_markdown(
             authority, POLICY, ".tn/config/agents.md", "experiment.administration"

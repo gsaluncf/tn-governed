@@ -97,7 +97,7 @@
     },
     {
       "path": "crates/tn-runtime/src/model_protocol.rs",
-      "sha256": "84242fcbf2a45c6656db25ecca99b6ed15fe4e900e997c974f4e5008f77d936b"
+      "sha256": "d73e0fa82e1c3aea7a3f5c713b04eb99a66284d5d7abd6d36fc47a6b74e01317"
     },
     {
       "path": "crates/tn-runtime/src/output_tn.rs",
@@ -113,7 +113,7 @@
     },
     {
       "path": "crates/tn-runtime/src/session.rs",
-      "sha256": "94eea2803d2be0afd02849e7ebe454bc936974c7fa1644ca8aadd813a401a218"
+      "sha256": "c65a3ec8736adf8078998191e68007d75e597df9f543f10736f41ebdd255029a"
     },
     {
       "path": "crates/tn-runtime/src/tools.rs",
@@ -125,11 +125,15 @@
     },
     {
       "path": "crates/tn-runtime/tests/derived_report.rs",
-      "sha256": "3d92b80eef400371e1325beb11b084e2470f0a204723860024e3dae8a4c0f62d"
+      "sha256": "d5a9288e49e7f8e7ed39057ca29a785192bf3cea3e7a62661d030fd80d346bae"
+    },
+    {
+      "path": "crates/tn-runtime/tests/deterministic_actions.rs",
+      "sha256": "44d6a6473a3109073c8a98abf62a626113802302190487568fbda40774c24263"
     },
     {
       "path": "crates/tn-runtime/tests/ffi.rs",
-      "sha256": "2527bceb61bc33caa3f8ae90e3a601dd962572bb67d4a7d7bd0f1bd67f35194e"
+      "sha256": "f8cc36afb0d92c23616dedece144a6933f624fb16bdd5b0f6922967e439fdaab"
     },
     {
       "path": "crates/tn-runtime/tests/fixtures/chain-row-1.json",
@@ -165,11 +169,11 @@
     },
     {
       "path": "crates/tn-runtime/tests/governance_context.rs",
-      "sha256": "dd220e78933f8bb9adc52f9dbcca9756b5cc972178e80300a6bbce9104a3fae7"
+      "sha256": "cb3ab7ec4b2a849773a094cbca4d5d52557cc06f0a78f7d4995e0a29db4129f9"
     },
     {
       "path": "crates/tn-runtime/tests/governed_context_structure.rs",
-      "sha256": "93c354e6c0aa47f9047ec1d1df135eec8a0686eb41e669da5cd25643b9fe90d2"
+      "sha256": "de28c5d3991c2b8d467d8cdebecdde154298f536243d50bfd8bd3432816aa776"
     },
     {
       "path": "crates/tn-runtime/tests/governed_decision_context.rs",
@@ -177,11 +181,11 @@
     },
     {
       "path": "crates/tn-runtime/tests/governed_object_admission.rs",
-      "sha256": "ce22599272651b2b270950de7c8acbb83349c936fbe92505e9aa1e2aabed216c"
+      "sha256": "98095e1bd140f3b86e31ee34cf494eaa0334bc29a62788eaf3e8ff66633bdf20"
     },
     {
       "path": "crates/tn-runtime/tests/governed_object_output.rs",
-      "sha256": "b039a2bc0056ebb79d1b72e66672677303cc07f04f9d635dd766e81c5fcb64a8"
+      "sha256": "c6e2d2a663bd2486164ba1f7b406d3c5243d1e2e1c1b9da1e47c08c9f1cc8ac0"
     },
     {
       "path": "crates/tn-runtime/tests/governed_object_request.rs",
@@ -189,15 +193,15 @@
     },
     {
       "path": "crates/tn-runtime/tests/governed_object_tools.rs",
-      "sha256": "f8f0044a61bbf0ca1a6348b11bf6517794ac1c881e47b5018dd776e6abaa00af"
+      "sha256": "560ede6c213f3471bd6f511c63ff5a069947ebd7531d89137f81f80334ccce0e"
     },
     {
       "path": "crates/tn-runtime/tests/governed_presentation.rs",
-      "sha256": "6c3628ba20c3c9c11729f2bd03702bacb95bd06e9d848b3d252853d8294838bc"
+      "sha256": "d1a31edf1669dce8c656677eafe88404865435fb4fa18651276bc730c3b09384"
     },
     {
       "path": "crates/tn-runtime/tests/governed_registers.rs",
-      "sha256": "e8b08984818f448993ad82a29ce88c4b971f8aeb299e5e3ecc44b188ac5987c5"
+      "sha256": "9930a650b9a0af56cc5439dbea88c6197c371b2fab7410bdc4515919e4854fb5"
     },
     {
       "path": "crates/tn-runtime/tests/governed_support/mod.rs",
@@ -233,7 +237,7 @@
     },
     {
       "path": "crates/tn-runtime/tests/vllm_binding.rs",
-      "sha256": "0290a302936f6f6cf50cb5addef211d0c9155da9ac7ec0f84ad0915a38c6b74e"
+      "sha256": "b46a772b46febb84631b8673693a9b5399bf6c8011cdc326d16d6666c3b02492"
     },
     {
       "path": "crates/tn-test-tools/Cargo.toml",

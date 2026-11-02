@@ -173,10 +173,13 @@ def _select_policies(context, metadata, values, use):
     # current edition checks and evaluator state, under this context and use.
     module_cache = OpaModuleCache()
     sources = {"name": set(), "value": set()}
-    editions, inputs, selected = {}, [], {}
+    editions, inputs, selected, bindings_by_publication = {}, [], {}, {}
     for index, ((data, primitive_binding, _), value) in enumerate(zip(metadata, values)):
         column = "name" if index % 2 == 0 else "value"
-        bindings = data.dataset_bindings
+        identity = value.reference.object_id
+        if identity not in bindings_by_publication:
+            bindings_by_publication[identity] = data.dataset_bindings
+        bindings = bindings_by_publication[identity]
         if len(bindings) != 1:
             raise EvidenceError("each input cell must retain exactly one original SQL edition")
         binding = bindings[0]

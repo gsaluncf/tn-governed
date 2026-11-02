@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import json
+import weakref
 from dataclasses import dataclass
 from uuid import uuid4
 
 import tn
 
+from tn_governed.native_objects import CarriedPublication, NativeObjects
+
 from .evidence import EvidenceError
 from .primitives import VALUE_TYPE
 from .query import SourceColumn, decode_sql, digest, encode_sql
 from .runtime import Request
-from .string import ValueReference
+from .string import MetadataUnavailable, ValueReference
 
 RESULT_SCHEMA = "tn.sql-result.v1"
 
@@ -248,37 +251,97 @@ class GovernedQueryResult:
     """A transported relation; fetching returns handles, disclosure needs a permit."""
 
     def __init__(
-        self, context, *, object_id, decision_id, result_id, resolution, source, edition, transport
+        self,
+        context,
+        *,
+        object_id,
+        decision_id,
+        result_id,
+        resolution,
+        source,
+        edition,
+        transport,
+        publication=None,
     ):
-        self.context, self.object_id = context, object_id
+        self._context, self.object_id = weakref.ref(context), object_id
         self.decision_id, self.result_id = decision_id, result_id
         self.resolution, self.source = resolution, json.loads(json.dumps(source))
         self.edition, self.transport = dict(edition), transport
         self._index = 0
+        self.publication = publication
         metadata = self.metadata()
+        if self.publication is None:
+            self.publication = self._carried(context)
         self.description = tuple(
             (column["name"], None, None, None, None, None, None)
             for column in metadata["binding"]["output_schema"]
         )
 
-    def export(self):
-        """Carry the query, source assignments, edition, and retained evidence graph."""
-        self.metadata()
-        wires, pending = {}, [self.object_id, self.decision_id, self.result_id]
+    @property
+    def context(self):
+        context = self._context()
+        if context is None:
+            raise MetadataUnavailable("query processing requires binding to a receiving context")
+        return context
+
+    def _carried(self, context):
+        objects, pending = {}, [self.object_id, self.decision_id, self.result_id]
         while pending:
             identity = pending.pop()
-            if identity in wires:
+            if identity in objects:
                 continue
-            if len(wires) >= 65536:
+            if len(objects) >= 65536:
                 raise EvidenceError("SQL evidence graph exceeds its transport bound")
-            obj = self.context.store_object(identity)
-            wires[identity] = obj.forward()
-            view = self.context.session.governance(obj)
+            obj = context.store_object(identity)
+            objects[identity] = obj
+            view = context.session.governance(obj)
             pending.extend(source.object_id for source in view.governance.sources)
             if obj.object_type == "experiment.evidence":
-                record = self.context.recorder.read(identity)
+                record = context.recorder.read(identity)
                 if record.body["previous"] is not None:
                     pending.append(record.body["previous"])
+        return CarriedPublication(
+            objects[self.object_id],
+            support=tuple(obj for identity, obj in objects.items() if identity != self.object_id),
+        )
+
+    def bind(self, context):
+        """Admit the carried native objects under another endpoint's keys and rules."""
+        if self.publication.object.id != self.object_id:
+            raise EvidenceError("query carrier differs from its signed publication")
+        if isinstance(context.recorder.store, NativeObjects):
+            context.recorder.store.include(self.publication)
+        else:
+            for obj in self.publication.objects():
+                context.recorder.store.put(obj)
+        resolution = context.resolver.resolve_query(
+            [
+                SourceColumn(item["table"], item["column"], item["database"])
+                for item in self.resolution.sources
+            ],
+            actor=context.actor,
+            application=context.application,
+            purpose=context.purpose,
+            expected_source=self.source,
+            packets=self.resolution.packets,
+        )
+        return type(self)(
+            context,
+            object_id=self.object_id,
+            decision_id=self.decision_id,
+            result_id=self.result_id,
+            resolution=resolution,
+            source=self.source,
+            edition=self.edition,
+            transport=self.transport,
+            publication=self.publication,
+        )
+
+    def export(self):
+        """Serialize the query's native objects and signed source metadata for transport."""
+        if self.publication.object.id != self.object_id:
+            raise EvidenceError("query carrier differs from its signed publication")
+        wires = {obj.id: obj.forward() for obj in self.publication.objects()}
         return QueryTransport(
             self.object_id,
             self.decision_id,
@@ -348,7 +411,8 @@ class GovernedQueryResult:
         if resolution.sources != self.resolution.sources:
             raise EvidenceError("received query assignments differ from the source binding")
         context.resolver.admit_edition(self.edition, context, transport=self.transport)
-        obj = context.store_object(self.object_id)
+        carried = getattr(self, "publication", None)
+        obj = carried.object if carried is not None else context.store_object(self.object_id)
         use = tn.UseContext(context.application, context.purpose, operation)
         selection = context.catalog.select(
             self.edition["dataset"], self.edition["edition"], self.edition["record_id"], use

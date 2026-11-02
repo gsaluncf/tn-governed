@@ -67,7 +67,8 @@ def test_runtime_configuration_uses_exact_edition_metadata_and_model_use(prepare
 
 def test_reopen_resolves_the_same_editions_without_republishing(prepared):
     registry = LocalRegistry(prepared.directory.parent / "registry")
-    before = {path.name for path in (prepared.store.root / "objects").iterdir()}
+    archive = prepared.directory / "publications" / "objects"
+    before = {path.name for path in archive.iterdir()}
     with load_governed_reference(prepared.directory, registry=registry) as reopened:
         assert (
             reopened.calculation.calculation_object.wire == prepared.calculation.calculation_object.wire
@@ -75,7 +76,8 @@ def test_reopen_resolves_the_same_editions_without_republishing(prepared):
         assert [item.selection.edition_record_id for item in reopened.editions] == [
             item.selection.edition_record_id for item in prepared.editions
         ]
-        assert {path.name for path in (reopened.store.root / "objects").iterdir()} == before
+        assert {path.name for path in archive.iterdir()} == before
+        assert reopened.store is not prepared.store
 
 
 def test_application_passes_the_existing_release_and_waits_for_recipient(prepared, monkeypatch):

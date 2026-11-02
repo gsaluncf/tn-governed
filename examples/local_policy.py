@@ -3,12 +3,11 @@
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 import tn
 
-from tn_governed.publications import open_publication_store
+from tn_governed.native_objects import NativeObjects
 from tn_governed.values import (
     Assessment,
     Context,
@@ -37,11 +36,10 @@ def originate(context, raw, policy, label):
 def main():
     policy_text = Path(__file__).with_name("internal_report.policy").read_text(encoding="utf-8")
     with (
-        TemporaryDirectory(prefix="tn-local-policy-") as directory,
         tn.Session(
             policy_text, groups=["values", "evidence"], policy_id="internal_report.policy",
         ) as session,
-        open_publication_store(Path(directory) / "publications") as store,
+        NativeObjects() as store,
     ):
         policy = session.policy("internal.report")
         recorder = EvidenceRecorder(session, store, session.policy("operation.records"))

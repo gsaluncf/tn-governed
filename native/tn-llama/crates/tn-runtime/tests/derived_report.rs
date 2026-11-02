@@ -64,7 +64,7 @@ fn selected_values_and_next_action_are_derived_from_the_exact_selection() {
     for (selected, required_action, included, excluded) in [
         (
             "precisely",
-            "log_compliance_creation",
+            "emit_governed_record",
             &["123 Pine Ln, CA", "P-98765", "92"][..],
             &["FIRM-42"][..],
         ),
@@ -104,7 +104,7 @@ fn selected_values_and_next_action_are_derived_from_the_exact_selection() {
 }
 
 #[test]
-fn compliance_tool_schema_contains_no_runtime_owned_arguments() {
+fn runtime_compliance_action_exposes_only_its_authenticated_result() {
     let mut harness = SessionHarness::new(USER_REQUEST);
     let selection = advance_to_selection(&mut harness);
     prepare_and_begin(&selection, b"selected", 2048, 1);
@@ -115,10 +115,11 @@ fn compliance_tool_schema_contains_no_runtime_owned_arguments() {
         .unwrap();
     let turn = harness.session.next_model_turn().unwrap();
     let body: Value = serde_json::from_slice(&turn.request_json).unwrap();
-    assert_eq!(
-        body["tools"][0]["function"]["parameters"],
-        json!({"type":"object", "properties":{}, "additionalProperties":false})
-    );
+    assert_eq!(body["tools"][0]["function"]["name"], "emit_governed_record");
+    let context: Value = serde_json::from_str(body["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap()).unwrap();
+    assert_eq!(context["runtime_action"], "log_compliance_creation");
+    assert_eq!(context["arguments"], json!({}));
+    assert_eq!(context["result"]["source_row_hash"], harness.row_hash);
 }
 
 #[test]
@@ -364,35 +365,6 @@ fn selected_section_tools_are_mandatory_scoped_and_single_use() {
         "tn_action_not_allowed"
     );
 
-    let mut missing = SessionHarness::new(USER_REQUEST);
-    let missing_selection = advance_to_selection(&mut missing);
-    prepare_and_begin(
-        &missing_selection,
-        b"rendered-precisely-selection",
-        2048,
-        43,
-    );
-    let select_precisely = missing.section_selection_result(&["precisely"]);
-    missing
-        .session
-        .accept_model_action(missing_selection.permit, select_precisely.native())
-        .unwrap();
-    let premature_emit = missing.session.next_model_turn().unwrap();
-    prepare_and_begin(&premature_emit, b"rendered-premature-emission", 2048, 44);
-    let emission = missing.action_result(
-        "premature-emission",
-        "emit_governed_record",
-        report_proposal(SELECTED_HTML, None, None),
-    );
-    assert_eq!(
-        missing
-            .session
-            .accept_model_action(premature_emit.permit, emission.native())
-            .unwrap_err()
-            .code(),
-        "tn_required_tool_missing"
-    );
-
     let (mut duplicate, emit_turn, _) = selected_ready_to_emit();
     prepare_and_begin(&emit_turn, b"rendered-duplicate-compliance", 2048, 45);
     let repeated =
@@ -597,18 +569,6 @@ fn precisely_path_executes_real_tool_and_releases_the_exact_verified_tn_row() {
 
     let source: Value = serde_json::from_slice(&harness.raw_request).unwrap();
     let source_event_id = source["tn_row"]["event_id"].as_str().unwrap();
-    let compliance_turn = harness.session.next_model_turn().unwrap();
-    prepare_and_begin(&compliance_turn, b"rendered-compliance", 2048, 14);
-    let compliance =
-        harness.action_result("call-compliance-4", "log_compliance_creation", json!({}));
-    assert!(matches!(
-        harness
-            .session
-            .accept_model_action(compliance_turn.permit, compliance.native())
-            .unwrap(),
-        ActionOutcome::Continue
-    ));
-
     let emit_turn = harness.session.next_model_turn().unwrap();
     assert_eq!(emit_turn.permit.phase(), Phase::GovernedAction);
     let emit_body: Value = serde_json::from_slice(&emit_turn.request_json).unwrap();
@@ -616,14 +576,8 @@ fn precisely_path_executes_real_tool_and_releases_the_exact_verified_tn_row() {
         emit_body["tools"][0]["function"]["name"],
         "emit_governed_record"
     );
-    let tool_messages = emit_body["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|message| message["role"] == "tool")
-        .collect::<Vec<_>>();
-    let receipt: Value =
-        serde_json::from_str(tool_messages.last().unwrap()["content"].as_str().unwrap()).unwrap();
+    let runtime_message: Value = serde_json::from_str(emit_body["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap()).unwrap();
+    let receipt = runtime_message["result"].clone();
     assert_eq!(
         receipt
             .as_object()
@@ -718,7 +672,7 @@ fn precisely_path_executes_real_tool_and_releases_the_exact_verified_tn_row() {
             "admission",
             "governance_opened",
             "sections_selected",
-            "tool_executed",
+            "tool_executed_runtime",
             "receipt_inserted",
             "output_emitted",
             "output_readback",
@@ -734,9 +688,10 @@ fn precisely_path_executes_real_tool_and_releases_the_exact_verified_tn_row() {
             .collect::<Vec<_>>(),
         (1..=9).collect::<Vec<_>>()
     );
-    assert!(release.trace[2..4]
-        .iter()
-        .all(|event| event.task_id.is_some() && event.slot_id.is_some()));
+    assert!(release.trace[2].task_id.is_some());
+    assert!(release.trace[2].slot_id.is_some());
+    assert!(release.trace[3].task_id.is_none());
+    assert!(release.trace[3].slot_id.is_none());
     let public_trace = serde_json::to_string(&release.trace).unwrap();
     for forbidden in [
         "123 Pine Ln",
@@ -850,14 +805,6 @@ fn selected_ready_to_emit() -> (SessionHarness, tn_runtime::ModelTurn, Value) {
         .session
         .accept_model_action(selection_turn.permit, selection.native())
         .unwrap();
-    let compliance_turn = harness.session.next_model_turn().unwrap();
-    prepare_and_begin(&compliance_turn, b"rendered-compliance-helper", 2048, 52);
-    let compliance =
-        harness.action_result("helper-compliance", "log_compliance_creation", json!({}));
-    harness
-        .session
-        .accept_model_action(compliance_turn.permit, compliance.native())
-        .unwrap();
     let emit_turn = harness.session.next_model_turn().unwrap();
     let body: Value = serde_json::from_slice(&emit_turn.request_json).unwrap();
     let receipt: Value = serde_json::from_str(
@@ -865,12 +812,13 @@ fn selected_ready_to_emit() -> (SessionHarness, tn_runtime::ModelTurn, Value) {
             .as_array()
             .unwrap()
             .iter()
-            .rfind(|message| message["role"] == "tool")
+            .rfind(|message| message["content"].as_str().is_some_and(|content| content.contains("runtime_action")))
             .unwrap()["content"]
             .as_str()
             .unwrap(),
     )
     .unwrap();
+    let receipt = receipt["result"].clone();
     let source: Value = serde_json::from_slice(&harness.raw_request).unwrap();
     let lineage = json!({
         "source_device_identity": source["tn_row"]["device_identity"],

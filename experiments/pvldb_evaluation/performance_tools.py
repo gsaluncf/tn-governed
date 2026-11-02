@@ -103,7 +103,7 @@ def _admit_scalar(context, source):
     return endpoint, artifact, claims
 
 
-def _accepted_report_evidence(context, report, source, claims):
+def _accepted_report_evidence(context, report, source, claims, queue_root):
     """Bind a trusted recipient's accepted HTML to carried signed native evidence."""
     store = context.recorder.store
     result = context.recorder.read(report.result_record_id)
@@ -166,7 +166,7 @@ def _accepted_report_evidence(context, report, source, claims):
         or vd.get("review_action", {}).get("reason") != report.review.reason
     ):
         raise EvidenceError("review registration differs from its accepted report")
-    queue_root = store.root.parent.resolve()
+    queue_root = Path(queue_root).resolve()
     queue_path = (queue_root / report.review.queue_entry).resolve()
     if not queue_path.is_relative_to(queue_root) or queue_path.read_bytes() != store.get(review.id):
         raise EvidenceError("review queue does not retain its exact signed registration")
@@ -200,7 +200,9 @@ def integrate_chain(context, report, source, depth, directory):
     bridge_started = time.perf_counter()
     endpoint, admitted, claims = _admit_scalar(context, source)
     if report is not None:
-        evidence = _accepted_report_evidence(context, report, source, claims)
+        evidence = _accepted_report_evidence(
+            context, report, source, claims, Path(directory).parent,
+        )
         admitted = endpoint.execute(
             "model.accept_report",
             (admitted,),

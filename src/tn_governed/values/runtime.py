@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from uuid import uuid4
 
 import tn
+from tn_governed.native_objects import NativeObjects
 
 from .evidence import EvidenceError, EvidenceRecorder
 from .obligations import ObligationResult as ObligationResult
@@ -85,8 +86,11 @@ class Rules:
         return Assessment(bool(allowed), "configured receiver rules", claim_judgments=judgments)
 
 
-def publish_source(session, store, fields, *, policy=None, string_metadata=None):
+def publish_source(session, store=None, fields=None, *, policy=None, string_metadata=None):
     """Local origination helper. A real driver must authorize retrieval before this step."""
+    if fields is None and isinstance(store, dict):
+        fields, store = store, None
+    store = NativeObjects() if store is None else store
     if not fields or any(not isinstance(k, str) or not k or type(v) is not str
                          for k, v in fields.items()):
         raise TypeError("source requires nonempty string fields")
@@ -104,7 +108,14 @@ def publish_source(session, store, fields, *, policy=None, string_metadata=None)
         decide=lambda ctx: len(ctx.policies) == 1 and ctx.policies[0].matches_contract(policy),
     )
     store.put(publication)
-    return {name: TNString(ValueReference(publication.id, name), metadata_provider=string_metadata)
+    carried = None
+    if isinstance(store, NativeObjects):
+        for ancestor in data.history:
+            store.put(ancestor)
+        store.link(publication.id, tuple(obj.id for obj in data.history if obj.id != publication.id))
+        carried = store.carry(publication.id)
+    return {name: TNString(ValueReference(publication.id, name), metadata_provider=string_metadata,
+                           publication=carried)
             for name in fields}
 
 
@@ -149,10 +160,120 @@ class Context:
     def store_object(self, identity):
         return self.recorder.store.read(identity)
 
+    def _adopt(self, values):
+        """Use the native objects owned by supplied values in this endpoint."""
+        for value in values:
+            carried = getattr(value, "publication", None)
+            if carried is None:
+                continue
+            if carried.object.id != value.reference.object_id:
+                raise EvidenceError("carried publication differs from the value reference")
+            if isinstance(self.recorder.store, NativeObjects):
+                self.recorder.store.include(carried)
+            else:
+                for publication in carried.objects():
+                    try:
+                        self.recorder.store.read(publication.id)
+                    except FileNotFoundError:
+                        self.recorder.store.put(publication)
+
+    def _retain_publication(self, data, publication):
+        self.recorder.store.put(publication)
+        if isinstance(self.recorder.store, NativeObjects):
+            history = data.history
+            for ancestor in history:
+                self.recorder.store.put(ancestor)
+            self.recorder.store.link(publication.id, tuple(
+                obj.id for obj in history if obj.id != publication.id))
+
+    def _carried(self, publication, values=(), extra_ids=()):
+        """Attach native evidence and parent objects to the returned datatype."""
+        if not isinstance(self.recorder.store, NativeObjects):
+            return None
+        extra_ids = list(extra_ids)
+        if getattr(self, "resolver", None) is not None:
+            governance = self.session.governance(publication).governance
+            pending = [policy.revision_id for policy in governance.policies
+                       if policy.revision_id is not None]
+            revisions = set()
+            while pending:
+                identity = pending.pop()
+                if identity in revisions:
+                    continue
+                revision = self.policy_dag.get(identity)
+                if revision is None:
+                    raise EvidenceError("carried policy revision is not admitted")
+                revisions.add(identity)
+                pending.extend(parent.revision_id for parent in revision.parents)
+            extra_ids.extend(revisions)
+            extra_ids.extend(binding.edition_record_id for binding in governance.dataset_bindings)
+        return self.recorder.store.carry(publication.id,
+            parents=tuple(value.publication for value in values
+                          if getattr(value, "publication", None) is not None),
+            extra_ids=tuple(identity for identity in extra_ids if identity is not None))
+
+    def _received_carrier(self, value, binding, *, shared):
+        """Retain only the native ancestry and evidence needed by a verified received handle."""
+        from tn_governed.native_objects import CarriedPublication
+        from .evidence import EVIDENCE_TYPE, referenced_publications
+
+        active, count = set(), [0]
+
+        def collect(identity, depth=0):
+            if depth > 256:
+                raise EvidenceError("received evidence exceeds the native depth limit")
+            if identity in active:
+                raise EvidenceError("received evidence contains a dependency cycle")
+            if identity in shared:
+                return shared[identity]
+            count[0] += 1
+            if count[0] > 65536:
+                raise EvidenceError("received evidence exceeds the native object limit")
+            active.add(identity)
+            try:
+                obj = self.store_object(identity)
+                governance = self.session.governance(obj).governance
+                dependencies = {source.object_id for source in governance.sources}
+                dependencies.update(policy.revision_id for policy in governance.policies
+                                    if policy.revision_id is not None)
+                dependencies.update(item.edition_record_id for item in governance.dataset_bindings)
+                if obj.object_type == EVIDENCE_TYPE:
+                    record = self.recorder.read(identity)
+                    dependencies.update(item.id for item in referenced_publications(
+                        (record.body["inputs"], record.body["details"]), self.store_object))
+                revision = getattr(self, "policy_dag", None)
+                revision = None if revision is None else revision.get(identity)
+                if revision is not None:
+                    dependencies.update(parent.revision_id for parent in revision.parents)
+                dependencies.discard(identity)
+                parents = tuple(collect(parent, depth + 1) for parent in sorted(dependencies))
+                shared[identity] = CarriedPublication(obj, parents=parents)
+                return shared[identity]
+            finally:
+                active.remove(identity)
+
+        root = collect(value.reference.object_id)
+        references = (value.decision_id, value.result_id, *binding.get("claims", ()))
+        parents = (root, *(collect(identity) for identity in references if identity is not None))
+        return CarriedPublication(root.object, parents=parents)
+
     def _metadata(self, value):
+        self._adopt((value,))
         obj = self.store_object(value.reference.object_id)
+        use = tn.UseContext(self.application, self.purpose, "inspect-claims")
+
+        def ancestor(identity):
+            parent = self.store_object(identity)
+            view = self.session.governance(parent)
+            group = "evidence" if "evidence" in parent.group_names else value.reference.group
+            view.accept(use=use, groups=[group], decide=self.metadata_accept)
+            return view
+
+        tn.LineageVerifier(max_objects=65536, max_depth=256).verify(
+            self.session.governance(obj), tn.DatasetCatalog(), tn.PolicyDag(), ancestor,
+        )
         data = self.session.receive(
-            obj, use=tn.UseContext(self.application, self.purpose, "inspect-claims"),
+            obj, use=use,
             groups=["evidence"], decide=self.metadata_accept,
         )
         manifest = data.get("manifest", group="evidence")
@@ -356,7 +477,7 @@ class Context:
                 and all(any(p.matches_contract(parent) for parent in request.policies)
                         for p in ctx.policies),
             )
-            self.recorder.store.put(publication)
+            self._retain_publication(data, publication)
             reference = ValueReference(publication.id, field)
             result_id = self._append("Result", request, call_id, {
                 "decision_id": decision_id, "output": reference.to_dict(), "claims": claims,
@@ -370,7 +491,9 @@ class Context:
                 },
             })
             return TNString(reference, decision_id, result_id,
-                            metadata_provider=self.string_metadata)
+                            metadata_provider=self.string_metadata,
+                            publication=self._carried(publication, values,
+                                (decision_id, result_id, *claims)))
         except Exception as exc:
             # Execution/key/storage failures are not represented as successful results.
             self._append("Failure", request, call_id,

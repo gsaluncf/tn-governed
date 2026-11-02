@@ -17,15 +17,21 @@ class TNNumeric:
     Ordinary scalar conversions remain explicit governed exposure.
     """
 
-    __slots__ = ("reference", "decision_id", "result_id", "metadata_provider")
+    __slots__ = ("reference", "decision_id", "result_id", "metadata_provider", "publication")
 
-    def __init__(self, reference, decision_id=None, result_id=None, *, metadata_provider=None):
+    def __init__(self, reference, decision_id=None, result_id=None, *, metadata_provider=None,
+                 publication=None):
         if hasattr(self, "reference"):
             raise AttributeError("TNNumeric bindings are already initialized")
         if not isinstance(reference, ValueReference):
             raise TypeError("TNNumeric requires a native publication field reference")
+        if publication is not None:
+            from tn_governed.native_objects import CarriedPublication
+            if not isinstance(publication, CarriedPublication) or publication.object.id != reference.object_id:
+                raise ValueError("carried publication differs from the value reference")
         for name, value in (("reference", reference), ("decision_id", decision_id),
-                            ("result_id", result_id), ("metadata_provider", metadata_provider)):
+                            ("result_id", result_id), ("metadata_provider", metadata_provider),
+                            ("publication", publication)):
             object.__setattr__(self, name, value)
 
     @property

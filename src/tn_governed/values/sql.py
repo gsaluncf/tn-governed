@@ -217,7 +217,8 @@ class GovernedSQL:
                                                       decision_id=decision, call_id=query_id)
                     publications.append((values[0], policy, cells[0][1]))
                     for value, (content, source) in zip(values, cells, strict=True):
-                        handles.append((value.reference, value.decision_id, value.result_id, type(content).__name__))
+                        handles.append((value.reference, value.decision_id, value.result_id,
+                                        type(content).__name__, value.publication))
                         positions.append((source["row"], column_index))
             if publications:
                 editions = self.edition_publisher.publish_query_editions(query_id, publications,

@@ -10,7 +10,8 @@ from uuid import uuid4
 
 import tn
 
-from tn_governed.publications import PublicationStore, write_once
+from tn_governed.native_objects import NativeObjects
+from tn_governed.publications import write_once
 
 EVIDENCE_TYPE = "experiment.evidence"
 EVIDENCE_SCHEMA = "tn.string-evidence.v1"
@@ -27,6 +28,25 @@ class Record:
     id: str
     writer: str
     body: dict
+
+
+def referenced_publications(value, lookup):
+    """Resolve native identities embedded in application evidence, excluding external receipts."""
+    pending, visited = [value], set()
+    while pending:
+        item = pending.pop()
+        if isinstance(item, dict):
+            pending.extend(item.values())
+        elif isinstance(item, (list, tuple)):
+            pending.extend(item)
+        elif (isinstance(item, str) and len(item) == 71 and item.startswith("sha256:")
+              and all(character in "0123456789abcdef" for character in item[7:])
+              and item not in visited):
+            visited.add(item)
+            try:
+                yield lookup(item)
+            except FileNotFoundError:
+                continue
 
 
 def read_record(wire, *, session, policy, expected_writer=None):
@@ -93,16 +113,16 @@ def verify_tape(wires, *, session, policy, expected_writer, expected_context, ex
 
 
 class EvidenceRecorder:
-    """Single-process append-only recorder. PublicationStore retains exact native wire.
+    """Endpoint-owned signed records held as native objects until explicit export.
 
     This is an application record schema within TN, not a replacement envelope,
     signer, key service, or permit token. Each context starts a fresh record chain.
     """
 
-    def __init__(self, session, store: PublicationStore, policy):
+    def __init__(self, session, store=None, policy=None):
         self.session = session
-        self.store = store
-        self.policy = policy
+        self.store = NativeObjects() if store is None else store
+        self.policy = session.policy(EVIDENCE_TYPE) if policy is None else policy
         self.context_id = uuid4().hex
         self._ids = []
         self._lock = threading.RLock()
@@ -140,9 +160,13 @@ class EvidenceRecorder:
                 decide=lambda ctx: ctx.writer == self.session.did
                 and len(ctx.policies) == 1 and ctx.policies[0].matches_contract(self.policy),
             )
-            # Return only after the publications and their sequence reference are durable.
+            # Bind the signed record and its position before returning control.
             self.store.put_record(snapshot, publication, context_id=self.context_id,
                                   sequence=body["sequence"])
+            if isinstance(self.store, NativeObjects):
+                dependencies = referenced_publications(
+                    (body["inputs"], body["details"]), self.store.read)
+                self.store.link(publication.id, (snapshot.id, *(obj.id for obj in dependencies)))
             self._ids.append(publication.id)
             return publication.id
 

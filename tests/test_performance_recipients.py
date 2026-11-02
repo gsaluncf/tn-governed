@@ -2,12 +2,14 @@
 
 import hashlib
 import importlib
+import io
 import json
 import multiprocessing
 import shutil
 import zipfile
 
 import pytest
+import tn
 from test_sql_query_results import database as database
 from test_sql_query_results import sql_endpoint as sql_endpoint
 
@@ -56,9 +58,13 @@ def test_recipients_have_distinct_signing_identities_kits_and_stores(retained_so
     roots = module.prepare_recipients(retained_source, tmp_path / "readers", 2)
     identities, kits, stores = [], [], []
     for root in roots:
+        archive = root / "publications"
+        before = {path.relative_to(archive): path.read_bytes()
+                  for path in archive.rglob("*") if path.is_file()}
         with module.open_recipient(root) as recipient:
             identities.append(recipient["session"].did)
-            stores.append(recipient["store"].root)
+            stores.append(recipient["store"])
+            assert not hasattr(recipient["store"], "root")
             kits.append((root / "session" / "keys" / "values.btn.mykit").read_bytes())
             assert recipient["value"].reveal(
                 recipient["context"], destination="support-console"
@@ -66,6 +72,8 @@ def test_recipients_have_distinct_signing_identities_kits_and_stores(retained_so
             assert recipient["context"]._metadata(recipient["value"])[2][0].statement == (
                 "The amounts are synthetic."
             )
+        assert before == {path.relative_to(archive): path.read_bytes()
+                          for path in archive.rglob("*") if path.is_file()}
     assert len(set(identities)) == len(set(kits)) == len(set(stores)) == 2
     assert not (retained_source / "recipient.json").exists()
     assert source_state == {
@@ -175,6 +183,13 @@ def test_spawned_recipients_verify_and_sign_each_request(retained_source, tmp_pa
         for request in row["requests"]:
             assert request["elapsed_ns"] > 0
             assert request["signed_records"] == 3
+            assert len(request["record_publications"]) == request["signed_records"]
+            for identity, wire in zip(
+                request["record_ids"], request["record_publications"], strict=True,
+            ):
+                publication = tn.GovernedObject.read(io.BytesIO(wire.encode("utf-8")))
+                assert publication.id == identity
+                assert publication.writer == request["identity"]
             records.extend(request["record_ids"])
     assert len(set(records)) == len(records) == 12
     assert len((tmp_path / "concurrent" / "rounds.jsonl").read_text().splitlines()) == 2

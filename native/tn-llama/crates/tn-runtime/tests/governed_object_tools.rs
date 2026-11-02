@@ -66,7 +66,6 @@ fn native_action_request_binds_source_and_action_without_model_arguments() {
         assert_ne!(current.id(), original_id);
         let (_keys, runtime) = fixture.runtime();
         let mut session = runtime.start_session(&request).unwrap();
-        select(&mut session, &["finance"]).unwrap();
         let turn = session.next_model_turn().unwrap();
         let body: Value = serde_json::from_slice(&turn.request_json).unwrap();
         let context: Value =
@@ -75,7 +74,7 @@ fn native_action_request_binds_source_and_action_without_model_arguments() {
         assert_eq!(context["operation"], "generate_report");
         assert_eq!(
             context["required_tools"],
-            json!(["log_compliance_creation"])
+            json!([])
         );
         assert_eq!(
             context["applicable_source_governance"]["sources"][0]["governance"]["source_lineage"]
@@ -84,7 +83,7 @@ fn native_action_request_binds_source_and_action_without_model_arguments() {
         );
         assert_eq!(
             body["tools"][0]["function"]["parameters"],
-            json!({"type":"object","properties":{},"additionalProperties":false})
+            json!({"type":"object","properties":{"report_html":{"type":"string","minLength":1}},"required":["report_html"],"additionalProperties":false})
         );
         session.abort().unwrap();
     }
@@ -104,20 +103,9 @@ fn native_tool_executes_once_and_signed_result_reenters_before_report() {
         .clone();
     let (_keys, runtime) = fixture.runtime();
     let mut session = runtime.start_session(&request).unwrap();
-    select(&mut session, &["finance"]).unwrap();
     let turn = session.next_model_turn().unwrap();
     let body: Value = serde_json::from_slice(&turn.request_json).unwrap();
     assert_eq!(body["tools"].as_array().unwrap().len(), 1);
-    assert_eq!(
-        body["tools"][0]["function"]["name"],
-        "log_compliance_creation"
-    );
-    assert!(matches!(
-        accept(&mut session, turn, "log_compliance_creation", json!({})).unwrap(),
-        ActionOutcome::Continue
-    ));
-    let turn = session.next_model_turn().unwrap();
-    let body: Value = serde_json::from_slice(&turn.request_json).unwrap();
     assert_eq!(body["tools"][0]["function"]["name"], "emit_governed_record");
     let decision: Value =
         serde_json::from_str(body["messages"][1]["content"].as_str().unwrap()).unwrap();
@@ -131,6 +119,7 @@ fn native_tool_executes_once_and_signed_result_reenters_before_report() {
             .unwrap(),
     )
     .unwrap();
+    let receipt = &receipt["result"];
     assert_eq!(
         receipt["source_object_id"],
         args(&request)["source_object_id"]
@@ -214,7 +203,7 @@ fn native_tool_executes_once_and_signed_result_reenters_before_report() {
         release
             .trace
             .iter()
-            .filter(|event| event.event == "tool_executed")
+            .filter(|event| event.event == "tool_executed_runtime")
             .count(),
         1
     );
@@ -222,67 +211,19 @@ fn native_tool_executes_once_and_signed_result_reenters_before_report() {
 }
 
 #[test]
-fn native_tool_missing_wrong_arguments_repeated_and_forged_receipt_are_terminal() {
-    for case in [
-        "missing",
-        "wrong_source",
-        "wrong_action",
-        "unknown",
-        "extra_receipt",
-        "repeated",
-        "forged_report_receipt",
+fn runtime_completed_tool_cannot_be_replayed_or_replaced_by_model_output() {
+    for (name, arguments, expected) in [
+        ("log_compliance_creation", json!({}), "tn_tool_already_executed"),
+        ("log_compliance_creation", json!({"source_object_id":"forged"}), "tn_tool_already_executed"),
+        ("shell", json!({}), "tn_action_not_allowed"),
+        ("emit_governed_record", json!({"report_html":"<p>25%</p>", "compliance_evidence":{"done":true}}), "tn_report_proposal_invalid"),
     ] {
         let fixture = fixture();
         let request = fixture.request("calculation");
         let (_keys, runtime) = fixture.runtime();
         let mut session = runtime.start_session(&request).unwrap();
-        select(&mut session, &["finance"]).unwrap();
-        let mut arguments = json!({});
-        let mut name = "log_compliance_creation";
-        let expected = match case {
-            "missing" => {
-                name = "emit_governed_record";
-                arguments = json!({"report_html":"<p>25%</p>"});
-                "tn_required_tool_missing"
-            }
-            "wrong_source" => {
-                arguments["source_object_id"] = json!("sha256:wrong");
-                "tn_tool_arguments_invalid"
-            }
-            "wrong_action" => {
-                arguments["action"] = json!("other");
-                "tn_tool_arguments_invalid"
-            }
-            "unknown" => {
-                name = "shell";
-                "tn_action_not_allowed"
-            }
-            "extra_receipt" => {
-                arguments["receipt"] = json!({"done":true});
-                "tn_tool_arguments_invalid"
-            }
-            "repeated" | "forged_report_receipt" => {
-                let turn = session.next_model_turn().unwrap();
-                accept(&mut session, turn, name, arguments.clone()).unwrap();
-                if case == "repeated" {
-                    "tn_tool_already_executed"
-                } else {
-                    name = "emit_governed_record";
-                    arguments =
-                        json!({"report_html":"<p>25%</p>","compliance_evidence":{"done":true}});
-                    "tn_report_proposal_invalid"
-                }
-            }
-            _ => unreachable!(),
-        };
         let turn = session.next_model_turn().unwrap();
-        assert_eq!(
-            accept(&mut session, turn, name, arguments)
-                .unwrap_err()
-                .code(),
-            expected,
-            "{case}"
-        );
+        assert_eq!(accept(&mut session, turn, name, arguments).unwrap_err().code(), expected);
         assert_eq!(session.state(), State::Failed);
         assert!(runtime.start_session(&request).is_ok());
     }
@@ -302,12 +243,8 @@ fn native_tool_readback_failure_never_reinserts_a_receipt_or_releases_report() {
     .unwrap();
     let (_keys, runtime) = fixture.runtime();
     let mut session = runtime.start_session(&request).unwrap();
-    select(&mut session, &["finance"]).unwrap();
-    let turn = session.next_model_turn().unwrap();
     assert_eq!(
-        accept(&mut session, turn, "log_compliance_creation", json!({}))
-            .unwrap_err()
-            .code(),
+        session.next_model_turn().unwrap_err().code(),
         "tn_output_readback_failed"
     );
     assert_eq!(session.state(), State::Failed);

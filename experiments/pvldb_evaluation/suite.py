@@ -134,7 +134,7 @@ def summarize(root):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--directory", type=Path, required=True)
-    parser.add_argument("--storage", choices=["files", "sqlite"], default="sqlite")
+    parser.add_argument("--storage", choices=["files"], default="files")
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--workloads", nargs="+", choices=[w[0] for w in WORKLOADS], default=[w[0] for w in WORKLOADS])
     parser.add_argument("--model-repetitions", type=int, default=0)

@@ -5,11 +5,12 @@ where authorized source/compute code already held the content; never exported.
 """
 
 import hashlib
+import json
+import weakref
 
-from .string import MetadataUnavailable, TNString
 from .numeric import TNNumeric
 from .numeric_codec import NUMERIC_TYPES, encode, equality_key
-import json
+from .string import MetadataUnavailable, TNString
 
 _PROCESS_HASHES = {}
 
@@ -39,8 +40,11 @@ def describe(content):
     identity = fingerprint(content)
     if type(content) is str or equality_key(content) is not None:
         _PROCESS_HASHES[identity] = hash(content)
-    facts = {"kind": type(content).__name__, "fingerprint": identity,
-             "fingerprint_scheme": "tn.primitive.content.v1"}
+    facts = {
+        "kind": type(content).__name__,
+        "fingerprint": identity,
+        "fingerprint_scheme": "tn.primitive.content.v1",
+    }
     if type(content) is str:
         facts["length"] = len(content)
     elif type(content) is int:
@@ -52,7 +56,14 @@ def describe(content):
 
 class DeclaredMetadata:
     def __init__(self, context):
-        self.context = context
+        self._context = weakref.ref(context)
+
+    @property
+    def context(self):
+        context = self._context()
+        if context is None:
+            raise MetadataUnavailable("declared metadata requires an active receiving context")
+        return context
 
     def facts(self, value):
         _, binding, _ = self.context._metadata(value)
@@ -70,7 +81,9 @@ class DeclaredMetadata:
     def python_hash(self, value):
         digest = self.fingerprint(value)
         if digest not in _PROCESS_HASHES:
-            raise MetadataUnavailable("no plaintext-equivalent hash has been computed in this process")
+            raise MetadataUnavailable(
+                "no plaintext-equivalent hash has been computed in this process"
+            )
         return _PROCESS_HASHES[digest]
 
     def equals(self, left, right):
@@ -85,9 +98,15 @@ class DeclaredMetadata:
             return False
         if {facts["kind"], right_kind} == {"Decimal", "float"}:
             raise MetadataUnavailable("Decimal/float comparison uses the active decimal context")
-        left_key = facts["fingerprint"] if facts["kind"] == "int" else facts.get("equality_fingerprint")
+        left_key = (
+            facts["fingerprint"] if facts["kind"] == "int" else facts.get("equality_fingerprint")
+        )
         if other:
-            right_key = other["fingerprint"] if other["kind"] == "int" else other.get("equality_fingerprint")
+            right_key = (
+                other["fingerprint"]
+                if other["kind"] == "int"
+                else other.get("equality_fingerprint")
+            )
         else:
             if type(right) is bool:
                 right = int(right)

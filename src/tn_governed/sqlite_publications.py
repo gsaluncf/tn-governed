@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
 import hashlib
 import io
 import sqlite3
 import threading
+from contextlib import contextmanager
 
 import tn
 
@@ -129,6 +129,14 @@ class SQLitePublicationStore(PublicationStore):
                 raise ValueError("record sequence has a gap")
             object_digest(identity)
         return tuple(identity for _, identity in rows)
+
+    def record_contexts(self):
+        with self._lock:
+            contexts = tuple(row[0] for row in self._connection.execute(
+                "SELECT DISTINCT context_id FROM record_references ORDER BY context_id"))
+        for context in contexts:
+            validate_record_position(context, 1)
+        return contexts
 
     def read(self, object_id):
         object_digest(object_id)

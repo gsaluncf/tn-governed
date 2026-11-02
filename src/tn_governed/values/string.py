@@ -92,9 +92,14 @@ class TNString(str):
     result_id: str | None
     metadata_provider: StringMetadataProvider | None
 
-    def __new__(cls, reference, decision_id=None, result_id=None, *, metadata_provider=None):
+    def __new__(cls, reference, decision_id=None, result_id=None, *, metadata_provider=None,
+                publication=None):
         if not isinstance(reference, ValueReference):
             raise TypeError("TNString requires a native publication field reference")
+        if publication is not None:
+            from tn_governed.native_objects import CarriedPublication
+            if not isinstance(publication, CarriedPublication) or publication.object.id != reference.object_id:
+                raise ValueError("carried publication differs from the value reference")
         locator = "tn-ref:" + "/".join(
             quote(part, safe="")
             for part in (reference.object_id, reference.group, reference.field)
@@ -109,6 +114,7 @@ class TNString(str):
         object.__setattr__(obj, "decision_id", decision_id)
         object.__setattr__(obj, "result_id", result_id)
         object.__setattr__(obj, "metadata_provider", metadata_provider)
+        object.__setattr__(obj, "publication", publication)
         return obj
 
     def __setattr__(self, name, value):

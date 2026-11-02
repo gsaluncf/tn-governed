@@ -142,7 +142,7 @@ fn typed_unknown_governance_fields_reach_selection_without_loss() {
 }
 
 #[test]
-fn legacy_protected_tool_rejects_model_supplied_source_or_action() {
+fn runtime_completed_tool_rejects_model_supplied_source_or_action() {
     for arguments in [
         json!({"source_event_id":"forged"}),
         json!({"action":"other"}),
@@ -165,7 +165,7 @@ fn legacy_protected_tool_rejects_model_supplied_source_or_action() {
                 .accept_model_action(turn.permit, result.native())
                 .unwrap_err()
                 .code(),
-            "tn_tool_arguments_invalid"
+            "tn_tool_already_executed"
         );
         assert_eq!(harness.session.state(), State::Failed);
     }

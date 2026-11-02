@@ -26,7 +26,8 @@ import tn_polars
 
 import tn_governed.values as governed
 from tn_governed.native_run import governed_server, wsl_path
-from tn_governed.publications import open_publication_store, write_once
+from tn_governed.native_objects import NativeObjects
+from tn_governed.publications import write_once
 from tn_governed.values.market_report import (
     APPLICATION, MODEL_USE, NOTICE, PURPOSE, RECIPIENT_USE, REVIEW_ACTION, policy,
 )
@@ -121,7 +122,7 @@ class _Operations:
 
 def run_case(root, mode, rows=1, depth=1, branches=1, model=False, claim=True,
              unity_url="http://127.0.0.1:8080", binary=None, model_path=None,
-             port=18325, numeric_type="int", decimal_precision=38, decimal_scale=4, storage="sqlite",
+             port=18325, numeric_type="int", decimal_precision=38, decimal_scale=4, storage="files",
              sdk_build_record=None, runtime_limits=None, gpu_layers=None,
              completion_handler=None, sql_batch_size=64):
     """Return a case summary and preserve the verifier's run manifest.
@@ -131,6 +132,8 @@ def run_case(root, mode, rows=1, depth=1, branches=1, model=False, claim=True,
     """
     if mode not in {"primitive", "explicit"}:
         raise ValueError("mode must be primitive or explicit")
+    if storage != "files":
+        raise ValueError("application computation uses native objects; archive storage must be files")
     if any(type(n) is not int or n < 1 for n in (rows, branches)):
         raise ValueError("rows and branches must be positive integers")
     if type(depth) is not int or depth < 0:
@@ -153,6 +156,7 @@ def run_case(root, mode, rows=1, depth=1, branches=1, model=False, claim=True,
         "with_model": bool(model), "with_claim": bool(claim), "completed": False,
         "verified": False, "timings_seconds": timings, "error": None,
         "publication_storage": storage,
+        "working_representation": "native_objects",
         "sql_batch_size": sql_batch_size,
     }
     if numeric_type not in {"int", "float", "Decimal"}:
@@ -201,7 +205,7 @@ def run_case(root, mode, rows=1, depth=1, branches=1, model=False, claim=True,
                               read_only_roles=("model-reader", "observer"))
             output_paths = provision(root / "output-sessions", roles=["model-writer", "recipient"],
                                      groups=["tn.agents", "default"], read_only_roles=("recipient",))
-            store = open_publication_store(root / "publications", backend=storage)
+            store = NativeObjects()
         with ExitStack() as stack:
             stack.enter_context(store)
             sessions = {role: stack.enter_context(tn.Session.from_config(str(path)))
@@ -316,8 +320,12 @@ def run_case(root, mode, rows=1, depth=1, branches=1, model=False, claim=True,
             finally:
                 records = [context.recorder.read(identity) for identity in context.recorder._ids]
                 handoffs = [r for r in records if r.body["kind"] == "ModelHandoff"]
-                tapes = {role: {**ctx.recorder.export(root / "tapes" / role), "path": "tapes/" + role}
-                         for role, ctx in contexts.items()}
+                with _timed(timings, "export"):
+                    store.export(root / "publications")
+                    tapes = {
+                        role: {**ctx.recorder.export(root / "tapes" / role), "path": "tapes/" + role}
+                        for role, ctx in contexts.items()
+                    }
                 source_hashes = {
                     "experiments/pvldb_evaluation/" + path.name: digest(path)
                     for path in sorted(Path(__file__).parent.glob("*.py"))
@@ -356,6 +364,7 @@ def run_case(root, mode, rows=1, depth=1, branches=1, model=False, claim=True,
                         "experiment_source_sha256": source_hashes},
                     "evaluation": {"mode": mode, "rows": rows, "depth": depth, "branches": branches,
                                    "publication_storage": storage,
+                                   "working_representation": "native_objects",
                                    "claim": bool(claim), "requested_model": bool(model),
                                    "error": summary["error"], "expected_content": summary["expected_content"],
                                    "comparison_scope": "Shared governed dataframe; automatic versus explicit downstream scalar propagation",
@@ -415,8 +424,8 @@ def run_case(root, mode, rows=1, depth=1, branches=1, model=False, claim=True,
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--numeric-type", choices=["int", "float", "Decimal"], default="int")
-    parser.add_argument("--storage", choices=["files", "sqlite"], default="sqlite",
-                        help="Publication storage (default: sqlite; files retains separate-file storage)")
+    parser.add_argument("--storage", choices=["files"], default="files",
+                        help="Archive format at the completed application boundary")
     parser.add_argument("--decimal-precision", type=int, default=38)
     parser.add_argument("--decimal-scale", type=int, default=4)
     parser.add_argument("--mode", choices=("primitive", "explicit"), required=True)

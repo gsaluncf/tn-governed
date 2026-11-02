@@ -159,7 +159,7 @@ def main():
                     model=False,
                     claim=True,
                     unity_url=args.unity_url,
-                    storage="sqlite",
+                    storage="files",
                 )
             if not result["completed"] or not result["verified"]:
                 raise RuntimeError(f"governed execution failed; inspect {directory}")

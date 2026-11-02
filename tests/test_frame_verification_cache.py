@@ -4,14 +4,13 @@ from collections import Counter
 import functools
 import json
 import shutil
-import sqlite3
 from types import SimpleNamespace
 
 import pytest
 import tn
 from tn.governed import GovernedError
 
-from tn_governed.sqlite_publications import SQLitePublicationStore
+from tn_governed.publications import PublicationStore
 from tn_governed.values.evidence import EvidenceError
 from experiments.pvldb_evaluation import verify_frame as module
 from experiments.pvldb_evaluation.run import run_case
@@ -52,7 +51,7 @@ def saved_frame(retained_frame, tmp_path):
 def observation(monkeypatch):
     reads, receives, views, lineage = Counter(), Counter(), Counter(), Counter()
     decoded, manifests, caches, clears = [], [], [], []
-    native_read = SQLitePublicationStore.read
+    native_read = PublicationStore.read
     native_receive, native_governance = tn.Session.receive, tn.Session.governance
     native_lineage, native_decode = tn.LineageVerifier, module.decode
     native_get = tn.DataObject.get
@@ -109,7 +108,7 @@ def observation(monkeypatch):
 
         return decorate
 
-    monkeypatch.setattr(SQLitePublicationStore, "read", read)
+    monkeypatch.setattr(PublicationStore, "read", read)
     monkeypatch.setattr(tn.Session, "receive", receive)
     monkeypatch.setattr(tn.Session, "governance", governance)
     monkeypatch.setattr(tn.DataObject, "get", get)
@@ -161,9 +160,8 @@ def test_next_verification_rechecks_changed_inputs(saved_frame, observation, cha
         run["request"]["purpose"] = "another-purpose"
         (root / "run.json").write_text(json.dumps(run), encoding="utf-8")
     else:
-        with sqlite3.connect(root / "publications/publications.sqlite3") as database:
-            wire = database.execute("SELECT wire FROM publications WHERE object_id=?", (source,)).fetchone()[0]
-            database.execute("UPDATE publications SET wire=? WHERE object_id=?", (wire + b" ", source))
+        path = root / "publications" / "objects" / (source.removeprefix("sha256:") + ".tn")
+        path.write_bytes(path.read_bytes() + b" ")
     with pytest.raises((ValueError, GovernedError), match="wire digest differs" if changed == "wire" else None):
         module.verify_frame(root)
     assert len({id(cache) for cache in observation.caches} - first_cache_ids) >= 1

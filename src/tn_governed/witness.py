@@ -118,12 +118,13 @@ def verify_reference_run(run_directory: Path) -> WitnessResult:
     context_evidence = inspect_governance_context(
         runtime, trace, run_id=response.get("run_id"), request_digest=request_digest,
         source_id=source_hash,
+        expected_release=response,
     )
     uses_context = context_evidence.protocol == CONTEXT_PROTOCOL
     governance_bound = context_evidence.verified
     if uses_context:
         binding_evidence = "verified governance bound to each decision request, prompt, and tokens"
-        semantic_evidence = ("verified semantic context supplied at selection and every action",)
+        semantic_evidence = ("verified semantic context supplied at every model decision",)
     elif context_evidence.protocol == "legacy_echo":
         binding_evidence = "commitments matched"
         semantic_evidence = ("six governance fields opened", "six commitments interpreted")
@@ -161,7 +162,9 @@ def verify_reference_run(run_directory: Path) -> WitnessResult:
         ),
         (
             "Which authorized rule permits this transition?",
-            kinds.get("sections_selected", {}).get("outcome") == "allow"
+            any(kinds.get(kind, {}).get("outcome") == "allow"
+                for kind in ("sections_selected", "sections_selected_runtime"))
+            and (not uses_context or governance_bound)
             and request.get("purpose") == "derived_html_report",
             ("allowed section selection", "derived_html_report purpose"),
         ),

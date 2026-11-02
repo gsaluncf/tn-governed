@@ -24,6 +24,7 @@ from .calculation_client import EngineCalculationPort
 from .feed_server import FeedServerConfig, create_feed_server
 from .getdata import GetDataConfig
 from .llama import _LLAMA_SOURCE_REVISION, submit_governed_report
+from .native_objects import NativeObjects
 from .pipeline import run_governed_calculation_path
 from .publications import PublicationStore, write_once
 from .unity import (
@@ -132,7 +133,7 @@ class PreparedReference:
     stack: ExitStack
     catalog: tn.DatasetCatalog
     policy_dag: tn.PolicyDag
-    store: PublicationStore
+    store: NativeObjects
     editions: tuple
     calculation: object
     metadata_path: Path
@@ -166,7 +167,7 @@ def prepare_governed_reference(directory: Path, *, unity_url: str, registry=None
             METADATA_USE,
         )
         origin_dag, dag = tn.PolicyDag(), tn.PolicyDag()
-        store = PublicationStore(directory / "publications")
+        store = NativeObjects()
         catalog_name = "native_" + uuid.uuid4().hex[:12]
         if registry is None:
             registry = unity_catalog_registry(
@@ -307,6 +308,7 @@ def prepare_governed_reference(directory: Path, *, unity_url: str, registry=None
         }
         preparation = directory / "preparation.json"
         write_once(preparation, json.dumps(facts, indent=2).encode())
+        store.export(directory / "publications")
         return PreparedReference(
             directory,
             sessions,
@@ -441,7 +443,8 @@ def load_governed_reference(directory: Path, *, registry=None):
             METADATA_USE,
         )
         dag = tn.PolicyDag()
-        store = PublicationStore(directory / "publications")
+        with PublicationStore(directory / "publications", read_only=True) as archive:
+            store = NativeObjects.from_archive(archive)
         if registry is None:
             registry = unity_catalog_registry(
                 UnityCatalogConfig(facts["unity_url"], facts["unity_catalog"], "finance")
@@ -543,4 +546,5 @@ def finish_governed_reference(prepared, *, base_url: str, api_key: str, prompt=R
     )
     summary_path = prepared.directory / "summary.json"
     write_once(summary_path, json.dumps(summary, indent=2).encode())
+    prepared.store.export(prepared.directory / "publications")
     return report_path, summary_path

@@ -96,12 +96,78 @@ def context_records():
                     else None,
                 }
             )
+    event("output_emitted_and_read_back", facts, 42)
+    event("source_chain_committed", facts, 42)
+    trace.append(
+        {
+            "kind": "release",
+            "run_id": "run-context",
+            "phase": 4,
+            "sequence": len(trace),
+            "task_id": 42,
+            "slot_id": 0,
+            "parsed_content_b64": encoded(canonical({
+                "protocol": "tn.llama.release.v1",
+                "run_id": "run-context",
+                "source_event_id": "source-event",
+                "source_row_hash": source,
+                "output_event_id": "output-event",
+                "output_row_hash": "sha256:" + "c" * 64,
+                "trace": [
+                    {
+                        "ordinal": index,
+                        "event": event,
+                        "state": "complete" if event == "release" else "governed_action",
+                        "task_id": 42,
+                        "slot_id": 0,
+                        "row_hash": "sha256:" + "c" * 64,
+                        "event_id": "output-event",
+                    }
+                    for index, event in enumerate(("output_readback", "release"))
+                ],
+            })),
+        }
+    )
     return audit, trace
 
 
 def write_rows(path, rows):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+
+def retain_release_actions(audit, trace):
+    release = json.loads(base64.b64decode(trace[-1]["parsed_content_b64"]))
+    actions = []
+    events = {
+        "sections_selected": "sections_selected",
+        "sections_selected_runtime": "sections_selected_runtime",
+        "governed_tool_executed": "tool_executed",
+        "governed_tool_executed_runtime": "tool_executed_runtime",
+    }
+    for row in audit:
+        if row["kind"] not in events:
+            continue
+        tool = row["kind"].startswith("governed_tool")
+        item = {
+            "event": events[row["kind"]],
+            "state": "governed_action",
+            "task_id": row.get("llama_task_id"),
+            "slot_id": row.get("llama_slot_id"),
+            "row_hash": "sha256:" + "e" * 64 if tool else row["target_row_hash"],
+            "event_id": "receipt-event" if tool else None,
+            "tool_name": "record_review" if tool else None,
+            "selected_sections": ["values"],
+        }
+        actions.append(item)
+        if tool:
+            actions.append({**item, "event": "receipt_inserted"})
+    release["trace"] = actions + [
+        item for item in release["trace"] if item["event"] in {"output_readback", "release"}
+    ]
+    for ordinal, item in enumerate(release["trace"]):
+        item["ordinal"] = ordinal
+    trace[-1]["parsed_content_b64"] = encoded(canonical(release))
 
 
 @pytest.fixture
@@ -123,15 +189,13 @@ def reference_run(tmp_path, context_records):
     actions = {
         31: "sections_selected",
         41: "governed_tool_executed",
-        42: "output_emitted_and_read_back",
     }
     with_actions = []
     for row in audit:
         with_actions.append(row)
-        if row["kind"] == "turn_begin_authorized":
+        if row["kind"] == "turn_begin_authorized" and row["llama_task_id"] in actions:
             with_actions.append({**row, "kind": actions[row["llama_task_id"]]})
     audit = with_actions
-    audit.append({**audit[-1], "kind": "source_chain_committed"})
     audit.append(
         {
             "kind": "row_verified",
@@ -141,6 +205,7 @@ def reference_run(tmp_path, context_records):
     )
     for sequence, row in enumerate(audit):
         row["sequence"] = sequence
+    retain_release_actions(audit, trace)
     request = {
         "protocol": "tn.llama.request.v1",
         "purpose": "derived_html_report",
@@ -162,11 +227,13 @@ def reference_run(tmp_path, context_records):
     write_rows(tmp_path / "runtime/decision-events.ndjson", audit)
     write_rows(tmp_path / "runtime/raw-trace/run-context.sensitive.ndjson", trace)
     response = {
+        "protocol": "tn.llama.release.v1",
         "run_id": "run-context",
         "source_event_id": "source-event",
         "source_row_hash": source_hash,
         "output_event_id": "output-event",
         "output_row_hash": output_hash,
+        "trace": json.loads(base64.b64decode(trace[-1]["parsed_content_b64"]))["trace"],
     }
     client = [
         {
@@ -221,7 +288,7 @@ def test_witness_accepts_native_context_for_selection_and_every_action(reference
     assert all("commitments matched" not in item.evidence for item in result.questions)
 
 
-def inspect(records):
+def inspect(records, **expected):
     from tn_governed.context_evidence import inspect_governance_context
 
     return inspect_governance_context(
@@ -229,6 +296,7 @@ def inspect(records):
         run_id="run-context",
         request_digest="sha256:" + "b" * 64,
         source_id="sha256:" + "a" * 64,
+        **expected,
     )
 
 
@@ -374,7 +442,9 @@ def bind_context(records, turn, context):
     for row in trace[turn * 3 : turn * 3 + 2]:
         row["request_json_b64"] = encoded(body)
         row["rendered_prompt_b64"] = encoded(prompt)
-    for row in audit[turn * 2 + 1 : turn * 2 + 3]:
+    for row in audit:
+        if row.get("llama_task_id") != start["task_id"]:
+            continue
         facts = json.loads(row["facts_json"])
         facts.update(
             context_digest=digest("tn.llama.governance-context.v1", canonical(context)),
@@ -407,6 +477,18 @@ def native_context_records(context_records):
     }
     for turn in range(3):
         bind_context(context_records, turn, context)
+    for row in context_records[0]:
+        if row["kind"] == "source_chain_committed":
+            row["kind"] = "standalone_use_completed"
+    release = json.loads(base64.b64decode(context_records[1][-1]["parsed_content_b64"]))
+    release["protocol"] = "tn.llama.release.v2"
+    release["source_object_id"] = release.pop("source_row_hash")
+    release["output_object_id"] = release.pop("output_row_hash")
+    release.pop("source_event_id")
+    release.pop("output_event_id")
+    for item in release["trace"]:
+        item["event_id"] = release["output_object_id"]
+    context_records[1][-1]["parsed_content_b64"] = encoded(canonical(release))
     return context_records
 
 
@@ -479,6 +561,227 @@ def test_context_reader_rejects_executed_action_with_deleted_turn_evidence(conte
     del audit[3:5]
     del trace[3:6]
     assert not inspect(context_records).verified
+
+
+def test_context_reader_rejects_history_truncated_before_report_turn(context_records):
+    audit, trace = context_records
+    del audit[5:]
+    del trace[6:]
+    result = inspect(context_records)
+    assert not result.verified
+    assert "completion" in " ".join(result.errors)
+
+
+@pytest.mark.parametrize("kind", ["output_emitted_and_read_back", "source_chain_committed"])
+def test_context_reader_requires_report_emission_and_completion(context_records, kind):
+    audit = context_records[0]
+    audit[:] = [row for row in audit if row["kind"] != kind]
+    assert not inspect(context_records).verified
+
+
+def test_context_reader_requires_retained_release(context_records):
+    context_records[1].pop()
+    assert not inspect(context_records).verified
+
+
+@pytest.mark.parametrize("field,value", [
+    ("task_id", 41), ("slot_id", 1), ("run_id", "other-run"), ("phase", 3),
+])
+def test_context_reader_binds_release_to_report_inference(context_records, field, value):
+    context_records[1][-1][field] = value
+    assert not inspect(context_records).verified
+
+
+def test_context_reader_rejects_completion_spliced_from_an_earlier_turn(context_records):
+    audit = context_records[0]
+    for row in audit[-2:]:
+        row.update(llama_task_id=41, facts_json=audit[4]["facts_json"])
+    assert not inspect(context_records).verified
+
+
+def test_context_reader_rejects_release_reassigned_to_an_earlier_inference(context_records):
+    audit, trace = context_records
+    for row in audit[-2:]:
+        row.update(llama_task_id=41, facts_json=audit[4]["facts_json"])
+    del audit[5:7]
+    del trace[6:9]
+    trace[-1]["task_id"] = 41
+    expected = json.loads(base64.b64decode(trace[-1]["parsed_content_b64"]))
+    result = inspect(context_records, expected_release=expected)
+    assert not result.verified
+    assert "release" in " ".join(result.errors)
+
+
+def test_context_reader_requires_exact_expected_release(context_records):
+    expected = json.loads(base64.b64decode(context_records[1][-1]["parsed_content_b64"]))
+    assert inspect(context_records, expected_release=expected).verified
+    expected["output_row_hash"] = "sha256:" + "e" * 64
+    assert not inspect(context_records, expected_release=expected).verified
+
+
+@pytest.fixture
+def runtime_context_records(native_context_records):
+    audit, trace = native_context_records
+    runtime_events = [
+        {
+            **audit[0],
+            "kind": kind,
+            "facts_json": json.dumps({
+                "source_object_id": audit[0]["target_row_hash"],
+                "content_digest": "sha256:" + "d" * 64,
+            }),
+        }
+        for kind in (
+            "sections_selected_runtime",
+            "governed_tool_executed_runtime",
+            "tool_result_accepted_runtime",
+        )
+    ]
+    audit[1:5] = runtime_events
+    del trace[:6]
+    for sequence, row in enumerate(audit):
+        row["sequence"] = sequence
+    for sequence, row in enumerate(trace):
+        row["sequence"] = sequence
+    retain_release_actions(audit, trace)
+    return audit, trace
+
+
+def test_context_reader_accepts_one_report_inference_after_runtime_actions(runtime_context_records):
+    result = inspect(runtime_context_records)
+    assert result.verified, result.errors
+    assert result.phases == (4,)
+    assert result.task_ids == (42,)
+
+
+def test_context_reader_accepts_runtime_tool_after_model_section_choice(native_context_records):
+    audit, trace = native_context_records
+    audit[3:5] = [
+        {
+            **audit[0],
+            "kind": kind,
+            "facts_json": json.dumps({"content_digest": "sha256:" + "d" * 64}),
+        }
+        for kind in ("governed_tool_executed_runtime", "tool_result_accepted_runtime")
+    ]
+    del trace[3:6]
+    for sequence, row in enumerate(audit):
+        row["sequence"] = sequence
+    retain_release_actions(audit, trace)
+    result = inspect(native_context_records)
+    assert result.verified, result.errors
+    assert result.phases == (3, 4)
+    assert result.task_ids == (31, 42)
+
+
+def test_context_reader_requires_selection_before_report_inference(runtime_context_records):
+    runtime_context_records[0].pop(1)
+    assert not inspect(runtime_context_records).verified
+
+
+def test_context_reader_rejects_runtime_actions_with_model_identity(runtime_context_records):
+    runtime_context_records[0][2]["llama_task_id"] = 42
+    assert not inspect(runtime_context_records).verified
+
+
+def test_context_reader_rejects_runtime_action_before_admission(runtime_context_records):
+    audit = runtime_context_records[0]
+    audit[0], audit[1] = audit[1], audit[0]
+    for sequence, row in enumerate(audit):
+        row["sequence"] = sequence
+    assert not inspect(runtime_context_records).verified
+
+
+def test_context_reader_requires_runtime_tool_result_acceptance(runtime_context_records):
+    runtime_context_records[0].pop(3)
+    assert not inspect(runtime_context_records).verified
+
+
+def test_context_reader_rejects_deleted_runtime_execution_and_acceptance(runtime_context_records):
+    audit, trace = runtime_context_records
+    expected = json.loads(base64.b64decode(trace[-1]["parsed_content_b64"]))
+    assert inspect(runtime_context_records, expected_release=expected).verified
+    audit[:] = [row for row in audit if row["kind"] not in {
+        "governed_tool_executed_runtime", "tool_result_accepted_runtime",
+    }]
+    assert not inspect(runtime_context_records, expected_release=expected).verified
+
+
+def test_witness_rejects_whole_middle_inference_deleted_from_audit_and_trace(reference_run):
+    audit_path = reference_run / "runtime/decision-events.ndjson"
+    audit = [json.loads(line) for line in audit_path.read_text().splitlines()]
+    audit = [row for row in audit if row.get("llama_task_id") != 41]
+    write_rows(audit_path, audit)
+    trace_path = reference_run / "runtime/raw-trace/run-context.sensitive.ndjson"
+    trace = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    del trace[3:6]
+    write_rows(trace_path, trace)
+    result = verify_reference_run(reference_run)
+    assert not result.all_full
+    assert not result.governance_context.verified
+
+
+def test_context_reader_rejects_release_receipt_without_matching_tool(runtime_context_records):
+    audit, trace = runtime_context_records
+    release = json.loads(base64.b64decode(trace[-1]["parsed_content_b64"]))
+    receipt = next(item for item in release["trace"] if item["event"] == "receipt_inserted")
+    receipt["row_hash"] = "sha256:" + "f" * 64
+    trace[-1]["parsed_content_b64"] = encoded(canonical(release))
+    assert not inspect((audit, trace), expected_release=release).verified
+
+
+def test_context_reader_rejects_mismatched_retained_release_source(context_records):
+    release = json.loads(base64.b64decode(context_records[1][-1]["parsed_content_b64"]))
+    release["source_row_hash"] = "sha256:" + "e" * 64
+    context_records[1][-1]["parsed_content_b64"] = encoded(canonical(release))
+    assert not inspect(context_records).verified
+
+
+def test_witness_binds_context_to_received_release(reference_run):
+    path = reference_run / "runtime/raw-trace/run-context.sensitive.ndjson"
+    trace = [json.loads(line) for line in path.read_text().splitlines()]
+    release = json.loads(base64.b64decode(trace[-1]["parsed_content_b64"]))
+    release["output_row_hash"] = "sha256:" + "e" * 64
+    trace[-1]["parsed_content_b64"] = encoded(canonical(release))
+    write_rows(path, trace)
+    result = verify_reference_run(reference_run)
+    assert not result.all_full
+    assert result.governance_context.verified is False
+
+
+def test_witness_accepts_runtime_selection_and_tools_before_report_inference(reference_run):
+    path = reference_run / "runtime/decision-events.ndjson"
+    audit = [json.loads(line) for line in path.read_text().splitlines()]
+    runtime_events = [
+        {
+            **audit[0],
+            "kind": kind,
+            "facts_json": json.dumps({"content_digest": "sha256:" + "d" * 64}),
+        }
+        for kind in (
+            "sections_selected_runtime",
+            "governed_tool_executed_runtime",
+            "tool_result_accepted_runtime",
+        )
+    ]
+    audit = [audit[0], *runtime_events] + [
+        row for row in audit[1:] if row.get("llama_task_id") not in {31, 41}
+    ]
+    for sequence, row in enumerate(audit):
+        row["sequence"] = sequence
+    write_rows(path, audit)
+    path = reference_run / "runtime/raw-trace/run-context.sensitive.ndjson"
+    trace = [json.loads(line) for line in path.read_text().splitlines()][6:]
+    retain_release_actions(audit, trace)
+    write_rows(path, trace)
+    client_path = reference_run / "client/http.ndjson"
+    client = [json.loads(line) for line in client_path.read_text().splitlines()]
+    response = next(row for row in client if row.get("direction") == "response")
+    response["body_b64"] = trace[-1]["parsed_content_b64"]
+    write_rows(client_path, client)
+    result = verify_reference_run(reference_run)
+    assert result.all_full, [(item.number, item.status) for item in result.questions]
+    assert result.governance_context.phases == (4,)
 
 
 def test_witness_rejects_malformed_admission_with_an_echo_assertion(reference_run):

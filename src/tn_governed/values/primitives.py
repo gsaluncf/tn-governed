@@ -5,6 +5,7 @@ import operator
 import math
 from decimal import getcontext
 from uuid import uuid4
+import weakref
 
 import tn
 
@@ -68,11 +69,16 @@ class Context(StringContext):
         self.editions = {}
         # Bind the stable metadata/attestation handoff to this enrolled endpoint.
         # Content operations retain explicit per-call use and per-input selection.
+        owner = weakref.ref(self)
+        def accept_received(ctx):
+            context = owner()
+            return context is not None and context._admit(ctx)
+        writer = session.did
         session.configure_receive(use=tn.UseContext(application, purpose, "inspect-claims"),
-                                  groups=["evidence"], object_type=VALUE_TYPE, decide=self._admit)
+                                  groups=["evidence"], object_type=VALUE_TYPE, decide=accept_received)
         session.configure_release(use=tn.UseContext(application, purpose, "attest"),
                                   to="governed-runtime", object_type=VALUE_TYPE,
-                                  decide=lambda ctx: ctx.writer == session.did)
+                                  decide=lambda ctx: ctx.writer == writer)
         self.workflow = session.workflow(receive=purpose, release=purpose)
 
     def _monitor(self, request):
@@ -85,6 +91,7 @@ class Context(StringContext):
         return super()._append(kind, request, call_id, record_value({**details, "actor": self.actor}))
 
     def _read(self, value, groups, operation):
+        self._adopt((value,))
         obj = self.store_object(value.reference.object_id)
         use = tn.UseContext(self.application, self.purpose, operation)
         record = self.editions.get(obj.id)
@@ -101,12 +108,14 @@ class Context(StringContext):
         if ctx.governance.dataset_bindings:
             if not self.catalog.accepts(ctx, self.policy_dag):
                 return False
-            def ancestor(identity):
-                parent = self.store_object(identity)
-                view = self.session.governance(parent)
-                view.accept(use=ctx.use_context, groups=["evidence"], decide=self.metadata_accept)
-                return view
-            tn.LineageVerifier(max_objects=65536, max_depth=256).verify(self.session.governance(ctx.object), self.catalog, self.policy_dag, ancestor)
+        def ancestor(identity):
+            parent = self.store_object(identity)
+            view = self.session.governance(parent)
+            groups = ["evidence"] if "evidence" in parent.group_names else ["values"]
+            view.accept(use=ctx.use_context, groups=groups, decide=self.metadata_accept)
+            return view
+        tn.LineageVerifier(max_objects=65536, max_depth=256).verify(
+            self.session.governance(ctx.object), self.catalog, self.policy_dag, ancestor)
         return True
 
     def hydrate(self, reference, decision_id, result_id, *, kind):
@@ -116,14 +125,28 @@ class Context(StringContext):
     def hydrate_many(self, handles):
         handles = tuple(handles)
         values = []
-        for reference, decision_id, result_id, kind in handles:
+        for handle in handles:
+            if len(handle) not in (4, 5):
+                raise ValueError("received handles require four fields and optional native material")
+            reference, decision_id, result_id, kind = handle[:4]
+            carried = handle[4] if len(handle) == 5 else None
             if kind not in {"str", *KINDS}:
                 raise TypeError("unsupported primitive kind")
             cls = TNString if kind == "str" else TNNumeric
-            values.append(cls(reference, decision_id, result_id, metadata_provider=self.string_metadata))
-        for (_, binding, _), handle in zip(self._metadata_many(values), handles, strict=True):
+            values.append(cls(reference, decision_id, result_id, metadata_provider=self.string_metadata,
+                              publication=carried))
+        metadata = self._metadata_many(values)
+        shared = {}
+        for index, ((_, binding, _), handle) in enumerate(zip(metadata, handles, strict=True)):
             if binding["declared"]["kind"] != handle[3]:
                 raise EvidenceError("requested type differs from signed primitive kind")
+            value = values[index]
+            if value.publication is None:
+                values[index] = type(value)(
+                    value.reference, value.decision_id, value.result_id,
+                    metadata_provider=self.string_metadata,
+                    publication=self._received_carrier(value, binding, shared=shared),
+                )
         return tuple(values)
 
     def _metadata(self, value, *, _reads=None, _records=None):
@@ -134,8 +157,9 @@ class Context(StringContext):
         identity = value.reference.object_id
         if identity not in reads:
             data = self._read(value, ["evidence"], "inspect-claims")
-            reads[identity] = data, data.get("manifest", group="evidence")
-        data, manifest = reads[identity]
+            snapshot = data.snapshot
+            reads[identity] = data, data.get("manifest", group="evidence"), snapshot.writer, snapshot.envelope
+        data, manifest, writer, envelope = reads[identity]
         if not isinstance(manifest, dict) or manifest.get("schema") != SCHEMA:
             raise EvidenceError("missing signed primitive manifest")
         binding = manifest.get("bindings", {}).get(value.reference.field)
@@ -153,13 +177,13 @@ class Context(StringContext):
         result, decision = record(value.result_id), record(value.decision_id)
         rb, db = result.body, decision.body
         if (rb["kind"] != "Result" or db["kind"] != "Decision"
-                or result.writer != data.snapshot.writer or decision.writer != result.writer
+                or result.writer != writer or decision.writer != result.writer
                 or rb["details"].get("output") != value.reference.to_dict()
                 or rb["details"].get("decision_id") != decision.id
                 or rb["inputs"] != binding["parents"]
                 or rb["details"].get("claims") != binding["claims"]
                 or rb["details"].get("field_commitment") !=
-                    data.snapshot.envelope[value.reference.group]["field_hashes"][value.reference.field]
+                    envelope[value.reference.group]["field_hashes"][value.reference.field]
                 or db["details"].get("permitted") is not True
                 or rb["sequence"] <= db["sequence"]
                 or any(rb[key] != db[key] for key in (
@@ -177,6 +201,7 @@ class Context(StringContext):
         return data, binding, tuple(claims)
 
     def _metadata_many(self, values):
+        self._adopt(values)
         reads, records = {}, {}
         return [self._metadata(value, _reads=reads, _records=records) for value in values]
 
@@ -232,12 +257,16 @@ class Context(StringContext):
             self._append("Refusal", base, call_id, {"decision_id": decision, "reason": "input admission failed"})
             raise OperationDenied(f"input admission failed: {type(exc).__name__}") from exc
         claims = {c.id: c for _, _, cs in items for c in cs}
-        policies = []
-        for data, _, _ in items:
+        policies, writers = [], {}
+        for value, (data, _, _) in zip(values, items, strict=True):
+            identity = value.reference.object_id
+            if identity in writers:
+                continue
+            writers[identity] = data.snapshot.writer
             for policy in data.policies:
                 if not any(policy.matches_contract(existing) for existing in policies):
                     policies.append(policy)
-        request = replace(base, writers=tuple(d.snapshot.writer for d, _, _ in items),
+        request = replace(base, writers=tuple(writers[value.reference.object_id] for value in values),
                           policies=tuple(policies),
                           claims=tuple(claims.values()))
         return request, items, self._decision(request, call_id)
@@ -248,10 +277,10 @@ class Context(StringContext):
             key = value.reference.object_id, value.reference.group
             if key not in opened:
                 data = self._read(value, [value.reference.group, "evidence"], request.operation)
-                opened[key] = data, data.get("manifest", group="evidence")
+                opened[key] = data, data.get("manifest", group="evidence"), data.get(None, group=value.reference.group)
                 copies[key] = data.copy()
-            data, manifest = opened[key]
-            payload = data.get(value.reference.field, group=value.reference.group)
+            data, manifest, payloads = opened[key]
+            payload = payloads[value.reference.field]
             facts = manifest["bindings"][value.reference.field]["declared"]
             content = decode(payload, facts["kind"])
             if describe(content) != facts:
@@ -281,7 +310,7 @@ class Context(StringContext):
         publication = (self.workflow.release(data, decide=accept_release) if request.operation == "attest"
                        else self.session.release(data, use=use, to="governed-runtime",
                                                  object_type=VALUE_TYPE, decide=accept_release))
-        self.recorder.store.put(publication)
+        self._retain_publication(data, publication)
         return publication
 
     def _publish(self, data, *, content, declared, claims, origins, values, request,
@@ -305,7 +334,8 @@ class Context(StringContext):
                            "literal_inputs": list(literals)}, "source": source,
         })
         cls = TNString if declared["kind"] == "str" else TNNumeric
-        return cls(reference, decision_id, result, metadata_provider=self.string_metadata)
+        return cls(reference, decision_id, result, metadata_provider=self.string_metadata,
+                   publication=self._carried(publication, values, (decision_id, result, *claims)))
 
     def originate_batch(self, cells, policy, *, request, decision_id, call_id):
         """Publish one column batch; retain a signed Result for each exact field.
@@ -340,6 +370,7 @@ class Context(StringContext):
         data.set(None, {"manifest": {"schema": SCHEMA, "bindings": bindings}}, group="evidence")
         publication = self._release_value(data, replace(request, policies=(policy,)))
         commitments = publication.envelope["values"]["field_hashes"]
+        carried_source = self._carried(publication, extra_ids=(decision_id,))
         values = []
         for field, binding in bindings.items():
             reference = ValueReference(publication.id, field, "values")
@@ -350,7 +381,10 @@ class Context(StringContext):
                 "source": binding["source"],
             })
             cls = TNString if binding["declared"]["kind"] == "str" else TNNumeric
-            values.append(cls(reference, decision_id, result, metadata_provider=self.string_metadata))
+            carried = None if carried_source is None else self.recorder.store.carry(
+                publication.id, parents=(carried_source,), extra_ids=(result,))
+            values.append(cls(reference, decision_id, result, metadata_provider=self.string_metadata,
+                              publication=carried))
         return tuple(values)
 
     def originate(self, content, policy, *, source, request, decision_id, call_id):

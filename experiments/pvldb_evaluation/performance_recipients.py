@@ -1,9 +1,9 @@
 """Measure independent recipient requests against one retained publication.
 
 Each spawned process owns its native session, reader capability, local catalog,
-evaluator and publication store. A request times handle hydration, verification,
-local authorization, plaintext opening and durable signed disclosure records.
-Enrollment, store copying, process startup and signed catalog admission are
+evaluator and native objects. A request times handle hydration, verification,
+local authorization, plaintext opening and signed disclosure records in memory.
+Enrollment, publication transfer, process startup and signed catalog admission are
 excluded. Catalogs stay admitted across rounds; value verification and decisions
 are repeated. Warmups are retained but excluded from reported statistics.
 
@@ -64,6 +64,8 @@ def _request(recipient):
     ids = context.recorder.store.record_ids(context.recorder.context_id)[before:]
     result.update(
         signed_records=len(ids), record_ids=list(ids),
+        record_publications=[context.recorder.store.get(identity).decode("utf-8")
+                             for identity in ids],
         identity=recipient["session"].did, pid=os.getpid(),
     )
     return result
@@ -135,11 +137,14 @@ def run_recipients(source_directory, output_directory, concurrency, repetitions,
         "timed_operation": (
             "hydrate, verify lineage, authorize, open, record disclosure, compare content"
         ),
-        "excluded_setup": "enrollment, store transfer, process startup, signed catalog admission",
+        "excluded_setup": (
+            "enrollment, publication transfer, process startup, signed catalog admission"
+        ),
         "cache_state": (
             "admitted local catalog; request-local value verification; no decision reuse"
         ),
         "round_wall_boundary": "before request dispatch through receipt of every worker result",
+        "response_evidence": "native signed records serialized after each request timer",
         "workers": [], "rounds": [], "error_type": None,
     }
     processes, connections = [], []

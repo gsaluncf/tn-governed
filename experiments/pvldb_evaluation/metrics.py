@@ -60,11 +60,12 @@ class Profiler:
         setattr(cls, name, measured)
 
     def __enter__(self):
-        from tn_governed.values.primitives import Context
-        from tn_governed.values.evidence import EvidenceRecorder
-        from tn_governed.publications import PublicationStore
-        from tn_governed.sqlite_publications import SQLitePublicationStore
         from tn_polars.tn_boundary import PolicySet
+
+        from tn_governed.native_objects import NativeObjects
+        from tn_governed.publications import PublicationStore
+        from tn_governed.values.evidence import EvidenceRecorder
+        from tn_governed.values.primitives import Context
         targets = [
             (Context, "_metadata", "primitive_metadata"),
             (Context, "_decision", "decision_and_obligations"),
@@ -73,8 +74,8 @@ class Profiler:
             (EvidenceRecorder, "append", "signed_record"),
             (PublicationStore, "put", "publication_persistence"),
             (PublicationStore, "put_record", "record_persistence"),
-            (SQLitePublicationStore, "put", "publication_persistence"),
-            (SQLitePublicationStore, "put_record", "record_persistence"),
+            (NativeObjects, "put", "native_object_retention"),
+            (NativeObjects, "put_record", "native_record_retention"),
             (PolicySet, "decide", "dataframe_policy_evaluation"),
         ]
         try:

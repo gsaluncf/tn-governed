@@ -114,21 +114,6 @@ fn model_references_verified_provenance_while_runtime_retains_the_full_graph() {
         .as_str()
         .unwrap()
         .starts_with("hmac-sha256:"));
-    accept(
-        &mut session,
-        turn,
-        "select_sections",
-        json!({"sections":["finance"]}),
-    )
-    .unwrap();
-    let turn = session.next_model_turn().unwrap();
-    let body: Value = serde_json::from_slice(&turn.request_json).unwrap();
-    let content: Value =
-        serde_json::from_str(body["messages"][1]["content"].as_str().unwrap()).unwrap();
-    assert_eq!(
-        content["applicable_source_governance"],
-        args["applicable_source_governance"]
-    );
     let tn_runtime::ActionOutcome::GovernedRelease(release) = accept(
         &mut session,
         turn,

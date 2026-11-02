@@ -19,7 +19,7 @@ import tn
 from tn_governed.publications import open_publication_store
 
 from .evidence import EvidenceError, verify_tape
-from .primitives import SCHEMA, VALUE_TYPE
+from .primitives import SCHEMA, VALUE_TYPE, unique_origins
 from .provision import POLICY
 
 
@@ -229,18 +229,19 @@ def verify(root):
                     "result transition changed its contributing references")
             for literal in transition["literal_inputs"]:
                 require(literal["claims"] == [], "literal invents a claimant")
-            parent_policies, parent_claims, parent_origins = set(), set(), []
+            parent_policies, parent_claims = set(), set()
             for parent in binding["parents"]:
                 pk = ref_key(parent)
                 visit(pk)
                 parent_policies.update(nodes[pk]["policy_revisions"])
                 pb = bindings_by_key[pk]
                 parent_claims.update(pb["claims"])
-                for origin in pb["origins"]:
-                    if origin not in parent_origins:
-                        parent_origins.append(origin)
                 edges.append({"parent": reference_node_id(pk), "child": reference_node_id(key),
                               "operation": rb["operation"]})
+            parent_origins = unique_origins(
+                origin for parent in binding["parents"]
+                for origin in bindings_by_key[ref_key(parent)]["origins"]
+            )
             actual_policies = {p.revision_id for p in working.policies}
             require(parent_claims <= set(binding["claims"]), "a derivative dropped a contributing claim")
             require(parent_claims == set(decision.body["details"]["considered_claims"]),

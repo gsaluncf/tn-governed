@@ -568,6 +568,65 @@ def test_transport_admits_without_publisher_store_or_online_registry(sql_endpoin
     assert receiver.recorder.head is not None
 
 
+def test_query_object_binds_to_an_independent_endpoint_without_persistence(
+    sql_endpoint, monkeypatch
+):
+    import gc
+    import weakref
+
+    from tn_governed.native_objects import NativeObjects
+
+    result = sql_endpoint.driver.execute_query(JOIN, {"factor": 3, "enabled": 1})
+    original = sql_endpoint.contexts["consumer"]
+    recipient_session = sql_endpoint.stack.enter_context(
+        tn.Session.from_config(str(sql_endpoint.paths["consumer"]))
+    )
+    objects = NativeObjects()
+    resolver = UnityGovernance(
+        "http://offline",
+        "offline",
+        session=recipient_session,
+        authority=original.resolver.authority,
+        administration=original.resolver.administration,
+        store=objects,
+    )
+    resolver.registry._request = lambda *_: pytest.fail("native handoff called the registry")
+    receiver = Context(
+        recipient_session,
+        EvidenceRecorder(recipient_session, objects, original.recorder.policy),
+        AssignedRules(
+            resolver,
+            actor="analyst",
+            application="analytics",
+            purpose="internal",
+            writers=[sql_endpoint.contexts["gateway"].session.did],
+        ),
+        application="analytics",
+        purpose="internal",
+        actor="analyst",
+        resolver=resolver,
+    )
+    owner = weakref.ref(original)
+    sql_endpoint.driver.consumer = None
+    del sql_endpoint.contexts["consumer"]
+    del original
+    gc.collect()
+    assert owner() is None
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("native query handoff used persistence")
+
+    monkeypatch.setattr(sqlite3, "connect", forbidden)
+    for method in ("put", "read", "get", "put_record"):
+        monkeypatch.setattr(PublicationStore, method, forbidden)
+    received = result.bind(receiver)
+    assert received.publication.object is result.publication.object
+    assert received.reveal("support-console") == [(12, "same")] * 4
+    resolver.trust = replace(resolver.trust, metadata=lambda _: False)
+    with pytest.raises(GovernedError):
+        result.bind(receiver)
+
+
 def test_portable_query_rejects_changed_contributor_source_list(sql_endpoint):
     from tn_governed.values.query_result import GovernedQueryResult
 

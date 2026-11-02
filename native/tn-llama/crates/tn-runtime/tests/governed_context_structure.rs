@@ -11,7 +11,7 @@ fn decision_context_retains_nested_records_without_generated_bookkeeping() {
     let (_keys, runtime) = fixture.runtime();
     let mut session = runtime.start_session(&request).unwrap();
     let turn = session.next_model_turn().unwrap();
-    assert_eq!(turn.permit.phase(), Phase::SectionSelection);
+    assert_eq!(turn.permit.phase(), Phase::GovernedAction);
     let body: Value = serde_json::from_slice(&turn.request_json).unwrap();
     let context: Value =
         serde_json::from_str(body["messages"][1]["content"].as_str().unwrap()).unwrap();
@@ -20,7 +20,7 @@ fn decision_context_retains_nested_records_without_generated_bookkeeping() {
     assert!(governance["source_lineage"].is_array());
     assert_eq!(governance["release_context"]["operation"], "calculate");
     let parameters = &body["tools"][0]["function"]["parameters"];
-    assert_eq!(parameters["required"], json!(["sections"]));
+    assert_eq!(parameters["required"], json!(["report_html"]));
     assert!(parameters["properties"].get("governance").is_none());
 }
 

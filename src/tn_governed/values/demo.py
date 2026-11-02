@@ -14,7 +14,8 @@ from uuid import uuid4
 
 import tn
 from tn.governed import NotEntitled
-from tn_governed.publications import PublicationStore, write_once
+from tn_governed.native_objects import NativeObjects
+from tn_governed.publications import write_once
 
 from .catalog import AssignedRules, UnityGovernance
 from .evidence import EvidenceRecorder
@@ -65,7 +66,7 @@ def main():
         connection.executemany("INSERT INTO customer_data VALUES (?, ?)", [("Ada", samples[0]), ("Grace", samples[1])])
         connection.commit()
     configs = provision(root / "sessions")
-    store = PublicationStore(root / "publications")
+    store = NativeObjects()
     catalog_name = "primitives_" + uuid4().hex[:12]
     contexts = {}
     with ExitStack() as stack:
@@ -155,6 +156,7 @@ def main():
             denied_driver.table("customer_data").select("name,value").limit(1).execute()
         except OperationDenied as exc:
             refused_source = str(exc)
+        store.export(root / "publications")
         tapes = {}
         for label_, ctx in contexts.items():
             tapes[label_] = {**ctx.recorder.export(root / "tapes" / label_),

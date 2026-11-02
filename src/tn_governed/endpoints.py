@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import math
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from uuid import uuid4
 
 import tn
 
+from .native_objects import CarriedPublication, NativeObjects
 from .values.evidence import EvidenceError, EvidenceRecorder, read_record
 from .values.obligations import ObligationRun, run_obligations
 from .values.runtime import Assessment, Claim, Request
@@ -38,6 +39,7 @@ class GovernedArtifact:
     reference: ValueReference
     decision_id: str
     result_id: str
+    carrier: CarriedPublication | None = field(default=None, compare=False, hash=False, repr=False)
 
     def __post_init__(self):
         from .publications import object_digest
@@ -48,6 +50,11 @@ class GovernedArtifact:
             raise ValueError("artifact references must select values.value")
         object_digest(self.decision_id)
         object_digest(self.result_id)
+        if self.carrier is not None and (
+            not isinstance(self.carrier, CarriedPublication)
+            or self.carrier.object.id != self.reference.object_id
+        ):
+            raise ValueError("artifact carrier must contain its native publication")
 
     def to_dict(self):
         return {
@@ -81,7 +88,7 @@ class Endpoint:
         self,
         *,
         session,
-        store,
+        store=None,
         evidence_policy,
         evaluator,
         application,
@@ -92,11 +99,11 @@ class Endpoint:
     ):
         if not all(callable(callback) for callback in (evaluator, accept_metadata)):
             raise TypeError("endpoint requires authority and operation evaluators")
-        self.session, self.store = session, store
+        self.session, self.store = session, NativeObjects() if store is None else store
         self.application, self.purpose = application, purpose
         self.evaluator, self.accept_metadata = evaluator, accept_metadata
         self.evidence_policies = tuple(evidence_policies) + (evidence_policy,)
-        self.recorder = EvidenceRecorder(session, store, evidence_policy)
+        self.recorder = EvidenceRecorder(session, self.store, evidence_policy)
         self.obligations = dict(obligations or {})
         self._lock = threading.RLock()
 
@@ -140,6 +147,8 @@ class Endpoint:
     def _metadata(self, artifact, _cache=None, _depth=0):
         if not isinstance(artifact, GovernedArtifact):
             raise TypeError("governed endpoint inputs require GovernedArtifact handles")
+        if artifact.carrier is not None:
+            self._include(artifact.carrier)
         cache = {} if _cache is None else _cache
         if artifact in cache:
             return cache[artifact]
@@ -547,7 +556,12 @@ class Endpoint:
                 "value_commitment": publication.envelope["values"]["field_hashes"]["value"],
             },
         )
-        return GovernedArtifact(reference, decision, result)
+        return self._carried(
+            GovernedArtifact(reference, decision, result),
+            parents=inputs,
+            manifest=manifest,
+            parent_metadata=metadata,
+        )
 
     def _execute(
         self,
@@ -815,57 +829,139 @@ class Endpoint:
                 )
                 raise
 
+    def _include(self, carrier):
+        if isinstance(self.store, NativeObjects):
+            self.store.include(carrier)
+        else:
+            for obj in carrier.objects():
+                self.store.put(obj)
+
+    def _closure(self, artifact, *, max_objects=10000, stop_ids=(), include_tape=False):
+        pending = [artifact.reference.object_id, artifact.decision_id, artifact.result_id]
+        stopped = set(stop_ids)
+        visited = {}
+        while pending:
+            identity = pending.pop()
+            if identity in visited or identity in stopped:
+                continue
+            if len(visited) >= max_objects:
+                raise EvidenceError("artifact closure exceeds the configured object limit")
+            obj = self.store.read(identity)
+            visited[identity] = obj
+            view = self.session.governance(obj)
+            pending.extend(source.object_id for source in view.governance.sources)
+            if obj.object_type == ARTIFACT_TYPE and "evidence" in obj.envelope:
+                data = self.session.receive(
+                    obj,
+                    use=tn.UseContext(self.application, self.purpose, "inspect"),
+                    groups=["evidence"],
+                    decide=self._admit,
+                )
+                manifest = data.get("manifest", group="evidence")
+                if manifest:
+                    pending.extend(
+                        [
+                            manifest["decision_id"],
+                            *manifest["claims"],
+                            *manifest["action_records"],
+                        ]
+                    )
+                    pending.extend(item["object_id"] for item in manifest["external_inputs"])
+                    for parent in manifest["parents"]:
+                        handle = GovernedArtifact.from_dict(parent)
+                        pending.extend(
+                            [handle.reference.object_id, handle.decision_id, handle.result_id]
+                        )
+            elif obj.object_type == "experiment.evidence":
+                record = self._record(identity)
+                if include_tape and record.body["previous"]:
+                    pending.append(record.body["previous"])
+                if record.body["kind"] == "Decision":
+                    pending.extend(record.body["details"].get("action_progress", ()))
+                pending.extend(item["object_id"] for item in record.body["inputs"])
+        return visited
+
+    def _carried(
+        self, artifact, *, parents=(), max_objects=10000, manifest=None,
+        parent_metadata=None, metadata_cache=None, carrier_cache=None,
+    ):
+        metadata_cache = {} if metadata_cache is None else metadata_cache
+        carrier_cache = {} if carrier_cache is None else carrier_cache
+        if artifact in carrier_cache:
+            return carrier_cache[artifact]
+        if manifest is None:
+            manifest = self._metadata(artifact, metadata_cache)[1]
+        if not parents:
+            parents = tuple(GovernedArtifact.from_dict(item) for item in manifest["parents"])
+        if parent_metadata is None:
+            parent_metadata = tuple(self._metadata(parent, metadata_cache) for parent in parents)
+        retained_parents, inherited = [], set()
+        for parent, (_, parent_manifest, _) in zip(parents, parent_metadata, strict=True):
+            if parent.carrier is None:
+                parent = self._carried(
+                    parent, max_objects=max_objects, manifest=parent_manifest,
+                    metadata_cache=metadata_cache, carrier_cache=carrier_cache,
+                )
+            retained_parents.append(parent.carrier)
+            inherited.update((parent.reference.object_id, parent.decision_id, parent.result_id))
+            inherited.update(parent_manifest["claims"])
+            inherited.update(parent_manifest["action_records"])
+        native = self._closure(artifact, max_objects=max_objects, stop_ids=inherited)
+        support = tuple(obj for identity, obj in native.items()
+                        if identity != artifact.reference.object_id)
+        carriers = tuple(retained_parents)
+        carrier = CarriedPublication(native[artifact.reference.object_id], carriers, support)
+        carried = replace(artifact, carrier=carrier)
+        carrier_cache[artifact] = carried
+        return carried
+
     def export(self, artifact, *, max_objects=10000):
         with self._lock:
             self._metadata(artifact)
-            pending = [artifact.reference.object_id, artifact.decision_id, artifact.result_id]
-            visited = {}
-            while pending:
-                identity = pending.pop()
-                if identity in visited:
-                    continue
-                if len(visited) >= max_objects:
-                    raise EvidenceError("artifact closure exceeds the configured object limit")
-                obj = self.store.read(identity)
-                visited[identity] = obj.forward()
-                view = self.session.governance(obj)
-                pending.extend(source.object_id for source in view.governance.sources)
-                if obj.object_type == ARTIFACT_TYPE and "evidence" in obj.envelope:
-                    data = self.session.receive(
-                        obj,
-                        use=tn.UseContext(self.application, self.purpose, "inspect"),
-                        groups=["evidence"],
-                        decide=self._admit,
-                    )
-                    manifest = data.get("manifest", group="evidence")
-                    if manifest:
-                        pending.extend(
-                            [
-                                manifest["decision_id"],
-                                *manifest["claims"],
-                                *manifest["action_records"],
-                            ]
-                        )
-                        pending.extend(item["object_id"] for item in manifest["external_inputs"])
-                        for parent in manifest["parents"]:
-                            handle = GovernedArtifact.from_dict(parent)
-                            pending.extend(
-                                [handle.reference.object_id, handle.decision_id, handle.result_id]
-                            )
-                elif obj.object_type == "experiment.evidence":
-                    record = self._record(identity)
-                    if record.body["previous"]:
-                        pending.append(record.body["previous"])
-                    pending.extend(item["object_id"] for item in record.body["inputs"])
-            return ArtifactBundle(artifact, tuple(visited.values()))
+            native = self._closure(artifact, max_objects=max_objects)
+            handle = GovernedArtifact.from_dict(artifact.to_dict())
+            return ArtifactBundle(handle, tuple(obj.forward() for obj in native.values()))
 
     def receive(self, bundle, *, max_objects=10000, max_bytes=64 * 1024 * 1024):
         if not isinstance(bundle, ArtifactBundle):
             raise TypeError("endpoint transfer requires an ArtifactBundle")
-        if len(bundle.publications) > max_objects or sum(map(len, bundle.publications)) > max_bytes:
+        return self.receive_many(
+            (bundle.artifact,), publications=bundle.publications,
+            max_objects=max_objects, max_bytes=max_bytes,
+        )[0]
+
+    def receive_many(
+        self, artifacts, *, publications, max_objects=10000, max_bytes=64 * 1024 * 1024,
+    ):
+        """Admit one bounded native transfer before retaining any of its artifacts."""
+        artifacts, publications = tuple(artifacts), tuple(publications)
+        if any(not isinstance(artifact, GovernedArtifact) for artifact in artifacts):
+            raise TypeError("artifact transfer requires GovernedArtifact handles")
+        if (len(artifacts) > max_objects or len(publications) > max_objects
+                or sum(map(len, publications)) > max_bytes):
             raise EvidenceError("artifact transfer exceeds configured limits")
         with self._lock:
-            for wire in bundle.publications:
-                self.store.put(tn.GovernedObject.parse(wire))
-            self._metadata(bundle.artifact)
-            return bundle.artifact
+            received = NativeObjects()
+            for wire in publications:
+                received.put(tn.GovernedObject.parse(wire))
+            handles = tuple(
+                GovernedArtifact.from_dict(artifact.to_dict()) for artifact in artifacts
+            )
+            retained = self.store
+            try:
+                self.store = received
+                metadata_cache, carrier_cache = {}, {}
+                for artifact in handles:
+                    self._metadata(artifact, metadata_cache)
+                carried = tuple(
+                    self._carried(
+                        artifact, max_objects=max_objects, metadata_cache=metadata_cache,
+                        carrier_cache=carrier_cache,
+                    )
+                    for artifact in handles
+                )
+            finally:
+                self.store = retained
+            for artifact in carried:
+                self._include(artifact.carrier)
+            return carried

@@ -4,6 +4,7 @@ The transport returns constructed tool and report publications. No model runs.
 """
 
 import hashlib
+import io
 import json
 import sqlite3
 from contextlib import ExitStack, closing
@@ -15,8 +16,9 @@ from tn.governed import UseDenied
 from tn_llama_client.protocol import NativeModelRelease
 
 from tn_governed.publications import PublicationStore
+from tn_governed.native_objects import NativeObjects
 from tn_governed.values.catalog import AssignedRules, UnityGovernance
-from tn_governed.values.evidence import EvidenceRecorder, verify_tape
+from tn_governed.values.evidence import EvidenceRecorder, read_record, verify_tape
 from tn_governed.values.market_report import (
     APPLICATION,
     MODEL_USE,
@@ -32,8 +34,8 @@ from tn_governed.values.provision import provision
 from tn_governed.values.sql import GovernedSQL, source_identity
 
 
-@pytest.fixture
-def report_workflow(tmp_path, monkeypatch):
+@pytest.fixture(params=["native", "archive"])
+def report_workflow(tmp_path, monkeypatch, request):
     database = tmp_path / "market.sqlite"
     with closing(sqlite3.connect(database)) as connection:
         connection.execute("CREATE TABLE market_data (name TEXT NOT NULL)")
@@ -66,7 +68,8 @@ def report_workflow(tmp_path, monkeypatch):
             for role, path in {**input_paths, **output_paths}.items()
         }
         authority = sessions["catalog"]
-        store = PublicationStore(tmp_path / "publications")
+        store = (NativeObjects() if request.param == "native"
+                 else PublicationStore(tmp_path / "publications"))
         resolvers = {}
         for role in ("catalog", "gateway", "worker"):
             resolver = UnityGovernance(
@@ -239,6 +242,7 @@ def report_workflow(tmp_path, monkeypatch):
             releases=releases, root=tmp_path, queue=queue,
             record_count=len(context.recorder.records()), source=source,
             construct_release=construct_release,
+            input_session=sessions["model-reader"],
         )
 
 
@@ -282,6 +286,48 @@ def test_report_returns_only_after_recipient_acceptance_and_signed_review_queue(
     assert queued.read_bytes() == workflow.context.recorder.store.get(review.id)
     assert report.needs_review
     assert NOTICE in report.report_html
+
+
+@pytest.mark.parametrize("report_workflow", ["native"], indirect=True)
+def test_report_carries_cross_ceremony_evidence_without_original_object_collection(
+    report_workflow, monkeypatch,
+):
+    workflow = report_workflow
+    report = call(workflow)
+    configuration = json.loads(workflow.endpoint.runtime_config.read_text())
+    assert configuration["ceremony_id"] != configuration["output_ceremony_id"]
+    assert report.publication.object is report.object
+    carried = {publication.id: publication for publication in report.publication.objects()}
+    assert {publication.id for publication in workflow.value.publication.objects()} <= set(carried)
+    assert {publication.id for publication in report.release.tool_objects} <= set(carried)
+    for identity, kind in (
+        (report.decision_id, "Decision"), (report.handoff_record_id, "ModelHandoff"),
+        (report.review.record_id, "ReviewRequested"), (report.result_record_id, "ModelResult"),
+    ):
+        publication = tn.GovernedObject.read(io.BytesIO(carried[identity].forward()))
+        record = read_record(publication, session=workflow.context.session,
+                             policy=workflow.context.recorder.policy)
+        assert record.id == identity and record.body["kind"] == kind
+        assert record.writer == workflow.context.session.did
+    received = NativeObjects()
+    received.include(report.publication)
+    accepted_writers = workflow.context.evaluator.writers
+
+    def unavailable(*_):
+        raise AssertionError("recipient accessed the sender's object collection")
+
+    monkeypatch.setattr(workflow.context, "store_object", unavailable)
+    monkeypatch.setattr(workflow.context.recorder.store, "read", unavailable)
+
+    def resolve(identity):
+        publication = received.read(identity)
+        assert publication.writer in accepted_writers
+        return workflow.input_session.governance(publication)
+
+    monkeypatch.setattr(workflow.reader, "resolve_ancestor", resolve)
+    reopened = workflow.reader.open(report.release)
+    assert reopened.get("report_html", group="default") == report.report_html
+    assert not (workflow.root / "publications").exists()
 
 
 def test_recipient_refusal_records_failure_before_review_registration(report_workflow):

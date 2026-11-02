@@ -17,16 +17,18 @@ from uuid import uuid4
 import tn
 from tn.governed import NotEntitled
 
-from tn_governed.publications import open_publication_store
+from tn_governed.native_objects import NativeObjects
 from . import Context, EvidenceRecorder, Assessment, Request, TNNumeric, OperationDenied
 from .evidence import verify_tape, EvidenceError
 from .numeric_codec import encode
 from .provision import provision
 
 
-def run(directory, *, storage="sqlite"):
+def run(directory, *, storage="files"):
+    if storage != "files":
+        raise ValueError("native numeric computation exports file archives")
     configs = provision(Path(directory) / 'sessions')
-    store = open_publication_store(Path(directory) / 'publications', backend=storage)
+    store = NativeObjects()
     checks = []
     with store, tn.Session.from_config(str(configs['worker'])) as session:
         policy = session.policy('experiment.administration')
@@ -175,6 +177,7 @@ def run(directory, *, storage="sqlite"):
                               expected_context=recorder.context_id, expected_head=recorder.head,
                               policy=recorder.policy)
         checks.append('native signature and record-chain verification')
+        store.export(Path(directory) / 'publications')
         checkpoint = recorder.export(Path(directory) / 'worker-records')
         return {'checks': checks, 'signed_records_verified': len(records), 'checkpoint': checkpoint,
                 'storage': storage,
@@ -187,8 +190,8 @@ def run(directory, *, storage="sqlite"):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-directory', type=Path)
-    parser.add_argument('--storage', choices=('files', 'sqlite'), default='sqlite',
-                        help='Publication storage (default: sqlite; files retains separate-file storage)')
+    parser.add_argument('--storage', choices=('files',), default='files',
+                        help='Archive format at the completed application boundary')
     args = parser.parse_args()
     if args.run_directory:
         result = run(args.run_directory, storage=args.storage)

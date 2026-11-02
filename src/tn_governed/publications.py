@@ -83,6 +83,16 @@ class PublicationStore:
             identities.append(identity)
         return tuple(identities)
 
+    def record_contexts(self) -> tuple[str, ...]:
+        """Enumerate archived record chains without reading publication contents."""
+        tapes = self.root / "tapes"
+        if not tapes.is_dir():
+            return ()
+        contexts = tuple(sorted(path.name for path in tapes.iterdir() if path.is_dir()))
+        for context in contexts:
+            validate_record_position(context, 1)
+        return contexts
+
     def put(self, object: tn.GovernedObject) -> str:
         if self.read_only:
             raise PermissionError("publication store is read-only")

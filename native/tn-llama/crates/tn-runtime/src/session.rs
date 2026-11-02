@@ -116,7 +116,14 @@ pub(crate) struct GovernedSessionState {
     pub tools: Vec<crate::output_tn::GovernedPublication>,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum CallOrigin {
+    Model,
+    Runtime,
+}
+
 struct StoredCall {
+    origin: CallOrigin,
     id: String,
     name: String,
     arguments: String,
@@ -543,15 +550,6 @@ impl Session {
 
     pub fn next_model_turn(&mut self) -> Result<ModelTurn, TnLlamaError> {
         let mut core = lock_core(&self.core)?;
-        let phase = match core.state.phase() {
-            Some(phase) => phase,
-            None => {
-                return Err(session_error(
-                    "tn_session_state",
-                    "terminal session cannot issue a model turn",
-                ));
-            }
-        };
         if core.outstanding.is_some() {
             return Err(terminalize(
                 &mut core,
@@ -562,6 +560,16 @@ impl Session {
                 FailedSink::None,
             ));
         }
+        advance_runtime_actions(&mut core)?;
+        let phase = match core.state.phase() {
+            Some(phase) => phase,
+            None => {
+                return Err(session_error(
+                    "tn_session_state",
+                    "terminal session cannot issue a model turn",
+                ));
+            }
+        };
         let governance_context = match model_governance(&core) {
             Ok(context) => context,
             Err(error) => return Err(terminalize(&mut core, error, FailedSink::None)),
@@ -693,82 +701,7 @@ impl Session {
             Ok(sections) => sections,
             Err(error) => return Err(terminalize(&mut core, error, FailedSink::None)),
         };
-        let mut opened_sections = BTreeMap::new();
-        if let Some(state) = &core.governed {
-            let data = match state.input.open(
-                core.governed_request(),
-                state.view.as_ref().expect("governance accepted"),
-                &selected_sections,
-            ) {
-                Ok(data) => data,
-                Err(error) => return Err(terminalize(&mut core, error, FailedSink::None)),
-            };
-            opened_sections = data
-                .groups()
-                .iter()
-                .map(|(name, fields)| (name.clone(), Value::Object(fields.clone())))
-                .collect();
-            core.governed.as_mut().expect("governed state").data = Some(data);
-        } else {
-            for section in &selected_sections {
-                let opened = match core
-                    .governance_reader
-                    .open_group_and_verify(&core.admitted_request().request.row, section)
-                {
-                    Ok(opened) => opened,
-                    Err(error) => return Err(terminalize(&mut core, error, FailedSink::None)),
-                };
-                opened_sections.insert(
-                    section.clone(),
-                    Value::Object(opened.plaintext.into_iter().collect()),
-                );
-            }
-        }
-        if append_audit(
-            &core,
-            "sections_selected",
-            State::SectionSelection,
-            State::GovernedAction,
-            Some(permit.phase),
-            core.outstanding.as_ref().and_then(|turn| turn.task_id),
-            core.outstanding.as_ref().and_then(|turn| turn.slot_id),
-            "allow",
-            None,
-            AuditFacts {
-                incomplete: Some(false),
-                ..AuditFacts::default()
-            },
-        )
-        .is_err()
-        {
-            return Err(terminalize(
-                &mut core,
-                session_error(
-                    "tn_audit_append_failed",
-                    "section-selection audit append failed",
-                ),
-                FailedSink::Audit,
-            ));
-        }
-        let task_id = core.outstanding.as_ref().and_then(|turn| turn.task_id);
-        let slot_id = core.outstanding.as_ref().and_then(|turn| turn.slot_id);
-        let trace_row_hash = core.row_hash.clone();
-        consume_outstanding(&mut core);
-        core.selected_sections = selected_sections;
-        core.opened_sections = opened_sections;
-        core.selection_call = Some(call);
-        core.state = State::GovernedAction;
-        push_client_trace(
-            &mut core,
-            "sections_selected",
-            State::GovernedAction,
-            task_id,
-            slot_id,
-            Some(trace_row_hash),
-            None,
-            None,
-        );
-        Ok(ActionOutcome::Continue)
+        apply_section_selection(&mut core, Some(permit.phase), call, selected_sections)
     }
 
     fn accept_governed_action(
@@ -821,174 +754,7 @@ impl Session {
             Ok(call) => call,
             Err(error) => return Err(terminalize(&mut core, error, FailedSink::None)),
         };
-        let task_id = core.outstanding.as_ref().and_then(|turn| turn.task_id);
-        let slot_id = core.outstanding.as_ref().and_then(|turn| turn.slot_id);
-        let required = required_tools(&core);
-        let executed = core
-            .governed_tool_exchanges
-            .iter()
-            .map(|exchange| exchange.call.name.clone())
-            .collect::<BTreeSet<_>>();
-
-        if call.name == "emit_governed_record" {
-            if required.iter().any(|name| !executed.contains(name)) {
-                return Err(terminalize(
-                    &mut core,
-                    session_error(
-                        "tn_required_tool_missing",
-                        "all selected-section governed tools must execute before emission",
-                    ),
-                    FailedSink::None,
-                ));
-            }
-            return accept_report_emission(&mut core, permit.phase, call, task_id, slot_id);
-        }
-
-        if !required.contains(&call.name) {
-            return Err(terminalize(
-                &mut core,
-                session_error(
-                    "tn_action_not_allowed",
-                    "model action is not allowed by the selected-section contract",
-                ),
-                FailedSink::None,
-            ));
-        }
-        if executed.contains(&call.name) {
-            return Err(terminalize(
-                &mut core,
-                session_error(
-                    "tn_tool_already_executed",
-                    "configured governed tool cannot execute twice in one session",
-                ),
-                FailedSink::None,
-            ));
-        }
-        if core.governed.is_some() {
-            return accept_native_tool(&mut core, permit.phase, call, task_id, slot_id);
-        }
-        let row = &core.admitted_request().request.row;
-        let context = ToolContext {
-            run_id: core.run_id.clone(),
-            source_device_identity: row.device_identity().to_string(),
-            source_event_id: row.event_id().to_string(),
-            source_event_type: row.event_type().to_string(),
-            source_row_hash: row.row_hash().to_string(),
-            selected_sections: core.selected_sections.clone(),
-            action: core.report_contract.operation.clone(),
-        };
-        let arguments = crate::envelope::parse_duplicate_safe_json(call.arguments.as_bytes())
-            .map_err(|_| {
-                terminalize(
-                    &mut core,
-                    session_error(
-                        "tn_tool_arguments_invalid",
-                        "protected tool arguments must be an empty object",
-                    ),
-                    FailedSink::None,
-                )
-            })?;
-        if !arguments
-            .as_object()
-            .is_some_and(|arguments| arguments.is_empty())
-        {
-            return Err(terminalize(
-                &mut core,
-                session_error(
-                    "tn_tool_arguments_invalid",
-                    "protected tool arguments must be an empty object",
-                ),
-                FailedSink::None,
-            ));
-        }
-        let registered_call = RegisteredCall {
-            id: call.id.clone(),
-            name: call.name.clone(),
-            arguments: serde_json::to_vec(&serde_json::json!({"source_event_id":context.source_event_id,"action":context.action})).expect("trusted invocation serializes"),
-        };
-        let receipt = match core.tool_dispatcher.execute(&registered_call, &context) {
-            Ok(ToolReceipt::Compliance(receipt)) => receipt,
-            Err(error) => return Err(terminalize(&mut core, error, FailedSink::None)),
-        };
-        let receipt_value = serde_json::to_value(&receipt).map_err(|_| {
-            terminalize(
-                &mut core,
-                session_error(
-                    "tn_tool_receipt_invalid",
-                    "server tool receipt could not be serialized",
-                ),
-                FailedSink::None,
-            )
-        })?;
-        let receipt_json = tn_core::canonical::canonical_bytes(&receipt_value)
-            .ok()
-            .and_then(|bytes| String::from_utf8(bytes).ok())
-            .ok_or_else(|| {
-                terminalize(
-                    &mut core,
-                    session_error(
-                        "tn_tool_receipt_invalid",
-                        "server tool receipt could not be canonically serialized",
-                    ),
-                    FailedSink::None,
-                )
-            })?;
-        if append_audit(
-            &core,
-            "governed_tool_executed",
-            State::GovernedAction,
-            State::GovernedAction,
-            Some(permit.phase),
-            task_id,
-            slot_id,
-            "allow",
-            None,
-            AuditFacts {
-                incomplete: Some(false),
-                ..AuditFacts::default()
-            },
-        )
-        .is_err()
-        {
-            return Err(terminalize(
-                &mut core,
-                session_error(
-                    "tn_audit_append_failed",
-                    "governed-tool audit append failed",
-                ),
-                FailedSink::Audit,
-            ));
-        }
-        let trace_row_hash = receipt.row_hash.clone();
-        let receipt_event_id = receipt.event_id.clone();
-        let tool_name = call.name.clone();
-        consume_outstanding(&mut core);
-        core.compliance_receipt = Some(receipt);
-        push_client_trace(
-            &mut core,
-            "tool_executed",
-            State::GovernedAction,
-            task_id,
-            slot_id,
-            Some(trace_row_hash.clone()),
-            Some(tool_name.clone()),
-            Some(receipt_event_id.clone()),
-        );
-        push_client_trace(
-            &mut core,
-            "receipt_inserted",
-            State::GovernedAction,
-            task_id,
-            slot_id,
-            Some(trace_row_hash),
-            Some(tool_name),
-            Some(receipt_event_id),
-        );
-        core.governed_tool_exchanges.push(StoredToolExchange {
-            call,
-            result: receipt_json,
-        });
-        Ok(ActionOutcome::Continue)
+        accept_action(&mut core, Some(permit.phase), call)
     }
 
     pub fn abort(&mut self) -> Result<(), TnLlamaError> {
@@ -1021,6 +787,298 @@ impl Drop for Session {
             core.state = State::Failed;
         }
     }
+}
+
+fn apply_section_selection(
+    core: &mut SessionCore,
+    phase: Option<Phase>,
+    call: StoredCall,
+    selected_sections: BTreeSet<String>,
+) -> Result<ActionOutcome, TnLlamaError> {
+    let mut opened_sections = BTreeMap::new();
+    if let Some(state) = &core.governed {
+        let data = match state.input.open(
+            core.governed_request(),
+            state.view.as_ref().expect("governance accepted"),
+            &selected_sections,
+        ) {
+            Ok(data) => data,
+            Err(error) => return Err(terminalize(core, error, FailedSink::None)),
+        };
+        opened_sections = data
+            .groups()
+            .iter()
+            .map(|(name, fields)| (name.clone(), Value::Object(fields.clone())))
+            .collect();
+        core.governed.as_mut().expect("governed state").data = Some(data);
+    } else {
+        for section in &selected_sections {
+            let opened = match core
+                .governance_reader
+                .open_group_and_verify(&core.admitted_request().request.row, section)
+            {
+                Ok(opened) => opened,
+                Err(error) => return Err(terminalize(core, error, FailedSink::None)),
+            };
+            opened_sections.insert(
+                section.clone(),
+                Value::Object(opened.plaintext.into_iter().collect()),
+            );
+        }
+    }
+    if append_audit(
+        core,
+        if call.origin == CallOrigin::Runtime {
+            "sections_selected_runtime"
+        } else {
+            "sections_selected"
+        },
+        State::SectionSelection,
+        State::GovernedAction,
+        phase,
+        core.outstanding.as_ref().and_then(|turn| turn.task_id),
+        core.outstanding.as_ref().and_then(|turn| turn.slot_id),
+        "allow",
+        None,
+        AuditFacts {
+            incomplete: Some(false),
+            ..AuditFacts::default()
+        },
+    )
+    .is_err()
+    {
+        return Err(terminalize(
+            core,
+            session_error(
+                "tn_audit_append_failed",
+                "section-selection audit append failed",
+            ),
+            FailedSink::Audit,
+        ));
+    }
+    let task_id = core.outstanding.as_ref().and_then(|turn| turn.task_id);
+    let slot_id = core.outstanding.as_ref().and_then(|turn| turn.slot_id);
+    let trace_row_hash = core.row_hash.clone();
+    consume_outstanding(core);
+    core.selected_sections = selected_sections;
+    core.opened_sections = opened_sections;
+    let runtime_selected = call.origin == CallOrigin::Runtime;
+    core.selection_call = Some(call);
+    core.state = State::GovernedAction;
+    push_client_trace(
+        core,
+        if runtime_selected {
+            "sections_selected_runtime"
+        } else {
+            "sections_selected"
+        },
+        State::GovernedAction,
+        task_id,
+        slot_id,
+        Some(trace_row_hash),
+        None,
+        None,
+    );
+    Ok(ActionOutcome::Continue)
+}
+
+fn accept_action(
+    core: &mut SessionCore,
+    phase: Option<Phase>,
+    call: StoredCall,
+) -> Result<ActionOutcome, TnLlamaError> {
+    let task_id = core.outstanding.as_ref().and_then(|turn| turn.task_id);
+    let slot_id = core.outstanding.as_ref().and_then(|turn| turn.slot_id);
+    let required = required_tools(core);
+    let executed = core
+        .governed_tool_exchanges
+        .iter()
+        .map(|exchange| exchange.call.name.clone())
+        .collect::<BTreeSet<_>>();
+
+    if call.name == "emit_governed_record" {
+        if required.iter().any(|name| !executed.contains(name)) {
+            return Err(terminalize(
+                core,
+                session_error(
+                    "tn_required_tool_missing",
+                    "all selected-section governed tools must execute before emission",
+                ),
+                FailedSink::None,
+            ));
+        }
+        return accept_report_emission(
+            core,
+            phase.expect("report requires model decision"),
+            call,
+            task_id,
+            slot_id,
+        );
+    }
+
+    if !required.contains(&call.name) {
+        return Err(terminalize(
+            core,
+            session_error(
+                "tn_action_not_allowed",
+                "model action is not allowed by the selected-section contract",
+            ),
+            FailedSink::None,
+        ));
+    }
+    if executed.contains(&call.name) {
+        return Err(terminalize(
+            core,
+            session_error(
+                "tn_tool_already_executed",
+                "configured governed tool cannot execute twice in one session",
+            ),
+            FailedSink::None,
+        ));
+    }
+    if core.governed.is_some() {
+        return accept_native_tool(core, phase, call, task_id, slot_id);
+    }
+    let row = &core.admitted_request().request.row;
+    let context = ToolContext {
+        run_id: core.run_id.clone(),
+        source_device_identity: row.device_identity().to_string(),
+        source_event_id: row.event_id().to_string(),
+        source_event_type: row.event_type().to_string(),
+        source_row_hash: row.row_hash().to_string(),
+        selected_sections: core.selected_sections.clone(),
+        action: core.report_contract.operation.clone(),
+    };
+    let arguments =
+        crate::envelope::parse_duplicate_safe_json(call.arguments.as_bytes()).map_err(|_| {
+            terminalize(
+                core,
+                session_error(
+                    "tn_tool_arguments_invalid",
+                    "protected tool arguments must be an empty object",
+                ),
+                FailedSink::None,
+            )
+        })?;
+    if !arguments
+        .as_object()
+        .is_some_and(|arguments| arguments.is_empty())
+    {
+        return Err(terminalize(
+            core,
+            session_error(
+                "tn_tool_arguments_invalid",
+                "protected tool arguments must be an empty object",
+            ),
+            FailedSink::None,
+        ));
+    }
+    let registered_call = RegisteredCall {
+        id: call.id.clone(),
+        name: call.name.clone(),
+        arguments: serde_json::to_vec(
+            &serde_json::json!({"source_event_id":context.source_event_id,"action":context.action}),
+        )
+        .expect("trusted invocation serializes"),
+    };
+    let receipt = match core.tool_dispatcher.execute(&registered_call, &context) {
+        Ok(ToolReceipt::Compliance(receipt)) => receipt,
+        Err(error) => return Err(terminalize(core, error, FailedSink::None)),
+    };
+    let receipt_value = serde_json::to_value(&receipt).map_err(|_| {
+        terminalize(
+            core,
+            session_error(
+                "tn_tool_receipt_invalid",
+                "server tool receipt could not be serialized",
+            ),
+            FailedSink::None,
+        )
+    })?;
+    let receipt_json = tn_core::canonical::canonical_bytes(&receipt_value)
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .ok_or_else(|| {
+            terminalize(
+                core,
+                session_error(
+                    "tn_tool_receipt_invalid",
+                    "server tool receipt could not be canonically serialized",
+                ),
+                FailedSink::None,
+            )
+        })?;
+    let events: &[&str] = if call.origin == CallOrigin::Runtime {
+        &[
+            "governed_tool_executed_runtime",
+            "tool_result_accepted_runtime",
+        ]
+    } else {
+        &["governed_tool_executed"]
+    };
+    for kind in events {
+        if append_audit(
+            core,
+            kind,
+            State::GovernedAction,
+            State::GovernedAction,
+            phase,
+            task_id,
+            slot_id,
+            "allow",
+            None,
+            AuditFacts {
+                content_digest: Some(audit_digest(&model_request_digest(receipt_json.as_bytes()))),
+                incomplete: Some(false),
+                ..AuditFacts::default()
+            },
+        )
+        .is_err()
+        {
+            return Err(terminalize(
+                core,
+                session_error(
+                    "tn_audit_append_failed",
+                    "governed-tool audit append failed",
+                ),
+                FailedSink::Audit,
+            ));
+        }
+    }
+    let trace_row_hash = receipt.row_hash.clone();
+    let receipt_event_id = receipt.event_id.clone();
+    let tool_name = call.name.clone();
+    consume_outstanding(core);
+    core.compliance_receipt = Some(receipt);
+    push_client_trace(
+        core,
+        if call.origin == CallOrigin::Runtime {
+            "tool_executed_runtime"
+        } else {
+            "tool_executed"
+        },
+        State::GovernedAction,
+        task_id,
+        slot_id,
+        Some(trace_row_hash.clone()),
+        Some(tool_name.clone()),
+        Some(receipt_event_id.clone()),
+    );
+    push_client_trace(
+        core,
+        "receipt_inserted",
+        State::GovernedAction,
+        task_id,
+        slot_id,
+        Some(trace_row_hash),
+        Some(tool_name),
+        Some(receipt_event_id),
+    );
+    core.governed_tool_exchanges.push(StoredToolExchange {
+        call,
+        result: receipt_json,
+    });
+    Ok(ActionOutcome::Continue)
 }
 
 fn available_section_manifest(
@@ -1067,6 +1125,85 @@ fn available_section_manifest(
     } else {
         Ok(manifest)
     }
+}
+
+fn available_action_tools(core: &SessionCore) -> Result<Vec<Value>, TnLlamaError> {
+    let executed = core
+        .governed_tool_exchanges
+        .iter()
+        .map(|exchange| exchange.call.name.clone())
+        .collect::<BTreeSet<_>>();
+    let pending = required_tools(core)
+        .difference(&executed)
+        .cloned()
+        .collect::<Vec<_>>();
+    if pending.is_empty() {
+        return Ok(vec![crate::model_protocol::native_report_tool()]);
+    }
+    pending
+        .iter()
+        .map(|name| {
+            let spec = core.tool_dispatcher.specification(name).ok_or_else(|| {
+                session_error(
+                    "tn_tool_not_registered",
+                    "required governed tool is absent from the registry",
+                )
+            })?;
+            Ok(if core.governed.is_some() {
+                spec.native_model_tool()
+            } else {
+                spec.model_tool()
+            })
+        })
+        .collect()
+}
+
+fn advance_runtime_actions(core: &mut SessionCore) -> Result<(), TnLlamaError> {
+    let result = (|| {
+        if core.state == State::SectionSelection {
+            let manifest = available_section_manifest(core)?;
+            if manifest.len() != 1 {
+                return Ok(());
+            }
+            let sections = manifest.into_keys().collect::<BTreeSet<_>>();
+            let call = StoredCall {
+                origin: CallOrigin::Runtime,
+                id: format!("runtime:{}:selection", core.run_id),
+                name: "select_sections".into(),
+                arguments: serde_json::json!({"sections": sections}).to_string(),
+            };
+            let arguments: Value =
+                serde_json::from_str(&call.arguments).expect("runtime selection JSON");
+            let sections = validate_section_selection_arguments(core, &arguments)?;
+            apply_section_selection(core, None, call, sections)?;
+        }
+        while core.state == State::GovernedAction {
+            let tools = available_action_tools(core)?;
+            let Some((name, arguments)) = crate::model_protocol::determined_tool_call(&tools)
+            else {
+                break;
+            };
+            let call = StoredCall {
+                origin: CallOrigin::Runtime,
+                id: format!(
+                    "runtime:{}:tool:{}",
+                    core.run_id,
+                    core.governed_tool_exchanges.len()
+                ),
+                name,
+                arguments,
+            };
+            accept_action(core, None, call)?;
+        }
+        Ok(())
+    })();
+    result.map_err(|error| {
+        if core.state == State::Failed {
+            error
+        } else {
+            terminalize(core, error, FailedSink::None)
+        }
+    })
 }
 
 fn selected_values(core: &SessionCore) -> Result<BTreeMap<String, Value>, TnLlamaError> {
@@ -1250,33 +1387,7 @@ fn governed_action_request(
     governance_context: &BTreeMap<String, Value>,
 ) -> Result<Vec<u8>, TnLlamaError> {
     if core.governed.is_some() {
-        let executed = core
-            .governed_tool_exchanges
-            .iter()
-            .map(|exchange| exchange.call.name.clone())
-            .collect::<BTreeSet<_>>();
-        let outstanding = required_tools(core)
-            .difference(&executed)
-            .cloned()
-            .collect::<Vec<_>>();
-        let tools = if outstanding.is_empty() {
-            vec![crate::model_protocol::native_report_tool()]
-        } else {
-            outstanding
-                .iter()
-                .map(|name| {
-                    core.tool_dispatcher
-                        .specification(name)
-                        .map(|spec| spec.native_model_tool())
-                        .ok_or_else(|| {
-                            session_error(
-                                "tn_tool_not_registered",
-                                "native protected tool is absent from registry",
-                            )
-                        })
-                })
-                .collect::<Result<Vec<_>, _>>()?
-        };
+        let tools = available_action_tools(core)?;
         let exchanges = core
             .governed_tool_exchanges
             .iter()
@@ -1305,33 +1416,7 @@ fn governed_action_request(
     let selected_sections = core.selected_sections.iter().cloned().collect::<Vec<_>>();
     let source_lineage = trusted_source_lineage(core)?;
     let attributions = required_attributions(core);
-    let executed = core
-        .governed_tool_exchanges
-        .iter()
-        .map(|exchange| exchange.call.name.clone())
-        .collect::<BTreeSet<_>>();
-    let outstanding = required_tools(core)
-        .difference(&executed)
-        .cloned()
-        .collect::<Vec<_>>();
-    let tools = if outstanding.is_empty() {
-        vec![crate::model_protocol::native_report_tool()]
-    } else {
-        outstanding
-            .iter()
-            .map(|name| {
-                core.tool_dispatcher
-                    .specification(name)
-                    .map(|spec| spec.model_tool())
-                    .ok_or_else(|| {
-                        session_error(
-                            "tn_tool_not_registered",
-                            "configured governed tool is absent from the registry",
-                        )
-                    })
-            })
-            .collect::<Result<Vec<_>, _>>()?
-    };
+    let tools = available_action_tools(core)?;
     let selection_call = core.selection_call.as_ref().ok_or_else(|| {
         session_error(
             "tn_session_state",
@@ -1367,7 +1452,7 @@ fn governed_action_request(
 
 fn accept_native_tool(
     core: &mut SessionCore,
-    phase: Phase,
+    phase: Option<Phase>,
     call: StoredCall,
     task_id: Option<i64>,
     slot_id: Option<i32>,
@@ -1425,13 +1510,20 @@ fn accept_native_tool(
             )
         })?;
     let receipt_digest = model_request_digest(receipt_json.as_bytes());
-    for kind in ["governed_tool_executed", "tool_result_accepted"] {
+    for kind in if call.origin == CallOrigin::Runtime {
+        [
+            "governed_tool_executed_runtime",
+            "tool_result_accepted_runtime",
+        ]
+    } else {
+        ["governed_tool_executed", "tool_result_accepted"]
+    } {
         if append_audit(
             core,
             kind,
             State::GovernedAction,
             State::GovernedAction,
-            Some(phase),
+            phase,
             task_id,
             slot_id,
             "allow",
@@ -1455,7 +1547,11 @@ fn accept_native_tool(
         }
     }
     let object_id = receipt.publication.object.id().to_owned();
-    for event in ["tool_executed", "receipt_inserted"] {
+    for event in if call.origin == CallOrigin::Runtime {
+        ["tool_executed_runtime", "receipt_inserted"]
+    } else {
+        ["tool_executed", "receipt_inserted"]
+    } {
         push_client_trace(
             core,
             event,
@@ -1505,7 +1601,7 @@ fn accept_governed_report(
         Ok(output) => output,
         Err(error) => return Err(terminalize(core, error, FailedSink::None)),
     };
-    audit_object_register(core, &publication, phase, task_id, slot_id)?;
+    audit_object_register(core, &publication, Some(phase), task_id, slot_id)?;
     let output = publication.object;
     if append_audit(
         core,
@@ -1631,7 +1727,7 @@ fn accept_governed_report(
 fn audit_object_register(
     core: &mut SessionCore,
     publication: &crate::output_tn::GovernedPublication,
-    phase: Phase,
+    phase: Option<Phase>,
     task_id: Option<i64>,
     slot_id: Option<i32>,
 ) -> Result<(), TnLlamaError> {
@@ -1653,7 +1749,7 @@ fn audit_object_register(
     event.request_digest = core.request_digest().into();
     event.llama_task_id = task_id;
     event.llama_slot_id = slot_id;
-    event.facts.phase = Some(phase);
+    event.facts.phase = phase;
     event.error_code = failed.then(|| "tn_object_register_failed".into());
     core.audit.append(event).map(|_| ()).map_err(|_| {
         terminalize(
@@ -2173,6 +2269,7 @@ fn validate_native_call(
         Phase::GovernedAction => {}
     }
     Ok(StoredCall {
+        origin: CallOrigin::Model,
         id: id.to_string(),
         name: expected_name.to_string(),
         arguments: arguments.to_string(),
@@ -2226,6 +2323,7 @@ fn section_selection_error() -> TnLlamaError {
 
 fn stored_call(call: &StoredCall) -> AcceptedCall<'_> {
     AcceptedCall {
+        runtime: call.origin == CallOrigin::Runtime,
         id: &call.id,
         name: &call.name,
         arguments: &call.arguments,

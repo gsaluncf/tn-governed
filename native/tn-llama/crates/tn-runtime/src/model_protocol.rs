@@ -65,9 +65,39 @@ pub struct NativeToolResult<'a> {
 
 #[derive(Clone, Copy)]
 pub(crate) struct AcceptedCall<'a> {
+    pub runtime: bool,
     pub id: &'a str,
     pub name: &'a str,
     pub arguments: &'a str,
+}
+
+/// A required call has no model decision when both its name and argument object
+/// are fixed by the offered schema. Unknown constraints retain model dispatch.
+pub(crate) fn determined_tool_call(tools: &[Value]) -> Option<(String, String)> {
+    let [tool] = tools else { return None };
+    let function = tool.get("function")?.as_object()?;
+    let schema = function.get("parameters")?.as_object()?;
+    if schema.get("type")? != "object"
+        || schema.get("additionalProperties")? != false
+        || !schema.get("properties")?.as_object()?.is_empty()
+        || schema
+            .get("required")
+            .is_some_and(|required| !required.as_array().is_some_and(Vec::is_empty))
+        || schema.keys().any(|name| {
+            !matches!(
+                name.as_str(),
+                "type"
+                    | "properties"
+                    | "additionalProperties"
+                    | "required"
+                    | "description"
+                    | "title"
+            )
+        })
+    {
+        return None;
+    }
+    Some((function.get("name")?.as_str()?.to_owned(), "{}".into()))
 }
 
 pub(crate) fn section_selection_body(
@@ -150,6 +180,10 @@ pub(crate) fn governed_object_action_body(
     }))?}),
     ];
     for exchange in tool_exchanges {
+        if exchange.call.runtime {
+            messages.push(runtime_result_message(exchange.call, exchange.result));
+            continue;
+        }
         messages.push(assistant_call_message(exchange.call));
         messages.push(
             json!({"role":"tool", "tool_call_id":exchange.call.id, "content":exchange.result}),
@@ -236,18 +270,29 @@ pub(crate) fn governed_action_body(
     }
     let governed_context = canonical_text(&Value::Object(governed_context))?;
 
-    let mut messages = vec![
-        json!({"role": "system", "content": SYSTEM_CONTENT}),
-        json!({"role": "user", "content": selection_request}),
-        assistant_call_message(input.selection_call),
-        json!({
-            "role": "tool",
-            "tool_call_id": input.selection_call.id,
-            "content": selection_result
-        }),
-        json!({"role": "user", "content": governed_context}),
-    ];
+    let mut messages = vec![json!({"role": "system", "content": SYSTEM_CONTENT})];
+    if input.selection_call.runtime {
+        messages.push(runtime_result_message(
+            input.selection_call,
+            &selection_result,
+        ));
+    } else {
+        messages.extend([
+            json!({"role": "user", "content": selection_request}),
+            assistant_call_message(input.selection_call),
+            json!({
+                "role": "tool",
+                "tool_call_id": input.selection_call.id,
+                "content": selection_result
+            }),
+        ]);
+    }
+    messages.push(json!({"role": "user", "content": governed_context}));
     for exchange in input.tool_exchanges {
+        if exchange.call.runtime {
+            messages.push(runtime_result_message(exchange.call, exchange.result));
+            continue;
+        }
         messages.push(assistant_call_message(exchange.call));
         messages.push(json!({
             "role": "tool",
@@ -270,6 +315,15 @@ pub(crate) fn governed_action_body(
         "tools": input.tools,
     }))
 }
+
+fn runtime_result_message(call: AcceptedCall<'_>, result: &str) -> Value {
+    json!({"role":"user", "content": json!({
+        "runtime_action": call.name, "action_id": call.id,
+        "arguments": serde_json::from_str::<Value>(call.arguments).expect("validated arguments"),
+        "result": serde_json::from_str::<Value>(result).expect("runtime result JSON"),
+    }).to_string()})
+}
+
 
 fn assistant_call_message(call: AcceptedCall<'_>) -> Value {
     json!({
@@ -544,5 +598,48 @@ mod presentation_tests {
             plaintext["dataset_bindings"].as_array().unwrap().len(),
             3126
         );
+    }
+}
+
+#[cfg(test)]
+mod determined_actions {
+    use super::*;
+
+    fn tool(name: &str, parameters: Value) -> Value {
+        json!({"type":"function", "function":{"name":name,"parameters":parameters}})
+    }
+
+    #[test]
+    fn a_required_parameterless_call_is_determined_by_its_schema() {
+        let parameters = json!({"type":"object","properties":{},"additionalProperties":false});
+        for name in ["register_review", "retain_receipt", "record_dispatch"] {
+            assert_eq!(
+                determined_tool_call(&[tool(name, parameters.clone())]),
+                Some((name.into(), "{}".into()))
+            );
+        }
+    }
+
+    #[test]
+    fn alternative_actions_business_arguments_and_unknown_constraints_require_decisions() {
+        let empty = json!({"type":"object","properties":{},"additionalProperties":false});
+        assert!(determined_tool_call(&[
+            tool("first", empty.clone()),
+            tool("second", empty.clone())
+        ])
+        .is_none());
+        for schema in [
+            json!({"type":"object","properties":{"purpose":{"type":"string"}},"required":["purpose"],"additionalProperties":false}),
+            json!({"type":"object","properties":{"comment":{"type":"string"}},"additionalProperties":false}),
+            json!({"type":"object","properties":{}}),
+            json!({"type":"object","properties":{},"additionalProperties":true}),
+            json!({"type":"object","properties":{},"additionalProperties":false,"minProperties":1}),
+            json!({"type":"object","properties":{},"additionalProperties":false,"required":["missing"]}),
+            json!({"type":"object","properties":{},"additionalProperties":false,"$ref":"#/$defs/arguments"}),
+        ] {
+            assert!(determined_tool_call(&[tool("action", schema)]).is_none());
+        }
+        assert!(determined_tool_call(&[native_report_tool()]).is_none());
+        assert!(determined_tool_call(&[]).is_none());
     }
 }
