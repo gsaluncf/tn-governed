@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import gc
 import hashlib
 import importlib.metadata
 import json
@@ -10,6 +12,7 @@ import math
 import os
 import platform
 import re
+import shutil
 import statistics
 import subprocess
 import sys
@@ -19,6 +22,10 @@ import urllib.request
 from contextlib import redirect_stdout
 from datetime import UTC, datetime
 from pathlib import Path
+
+from tn_governed.native_run import ALL_GPU_LAYERS
+
+from .study_summary import model_turns, native_timeline
 
 PROCESS_STAGES = ("query", "claim", "dataframe", "compute", "console_disclosure")
 
@@ -40,6 +47,10 @@ def validate_profile(profile):
         raise ValueError("warmups must be a nonnegative integer")
     if type(profile.get("model")) is not bool:
         raise ValueError("model must be an explicit boolean")
+    if type(profile.get("retain_cases", True)) is not bool:
+        raise ValueError("retain_cases must be a boolean")
+    if type(profile.get("gpu_layers", ALL_GPU_LAYERS)) is not int or profile.get("gpu_layers", ALL_GPU_LAYERS) < 1:
+        raise ValueError("gpu_layers must be a positive integer; the model runs on the GPU")
     from tn_governed.values.primitives import MAX_SOURCE_PUBLICATION_CELLS
 
     batch_size = profile.get("sql_batch_size", 64)
@@ -71,6 +82,33 @@ def statistics_summary(values):
         "min": values[0],
         "max": values[-1],
     }
+
+
+def reset_peak_memory():
+    """Restart the kernel's peak-resident counter for this process on Linux.
+
+    Memory freed by earlier cases is first returned to the system, so a case's peak
+    starts from the live set rather than from pages the allocator kept.
+    """
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except OSError:
+        pass
+    try:
+        Path("/proc/self/clear_refs").write_text("5", encoding="ascii")
+    except OSError:
+        return
+
+
+def peak_memory_bytes():
+    """Return this process's peak resident set since the last reset, when reported."""
+    try:
+        status = Path("/proc/self/status").read_text(encoding="ascii")
+    except OSError:
+        return None
+    match = re.search(r"^VmHWM:\s+(\d+) kB$", status, re.MULTILINE)
+    return int(match[1]) * 1024 if match else None
 
 
 def elapsed_processing(timings, *, model):
@@ -122,12 +160,12 @@ def sha256(path):
 
 def accounting(directory):
     from tn_governed.publications import open_publication_store
+    from tn_governed.values.references import unpack_references
 
     manifest = json.loads((directory / "run.json").read_text(encoding="utf-8"))
     with open_publication_store(directory / "publications", read_only=True) as store:
         sizes = store.publication_sizes()
-    sources = manifest["sources"]
-    refs = {json.dumps(v["reference"], sort_keys=True) for v in sources}
+    refs = {json.dumps(item, sort_keys=True) for item in unpack_references(manifest["sources"])}
     records = sum(tape["count"] for tape in manifest["tapes"].values())
     target = manifest["outputs"]["model_input"]["reference"]["object_id"]
     policy_refs = {
@@ -456,6 +494,7 @@ def run_scale(root, args, profile):
                     "seconds": None,
                 }
                 attempt_start = time.perf_counter()
+                reset_peak_memory()
                 try:
                     with (
                         (root / f"{name}.log").open("w", encoding="utf-8") as log,
@@ -473,7 +512,7 @@ def run_scale(root, args, profile):
                                 model_path=args.model_path,
                                 port=args.port,
                                 storage="files",
-                                gpu_layers=0,
+                                gpu_layers=profile.get("gpu_layers", ALL_GPU_LAYERS),
                                 runtime_limits=profile.get("runtime_limits"),
                                 sdk_build_record=getattr(args, "sdk_build_record", None),
                                 sql_batch_size=profile.get("sql_batch_size", 64),
@@ -485,6 +524,7 @@ def run_scale(root, args, profile):
                                 binary=args.plain_binary,
                                 model=args.model_path,
                                 port=args.port,
+                                gpu_layers=profile.get("gpu_layers", ALL_GPU_LAYERS),
                             )
                         else:
                             summary = ordinary_case(directory, rows)
@@ -513,7 +553,16 @@ def run_scale(root, args, profile):
                         traceback.format_exc(), encoding="utf-8"
                     )
                 case["attempt_wall_seconds"] = time.perf_counter() - attempt_start
+                case["peak_rss_bytes"] = peak_memory_bytes()
+                if mode == "tn" and directory.exists():
+                    # The summary reads these after the case directory may be removed.
+                    case["model_turns"] = model_turns(directory)
+                    case["native_timeline"] = native_timeline(directory)
                 cases.append(case)
+                if (not profile.get("retain_cases", True) and directory.exists()
+                        and rows not in (profile["recipient_rows"], profile["tool_rows"])):
+                    # Its measurements are recorded; no later study reads this run.
+                    shutil.rmtree(directory)
                 with (root / "samples.jsonl").open("a", encoding="utf-8") as stream:
                     stream.write(json.dumps(case, allow_nan=False) + "\n")
                 save_json(
@@ -580,7 +629,7 @@ def run_tool_workloads(root, args, profile):
                     model_path=args.model_path,
                     port=args.port,
                     storage="files",
-                    gpu_layers=0,
+                    gpu_layers=profile.get("gpu_layers", ALL_GPU_LAYERS),
                     runtime_limits=profile.get("runtime_limits"),
                     sdk_build_record=getattr(args, "sdk_build_record", None),
                     sql_batch_size=profile.get("sql_batch_size", 64),

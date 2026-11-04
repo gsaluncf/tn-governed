@@ -48,6 +48,14 @@ impl Governance {
         Self::from_body(governed_by, fields)
     }
 
+    /// The same authority over a contract already validated with this one.
+    pub(super) fn with_fields(contract: &Self, fields: Map<String, Value>) -> Self {
+        Self {
+            governed_by: contract.governed_by.clone(),
+            fields,
+        }
+    }
+
     pub(super) fn from_body(governed_by: &str, fields: Map<String, Value>) -> Result<Self> {
         validate_marker(governed_by, string_field(&fields, "policy")?)?;
         for name in REQUIRED_FIELDS {

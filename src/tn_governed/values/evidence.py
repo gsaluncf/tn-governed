@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import threading
 from dataclasses import dataclass
 from uuid import uuid4
@@ -11,10 +12,13 @@ from uuid import uuid4
 import tn
 
 from tn_governed.native_objects import NativeObjects
-from tn_governed.publications import write_once
+from tn_governed.publications import sync_writes, write_once
+
+from .references import pack_references
 
 EVIDENCE_TYPE = "experiment.evidence"
 EVIDENCE_SCHEMA = "tn.string-evidence.v1"
+OBJECT_ID = re.compile(r"sha256:[0-9a-f]{64}")
 KINDS = {"Decision", "Result", "Refusal", "Disclosure", "Failure", "Carry", "Claim",
          "Monitor", "Observation", "SQLRead", "ModelHandoff", "ModelResult", "ReviewRequested"}
 
@@ -39,9 +43,7 @@ def referenced_publications(value, lookup):
             pending.extend(item.values())
         elif isinstance(item, (list, tuple)):
             pending.extend(item)
-        elif (isinstance(item, str) and len(item) == 71 and item.startswith("sha256:")
-              and all(character in "0123456789abcdef" for character in item[7:])
-              and item not in visited):
+        elif isinstance(item, str) and item not in visited and OBJECT_ID.fullmatch(item):
             visited.add(item)
             try:
                 yield lookup(item)
@@ -80,7 +82,7 @@ def read_record(wire, *, session, policy, expected_writer=None):
         for field in ("context_id", "call_id", "application", "purpose", "operation"):
             if not isinstance(body[field], str) or not body[field]:
                 raise EvidenceError(f"invalid evidence {field}")
-        if not isinstance(body["inputs"], list) or not isinstance(body["details"], dict):
+        if not isinstance(body["inputs"], (list, dict)) or not isinstance(body["details"], dict):
             raise EvidenceError("invalid evidence inputs or details")
         return Record(obj.id, obj.writer, body)
     except EvidenceError:
@@ -126,10 +128,19 @@ class EvidenceRecorder:
         self.context_id = uuid4().hex
         self._ids = []
         self._lock = threading.RLock()
+        self._packed = ((), [])
 
     @property
     def head(self):
         return self._ids[-1] if self._ids else None
+
+    def _packed_inputs(self, inputs):
+        """The records of one call share one input tuple, so it is packed once."""
+        if type(inputs) is not tuple:
+            return pack_references(value.to_dict() for value in inputs)
+        if self._packed[0] is not inputs:
+            self._packed = inputs, pack_references(value.to_dict() for value in inputs)
+        return self._packed[1]
 
     def append(self, kind, *, call_id, application, purpose, operation,
                inputs=(), destination=None, details=None):
@@ -146,7 +157,7 @@ class EvidenceRecorder:
                 "application": application,
                 "purpose": purpose,
                 "operation": operation,
-                "inputs": [value.to_dict() for value in inputs],
+                "inputs": self._packed_inputs(inputs),
                 "destination": destination,
                 "details": details or {},
             }
@@ -187,8 +198,11 @@ class EvidenceRecorder:
 
         directory = Path(directory)
         with self._lock:
+            paths = []
             for sequence, wire in enumerate(self.records(), 1):
-                write_once(directory / f"{sequence:08d}.tn", wire)
+                paths.append(directory / f"{sequence:08d}.tn")
+                write_once(paths[-1], wire, sync=False)
+            sync_writes(paths)
             checkpoint = {
                 "writer": self.session.did, "context_id": self.context_id,
                 "head": self.head, "count": len(self._ids),

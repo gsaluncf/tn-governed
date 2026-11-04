@@ -296,7 +296,7 @@ def inspect(records, **expected):
         run_id="run-context",
         request_digest="sha256:" + "b" * 64,
         source_id="sha256:" + "a" * 64,
-        **expected,
+        **{"source_envelope": SIGNED_ENVELOPE, **expected},
     )
 
 
@@ -396,7 +396,7 @@ def test_context_reader_does_not_downgrade_missing_bindings_to_echo(context_reco
     assert result.protocol == "tn.llama.governance-context.v1"
 
 
-def test_context_reader_reports_retained_echo_protocol_explicitly(context_records):
+def test_context_reader_gives_an_echo_no_credit(context_records):
     admission = copy.deepcopy(context_records[0][0])
     facts = json.loads(admission["facts_json"])
     facts.pop("governance_context_protocol")
@@ -408,9 +408,9 @@ def test_context_reader_reports_retained_echo_protocol_explicitly(context_record
         "facts_json": json.dumps({"hashes_matched": True, "governance_commitment_count": 2}),
     }
     result = inspect(([admission, echo], []))
-    assert result.protocol == "legacy_echo"
-    assert result.verified
-    assert result.task_ids == ()
+    assert result.protocol == "unrecognized"
+    assert not result.verified
+    assert result.errors == ("a commitment echo proves nothing",)
 
 
 def test_completed_model_observations_reject_an_action_without_context(context_records):
@@ -429,14 +429,18 @@ def test_completed_model_observations_reject_an_action_without_context(context_r
         )
 
 
-def bind_context(records, turn, context):
+def bind_context(records, turn, context, *, control_fields=None, tools=None, exchange=()):
     """Retain matching digests for a controlled semantic input."""
     audit, trace = records
     start = trace[turn * 3 + 1]
     request = json.loads(base64.b64decode(start["request_json_b64"]))
     control = json.loads(request["messages"][0]["content"])
     control["applicable_source_governance"] = context
+    control.update(control_fields or {})
     request["messages"][0]["content"] = canonical(control).decode()
+    request["messages"].extend(exchange)
+    if tools is not None:
+        request["tools"] = tools
     body = canonical(request)
     prompt = b"USER\n" + canonical(control) + b"\nASSISTANT\n"
     for row in trace[turn * 3 : turn * 3 + 2]:
@@ -452,6 +456,23 @@ def bind_context(records, turn, context):
             rendered_prompt_digest=digest("tn.llama.rendered-prompt.v1", prompt),
         )
         row["facts_json"] = json.dumps(facts)
+
+
+GOVERNANCE_HASH = "hmac-sha256:v1:" + "1" * 64
+DATA_HASH = "hmac-sha256:v1:" + "2" * 64
+HASH_KEYS = {"governance_hash": GOVERNANCE_HASH, "data_hashes": [DATA_HASH]}
+SIGNED_ENVELOPE = {"tn.agents": {"field_hashes": {"policy": GOVERNANCE_HASH}},
+                   "values": {"field_hashes": {"value": DATA_HASH}}}
+
+
+def decrypt_exchange(arguments=None):
+    """The assistant call and tool result that every later native request retains."""
+    call = {"id": "call-decrypt", "type": "function", "function": {
+        "name": "decrypt_value", "arguments": json.dumps(arguments or HASH_KEYS),
+    }}
+    result = {"data": {"values": {"value": "ACME"}}, "governance_hash": GOVERNANCE_HASH}
+    return [{"role": "assistant", "tool_calls": [call]},
+            {"role": "tool", "tool_call_id": "call-decrypt", "content": json.dumps(result)}]
 
 
 @pytest.fixture
@@ -475,8 +496,18 @@ def native_context_records(context_records):
             }
         ],
     }
-    for turn in range(3):
-        bind_context(context_records, turn, context)
+    bind_context(
+        context_records, 0, context,
+        control_fields={"user_request": "Write the report.", "output_instruction": "Decrypt.",
+                        "governance_hash": GOVERNANCE_HASH,
+                        "encrypted_data": [{"group": "values", "field": "value",
+                                            "data_hash": DATA_HASH}]},
+        tools=[{"type": "function", "function": {"name": "decrypt_value"}}],
+    )
+    context_records[1][2]["raw_model_output_b64"] = encoded(
+        json.dumps({"name": "decrypt_value", "arguments": HASH_KEYS}).encode())
+    for turn in (1, 2):
+        bind_context(context_records, turn, context, exchange=decrypt_exchange())
     for row in context_records[0]:
         if row["kind"] == "source_chain_committed":
             row["kind"] = "standalone_use_completed"
@@ -512,7 +543,7 @@ def test_context_reader_rejects_empty_context_with_consistent_artifact_digests(c
     assert not inspect(context_records).verified
 
 
-def test_witness_keeps_retained_echo_evidence_explicit(reference_run):
+def test_witness_gives_an_echo_no_credit(reference_run):
     path = reference_run / "runtime/decision-events.ndjson"
     audit = [json.loads(line) for line in path.read_text().splitlines()]
     admission = audit[0]
@@ -540,9 +571,9 @@ def test_witness_keeps_retained_echo_evidence_explicit(reference_run):
     write_rows(path, audit)
     write_rows(reference_run / "runtime/raw-trace/run-context.sensitive.ndjson", [])
     result = verify_reference_run(reference_run)
-    assert result.all_full
-    assert result.governance_context.protocol == "legacy_echo"
-    assert "commitments matched" in result.questions[2].evidence
+    assert not result.all_full
+    assert not result.governance_context.verified
+    assert "commitments matched" not in result.questions[2].evidence
 
 
 def test_witness_requires_retained_context_execution_evidence(reference_run):
@@ -619,17 +650,115 @@ def test_context_reader_requires_exact_expected_release(context_records):
     assert not inspect(context_records, expected_release=expected).verified
 
 
-@pytest.fixture
-def runtime_context_records(native_context_records):
+@pytest.mark.parametrize(("change", "verified"), [
+    ({}, True),
+    ({"governance_hash": DATA_HASH}, False),
+    ({"governance_hash": "hmac-sha256:v1:" + "3" * 64}, False),
+    ({"data_hashes": [GOVERNANCE_HASH]}, False),
+    ({"data_hashes": []}, False),
+])
+def test_context_reader_checks_the_presented_hash_keys(native_context_records, change, verified):
+    arguments = {**HASH_KEYS, **change}
+    context = json.loads(json.loads(base64.b64decode(
+        native_context_records[1][4]["request_json_b64"]))["messages"][0]["content"])
+    for turn in (1, 2):
+        replace_exchange(native_context_records, turn, context, decrypt_exchange(arguments))
+    assert inspect(native_context_records).verified is verified
+
+
+def replace_exchange(records, turn, control, exchange):
+    trace = records[1]
+    for row in trace[turn * 3 : turn * 3 + 2]:
+        request = json.loads(base64.b64decode(row["request_json_b64"]))
+        request["messages"] = request["messages"][:1]
+        row["request_json_b64"] = encoded(canonical(request))
+    bind_context(records, turn, control["applicable_source_governance"], exchange=exchange)
+
+
+@pytest.mark.parametrize(("policy", "verified"), [(GOVERNANCE_HASH, True), (DATA_HASH, False)])
+def test_context_reader_compares_hash_keys_with_the_signed_object(
+    native_context_records, policy, verified,
+):
+    envelope = {"tn.agents": {"field_hashes": {"policy": policy}},
+                "values": {"field_hashes": {"value": DATA_HASH}}}
+    assert inspect(native_context_records, source_envelope=envelope).verified is verified
+
+
+def test_context_reader_rejects_native_values_without_a_model_decrypt_turn(native_context_records):
     audit, trace = native_context_records
+    audit[:] = [row for row in audit if row.get("llama_task_id") != 31]
+    del trace[:3]
+    for sequence, row in enumerate(audit):
+        row["sequence"] = sequence
+    for sequence, row in enumerate(trace):
+        row["sequence"] = sequence
+    assert not inspect(native_context_records).verified
+
+
+def test_context_reader_rejects_a_decrypt_turn_that_offers_another_tool(native_context_records):
+    context = json.loads(json.loads(base64.b64decode(
+        native_context_records[1][1]["request_json_b64"]))["messages"][0]["content"])
+    bind_context(native_context_records, 0, context["applicable_source_governance"],
+                 tools=[{"type": "function", "function": {"name": "emit_governed_record"}}])
+    assert not inspect(native_context_records).verified
+
+
+def test_context_reader_rejects_hash_keys_the_model_did_not_generate(native_context_records):
+    native_context_records[1][2]["raw_model_output_b64"] = encoded(b"other tool response")
+    assert not inspect(native_context_records).verified
+
+
+def test_context_reader_rejects_a_result_beyond_the_presented_fields(native_context_records):
+    context = json.loads(json.loads(base64.b64decode(
+        native_context_records[1][4]["request_json_b64"]))["messages"][0]["content"])
+    exchange = decrypt_exchange()
+    exchange[1]["content"] = json.dumps({"governance_hash": GOVERNANCE_HASH,
+                                         "data": {"values": {"value": "ACME", "other": "AC"}}})
+    for turn in (1, 2):
+        replace_exchange(native_context_records, turn, context, exchange)
+    assert not inspect(native_context_records).verified
+
+
+def test_context_reader_rejects_hash_keys_without_a_decrypt_call(native_context_records):
+    native_context_records[1][2]["raw_model_output_b64"] = encoded(json.dumps(HASH_KEYS).encode())
+    assert not inspect(native_context_records).verified
+
+
+def test_context_reader_requires_the_signed_object_for_native_evidence(native_context_records):
+    assert not inspect(native_context_records, source_envelope=None).verified
+
+
+@pytest.mark.parametrize("field", ["plaintext", "selected_values"])
+def test_context_reader_rejects_values_beside_the_hash_keys(native_context_records, field):
+    context = json.loads(json.loads(base64.b64decode(
+        native_context_records[1][1]["request_json_b64"]))["messages"][0]["content"])
+    bind_context(native_context_records, 0, context["applicable_source_governance"],
+                 control_fields={field: "ACME: 12029"})
+    assert not inspect(native_context_records).verified
+
+
+def test_context_reader_rejects_a_value_already_in_the_decrypt_prompt(native_context_records):
+    value = "ACME: 12029 demonstration cents"
+    context = json.loads(json.loads(base64.b64decode(
+        native_context_records[1][1]["request_json_b64"]))["messages"][0]["content"])
+    bind_context(native_context_records, 0, context["applicable_source_governance"],
+                 control_fields={"user_request": value})
+    answer = {"data": {"values": {"value": value}}, "governance_hash": GOVERNANCE_HASH}
+    exchange = decrypt_exchange()
+    exchange[1]["content"] = json.dumps(answer)
+    for turn in (1, 2):
+        replace_exchange(native_context_records, turn, context, exchange)
+    assert not inspect(native_context_records).verified
+
+
+@pytest.fixture
+def runtime_context_records(context_records):
+    audit, trace = context_records
     runtime_events = [
         {
             **audit[0],
             "kind": kind,
-            "facts_json": json.dumps({
-                "source_object_id": audit[0]["target_row_hash"],
-                "content_digest": "sha256:" + "d" * 64,
-            }),
+            "facts_json": json.dumps({"content_digest": "sha256:" + "d" * 64}),
         }
         for kind in (
             "sections_selected_runtime",

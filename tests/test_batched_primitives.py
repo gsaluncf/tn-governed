@@ -5,9 +5,10 @@ import tn
 
 from tn_governed.publications import PublicationStore
 from tn_governed.values.evidence import EvidenceError, EvidenceRecorder
+from tn_governed.values.manifests import result_names
 from tn_governed.values.primitives import Context, VALUE_TYPE
 from tn_governed.values.runtime import Assessment, Request
-from tn_governed.values.string import OperationDenied, TNString
+from tn_governed.values.string import OperationDenied, TNString, ValueReference
 from tn_governed.values.numeric import TNNumeric
 
 
@@ -69,11 +70,11 @@ def publish(context, contents):
     ["Ada", "Grace", "Ada"], [7, 8, 7], [0.125, -0.0, 1.25],
     [Decimal("1.2500"), Decimal("-0.00"), Decimal("2.3750")],
 ])
-def test_cells_share_publication_but_retain_exact_identity_and_type(context, contents):
+def test_cells_share_publication_and_result_but_retain_exact_identity_and_type(context, contents):
     values = publish(context, contents)
     assert len({value.reference.object_id for value in values}) == 1
     assert len({value.reference for value in values}) == len(contents)
-    assert len({value.result_id for value in values}) == len(contents)
+    assert len({value.result_id for value in values}) == 1
     for index, (value, expected) in enumerate(zip(values, contents, strict=True)):
         assert isinstance(value, TNString if type(expected) is str else TNNumeric)
         _, binding, _ = context._metadata(value)
@@ -89,12 +90,22 @@ def test_cells_share_publication_but_retain_exact_identity_and_type(context, con
     assert b'"Ada"' not in wire
 
 
-def test_changed_field_cannot_reuse_another_cells_result(context):
-    first, second = publish(context, ["Ada", "Grace"])
-    forged = TNString(second.reference, first.decision_id, first.result_id,
+def test_field_cannot_cite_the_result_of_another_publication(context):
+    first = publish(context, ["Ada"])[0]
+    second = publish(context, ["Grace"])[0]
+    forged = TNString(second.reference, second.decision_id, first.result_id,
                       metadata_provider=context.string_metadata)
     with pytest.raises(EvidenceError, match="authorized result"):
         context._metadata(forged)
+
+
+def test_publication_result_does_not_cover_a_field_without_a_commitment(context):
+    value = publish(context, ["Ada"])[0]
+    missing = ValueReference(value.reference.object_id, "value_9", "values")
+    details = {"output": {"object_id": value.reference.object_id, "group": "values"}}
+    envelope = context.store_object(value.reference.object_id).envelope
+    assert result_names(details, value.reference, envelope)
+    assert not result_names(details, missing, envelope)
 
 
 def test_copy_and_attest_preserve_selected_field_without_opening_values(context, monkeypatch):
@@ -281,7 +292,7 @@ def test_metadata_batch_reuses_reads_only_within_current_call(context, monkeypat
         return original_record(identity)
     monkeypatch.setattr(context, "_read", track_read)
     monkeypatch.setattr(context.recorder, "read", track_record)
-    expected = Counter({first.decision_id: 1, first.result_id: 1, second.result_id: 1, third.result_id: 1})
+    expected = Counter({first.decision_id: 1, first.result_id: 1})
     for repetition in range(1, 3):
         items = context._metadata_many(values)
         assert len(items) == 4
@@ -293,7 +304,7 @@ def test_metadata_batch_reuses_reads_only_within_current_call(context, monkeypat
     with pytest.raises(UseDenied):
         context._metadata_many(values)
     assert len(reads) == 3
-    assert len(records) == 8
+    assert len(records) == 4
 
 
 def test_open_batch_reuses_one_receive_then_readmits_on_next_call(context, monkeypatch):

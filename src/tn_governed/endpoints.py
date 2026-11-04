@@ -13,6 +13,7 @@ import tn
 from .native_objects import CarriedPublication, NativeObjects
 from .values.evidence import EvidenceError, EvidenceRecorder, read_record
 from .values.obligations import ObligationRun, run_obligations
+from .values.references import unpack_references
 from .values.runtime import Assessment, Claim, Request
 from .values.string import OperationDenied, ValueReference
 
@@ -271,7 +272,7 @@ class Endpoint:
                 Claim(
                     record.id,
                     record.writer,
-                    tuple(ValueReference(**value) for value in record.body["inputs"]),
+                    tuple(ValueReference(**value) for value in unpack_references(record.body["inputs"])),
                     record.body["details"]["statement"],
                 )
             )
@@ -467,8 +468,7 @@ class Endpoint:
         value = _json(value)
         if opened:
             data = opened[0].copy()
-            for other in opened[1:]:
-                data.include(other)
+            data.include_all(opened[1:])
         else:
             data = self.session.create(
                 {}, request.policies[0], object_type=ARTIFACT_TYPE, group="values"
@@ -758,7 +758,7 @@ class Endpoint:
                     record.body["details"].get("statement"), str
                 ):
                     raise EvidenceError("external claim reference is not a claim")
-                subjects = tuple(ValueReference(**item) for item in record.body["inputs"])
+                subjects = tuple(ValueReference(**item) for item in unpack_references(record.body["inputs"]))
                 if not subjects or any(
                     subject.object_id not in lineage
                     or subject.field
@@ -878,7 +878,7 @@ class Endpoint:
                     pending.append(record.body["previous"])
                 if record.body["kind"] == "Decision":
                     pending.extend(record.body["details"].get("action_progress", ()))
-                pending.extend(item["object_id"] for item in record.body["inputs"])
+                pending.extend(item["object_id"] for item in unpack_references(record.body["inputs"]))
         return visited
 
     def _carried(

@@ -1,9 +1,10 @@
 //! Bounded verification of exact signed computation parents and selected origins.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use super::data::base_contract;
-use super::{invalid, DatasetBinding, DatasetCatalog, GovernanceView, PolicyDag};
+use super::{invalid, DatasetBinding, DatasetCatalog, GovernanceView, Governance, PolicyDag};
 use crate::Result;
 
 /// The exact object identities reached by a successful lineage verification.
@@ -72,22 +73,28 @@ impl LineageVerifier {
         F: FnMut(&str) -> Result<GovernanceView>,
     {
         let bindings = view.governance().dataset_bindings()?;
+        let mut origins: BTreeMap<&str, Vec<&DatasetBinding>> = BTreeMap::new();
         for binding in &bindings {
-            catalog.verify_binding(binding, dag)?;
+            origins
+                .entry(binding.source_object_id())
+                .or_default()
+                .push(binding);
         }
         let mut walk = Walk {
             limits: self,
             catalog,
             dag,
-            origins: &bindings,
+            origins,
             resolve: &mut resolve,
             visiting: BTreeSet::new(),
             visited: BTreeMap::new(),
             heights: BTreeMap::new(),
             views: BTreeMap::new(),
+            verified: BTreeMap::new(),
         };
+        walk.verify_bindings(&bindings)?;
         walk.views
-            .insert(view.object().id().to_owned(), view.clone());
+            .insert(view.object().id().to_owned(), Rc::new(view.clone()));
         let roots = walk.visit(view, 0)?;
         let expected: BTreeSet<_> = bindings
             .iter()
@@ -109,15 +116,28 @@ struct Walk<'a, F> {
     limits: &'a LineageVerifier,
     catalog: &'a DatasetCatalog,
     dag: &'a PolicyDag,
-    origins: &'a [DatasetBinding],
+    origins: BTreeMap<&'a str, Vec<&'a DatasetBinding>>,
     resolve: &'a mut F,
     visiting: BTreeSet<String>,
     visited: BTreeMap<String, BTreeSet<String>>,
     heights: BTreeMap<String, usize>,
-    views: BTreeMap<String, GovernanceView>,
+    views: BTreeMap<String, Rc<GovernanceView>>,
+    verified: BTreeMap<String, DatasetBinding>,
 }
 
 impl<F: FnMut(&str) -> Result<GovernanceView>> Walk<'_, F> {
+    /// The catalog and history are fixed for one walk, so each binding is checked once.
+    fn verify_bindings(&mut self, bindings: &[DatasetBinding]) -> Result<()> {
+        for binding in bindings {
+            if self.verified.get(binding.edition_record_id()) != Some(binding) {
+                self.catalog.verify_binding(binding, self.dag)?;
+                self.verified
+                    .insert(binding.edition_record_id().to_owned(), binding.clone());
+            }
+        }
+        Ok(())
+    }
+
     fn visit(&mut self, view: &GovernanceView, depth: usize) -> Result<BTreeSet<String>> {
         if depth > self.limits.max_depth {
             return Err(invalid("lineage depth limit exceeded"));
@@ -136,17 +156,20 @@ impl<F: FnMut(&str) -> Result<GovernanceView>> Walk<'_, F> {
             return Err(invalid("lineage object limit exceeded"));
         }
         self.visiting.insert(id.to_owned());
-        let policies = view.governance().policies()?;
+        let contracts: Vec<Governance> = view
+            .governance()
+            .policies()?
+            .iter()
+            .map(base_contract)
+            .collect();
         let bindings = view.governance().dataset_bindings()?;
-        for binding in &bindings {
-            self.catalog.verify_binding(binding, self.dag)?;
-        }
+        self.verify_bindings(&bindings)?;
 
         let mut roots = BTreeSet::new();
         let mut height = 0;
         // A catalog selection is the explicit traversal boundary. It authenticates
         // the origin's complete contract without requiring its creation history.
-        for binding in self.origins.iter().filter(|b| b.source_object_id() == id) {
+        for binding in self.origins.get(id).into_iter().flatten() {
             let edition = self
                 .catalog
                 .get(binding.edition_record_id())
@@ -157,7 +180,7 @@ impl<F: FnMut(&str) -> Result<GovernanceView>> Walk<'_, F> {
                     .source_groups()
                     .iter()
                     .all(|group| view.object().group_names().contains(&group.as_str()))
-                || policies.len() != edition.contracts().len()
+                || contracts.len() != edition.contracts().len()
             {
                 return Err(invalid(
                     "selected origin must match its edition's source and contracts",
@@ -167,10 +190,7 @@ impl<F: FnMut(&str) -> Result<GovernanceView>> Walk<'_, F> {
                 let expected = self
                     .dag
                     .select(binding.revision_id(), binding.scope(), |_| Ok(true))?;
-                if !policies
-                    .iter()
-                    .any(|policy| base_contract(policy) == base_contract(&expected))
-                {
+                if !contracts.contains(&base_contract(&expected)) {
                     return Err(invalid(
                         "selected origin contract differs from its accepted revision",
                     ));
@@ -179,21 +199,25 @@ impl<F: FnMut(&str) -> Result<GovernanceView>> Walk<'_, F> {
             roots.insert(id.to_owned());
         }
         if roots.is_empty() {
+            let carried: BTreeMap<&str, &DatasetBinding> = bindings
+                .iter()
+                .map(|binding| (binding.edition_record_id(), binding))
+                .collect();
             for reference in view.governance().source_references()? {
                 let parent_id = reference.object_id();
                 let parent = match self.views.get(parent_id) {
-                    Some(parent) => parent.clone(),
+                    Some(parent) => Rc::clone(parent),
                     None => {
                         if self.views.len() >= self.limits.max_objects {
                             return Err(invalid("lineage object limit exceeded"));
                         }
-                        let parent = (self.resolve)(parent_id)?;
+                        let parent = Rc::new((self.resolve)(parent_id)?);
                         if parent.object().id() != parent_id {
                             return Err(invalid(
                                 "lineage resolver returned a different publication",
                             ));
                         }
-                        self.views.insert(parent_id.to_owned(), parent.clone());
+                        self.views.insert(parent_id.to_owned(), Rc::clone(&parent));
                         parent
                     }
                 };
@@ -208,15 +232,12 @@ impl<F: FnMut(&str) -> Result<GovernanceView>> Walk<'_, F> {
                     ));
                 }
                 for inherited in parent.governance().policies()? {
-                    if !policies
-                        .iter()
-                        .any(|policy| base_contract(policy) == base_contract(&inherited))
-                    {
+                    if !contracts.contains(&base_contract(&inherited)) {
                         return Err(invalid("child must retain every parent contract"));
                     }
                 }
                 for inherited in parent.governance().dataset_bindings()? {
-                    if !bindings.contains(&inherited) {
+                    if carried.get(inherited.edition_record_id()) != Some(&&inherited) {
                         return Err(invalid("child must retain every parent dataset binding"));
                     }
                 }

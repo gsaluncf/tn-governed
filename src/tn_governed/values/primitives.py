@@ -10,15 +10,16 @@ import weakref
 import tn
 
 from .evidence import EvidenceError
+from .manifests import BATCH_SCHEMA, SCHEMA, SCHEMAS, result_names, signed_manifest, unique_origins
 from .numeric import TNNumeric
 from .numeric_codec import KINDS, NUMERIC_TYPES, encode, decode, record_value
 from .metadata import DeclaredMetadata, describe
 from .obligations import ObligationRun, run_obligations
-from .runtime import Assessment, Context as StringContext, ObligationResult, Request
+from .references import pack_references, unpack_references
+from .runtime import Assessment, Claim, Context as StringContext, ObligationResult, Request
 from .string import OperationDenied, TNString, ValueReference, _active
 
 VALUE_TYPE = "experiment.primitive"
-SCHEMA = "tn.primitive-bindings.v1"
 MAX_SOURCE_PUBLICATION_CELLS = 4096
 BINARY = {
     "add": operator.add, "subtract": operator.sub, "multiply": operator.mul,
@@ -34,25 +35,6 @@ OPERATIONS = frozenset({
     "conjugate", "real", "imag", "numerator", "denominator", "as_integer_ratio",
     "is_integer", "truth", "power_mod", "quantize", "sqrt", "normalize", "exp", "ln", "log10", *BINARY,
 })
-
-
-def _origin_key(value):
-    if isinstance(value, dict):
-        return (dict, frozenset((key, _origin_key(item)) for key, item in value.items()))
-    if isinstance(value, (list, tuple)):
-        return (type(value), tuple(_origin_key(item) for item in value))
-    return (None, value)
-
-
-def unique_origins(origins):
-    """Retain each first origin using structural equality and dictionary key independence."""
-    result, seen = [], set()
-    for origin in origins:
-        key = _origin_key(origin)
-        if key not in seen:
-            seen.add(key)
-            result.append(origin)
-    return result
 
 
 class Context(StringContext):
@@ -149,6 +131,29 @@ class Context(StringContext):
                 )
         return tuple(values)
 
+    def _record(self, identity, records):
+        if identity not in records:
+            records[identity] = self.recorder.read(identity)
+        return records[identity]
+
+    def _signed_result(self, value, writer, records):
+        """Check a call's signed Result and Decision once for all cells it produced."""
+        key = value.result_id, value.decision_id, writer
+        if key not in records:
+            result = self._record(value.result_id, records)
+            decision = self._record(value.decision_id, records)
+            rb, db = result.body, decision.body
+            if (rb["kind"] != "Result" or db["kind"] != "Decision"
+                    or result.writer != writer or decision.writer != result.writer
+                    or rb["details"].get("decision_id") != decision.id
+                    or db["details"].get("permitted") is not True
+                    or rb["sequence"] <= db["sequence"]
+                    or any(rb[name] != db[name] for name in (
+                        "context_id", "call_id", "operation", "inputs", "application", "purpose"))):
+                raise EvidenceError("primitive is not bound to its authorized result")
+            records[key] = rb
+        return records[key]
+
     def _metadata(self, value, *, _reads=None, _records=None):
         # These maps live only for this operation. Every later operation admits
         # the publication again under its current endpoint and requested use.
@@ -158,9 +163,9 @@ class Context(StringContext):
         if identity not in reads:
             data = self._read(value, ["evidence"], "inspect-claims")
             snapshot = data.snapshot
-            reads[identity] = data, data.get("manifest", group="evidence"), snapshot.writer, snapshot.envelope
+            reads[identity] = data, signed_manifest(data), snapshot.writer, snapshot.envelope
         data, manifest, writer, envelope = reads[identity]
-        if not isinstance(manifest, dict) or manifest.get("schema") != SCHEMA:
+        if not isinstance(manifest, dict) or manifest.get("schema") not in SCHEMAS:
             raise EvidenceError("missing signed primitive manifest")
         binding = manifest.get("bindings", {}).get(value.reference.field)
         if not isinstance(binding, dict):
@@ -170,33 +175,18 @@ class Context(StringContext):
             raise EvidenceError("primitive class differs from signed logical kind")
         if binding.get("decision_id") != value.decision_id or value.result_id is None:
             raise EvidenceError("primitive requires its exact signed decision and result")
-        def record(identity):
-            if identity not in records:
-                records[identity] = self.recorder.read(identity)
-            return records[identity]
-        result, decision = record(value.result_id), record(value.decision_id)
-        rb, db = result.body, decision.body
-        if (rb["kind"] != "Result" or db["kind"] != "Decision"
-                or result.writer != writer or decision.writer != result.writer
-                or rb["details"].get("output") != value.reference.to_dict()
-                or rb["details"].get("decision_id") != decision.id
+        rb = self._signed_result(value, writer, records)
+        if (not result_names(rb["details"], value.reference, envelope)
                 or rb["inputs"] != binding["parents"]
-                or rb["details"].get("claims") != binding["claims"]
-                or rb["details"].get("field_commitment") !=
-                    envelope[value.reference.group]["field_hashes"][value.reference.field]
-                or db["details"].get("permitted") is not True
-                or rb["sequence"] <= db["sequence"]
-                or any(rb[key] != db[key] for key in (
-                    "context_id", "call_id", "operation", "inputs", "application", "purpose"))):
+                or rb["details"].get("claims") != binding["claims"]):
             raise EvidenceError("primitive is not bound to its authorized result")
-        from .runtime import Claim
         claims = []
         for identity in binding["claims"]:
-            claim = record(identity)
+            claim = self._record(identity, records)
             if claim.body["kind"] != "Claim":
                 raise EvidenceError("claim citation names another record kind")
             claims.append(Claim(identity, claim.writer,
-                                tuple(ValueReference(**r) for r in claim.body["inputs"]),
+                                tuple(ValueReference(**r) for r in unpack_references(claim.body["inputs"])),
                                 claim.body["details"]["statement"]))
         return data, binding, tuple(claims)
 
@@ -277,7 +267,7 @@ class Context(StringContext):
             key = value.reference.object_id, value.reference.group
             if key not in opened:
                 data = self._read(value, [value.reference.group, "evidence"], request.operation)
-                opened[key] = data, data.get("manifest", group="evidence"), data.get(None, group=value.reference.group)
+                opened[key] = data, signed_manifest(data), data.get(None, group=value.reference.group)
                 copies[key] = data.copy()
             data, manifest, payloads = opened[key]
             payload = payloads[value.reference.field]
@@ -294,11 +284,13 @@ class Context(StringContext):
             raise ValueError("opened values must match nonempty governed inputs")
         data = opened[0][0]
         merged = {(values[0].reference.object_id, values[0].reference.group)}
+        others = []
         for value, (other_data, _) in zip(values[1:], opened[1:], strict=True):
             identity = value.reference.object_id, value.reference.group
             if identity not in merged:
-                data.include(other_data)
+                others.append(other_data)
                 merged.add(identity)
+        data.include_all(others)
         return data
 
     def _release_value(self, data, request):
@@ -321,7 +313,7 @@ class Context(StringContext):
                 raise NotImplementedError("unsupported governed result type")
             declared = describe(content)
             data.set(None, {"value": encode(content)}, group="values")
-        parents = [v.reference.to_dict() for v in values]
+        parents = pack_references(v.reference.to_dict() for v in values)
         binding = {"claims": claims, "parents": parents, "decision_id": decision_id,
                    "declared": declared, "origins": origins, "source": source}
         data.set(None, {"manifest": {"schema": SCHEMA, "bindings": {field: binding}}}, group="evidence")
@@ -338,10 +330,11 @@ class Context(StringContext):
                    publication=self._carried(publication, values, (decision_id, result, *claims)))
 
     def originate_batch(self, cells, policy, *, request, decision_id, call_id):
-        """Publish one column batch; retain a signed Result for each exact field.
+        """Publish one column batch under one signed Result.
 
         All cells belong to one query, assignment, source snapshot and column,
-        and use this endpoint's same provisioned group readers and policy.
+        and use this endpoint's same provisioned group readers and policy. The
+        publication's signed manifest binds each field to its source position.
         """
         cells = tuple(cells)
         if not cells or len(cells) > MAX_SOURCE_PUBLICATION_CELLS:
@@ -351,7 +344,7 @@ class Context(StringContext):
             raise ValueError("source policy must be covered by the query request")
         first_content, first_source = cells[0]
         scope = {key: value for key, value in first_source.items() if key != "row"}
-        fields, bindings = {}, {}
+        fields, facts = {}, {}
         for content, source in cells:
             if type(content) not in (str, *NUMERIC_TYPES) or type(content) is not type(first_content):
                 raise TypeError("a source batch requires one supported scalar type")
@@ -363,29 +356,25 @@ class Context(StringContext):
             if field in fields:
                 raise ValueError("duplicate row in source publication")
             fields[field] = encode(content)
-            bindings[field] = {"claims": [], "parents": [], "decision_id": decision_id,
-                               "declared": describe(content), "origins": [source], "source": source}
+            facts[field] = {"row": row, "declared": describe(content)}
         data = self.session.create(fields, policy, object_type=VALUE_TYPE, group="values")
         self.recorder.store.put(data.snapshot)
-        data.set(None, {"manifest": {"schema": SCHEMA, "bindings": bindings}}, group="evidence")
+        data.set(None, {"manifest": {"schema": BATCH_SCHEMA, "cells": facts,
+                                     "batch": {"decision_id": decision_id, "source": scope}}},
+                 group="evidence")
         publication = self._release_value(data, replace(request, policies=(policy,)))
-        commitments = publication.envelope["values"]["field_hashes"]
         carried_source = self._carried(publication, extra_ids=(decision_id,))
-        values = []
-        for field, binding in bindings.items():
-            reference = ValueReference(publication.id, field, "values")
-            result = self._append("Result", request, call_id, {
-                "decision_id": decision_id, "output": reference.to_dict(), "claims": [],
-                "field_commitment": commitments[field],
-                "transition": {"governed_inputs": [], "retained_claims": [], "literal_inputs": []},
-                "source": binding["source"],
-            })
-            cls = TNString if binding["declared"]["kind"] == "str" else TNNumeric
-            carried = None if carried_source is None else self.recorder.store.carry(
-                publication.id, parents=(carried_source,), extra_ids=(result,))
-            values.append(cls(reference, decision_id, result, metadata_provider=self.string_metadata,
-                              publication=carried))
-        return tuple(values)
+        result = self._append("Result", request, call_id, {
+            "decision_id": decision_id, "output": {"object_id": publication.id, "group": "values"},
+            "claims": [], "source": scope,
+            "transition": {"governed_inputs": [], "retained_claims": [], "literal_inputs": []},
+        })
+        carried = None if carried_source is None else self.recorder.store.carry(
+            publication.id, parents=(carried_source,), extra_ids=(result,))
+        cls = TNString if isinstance(first_content, str) else TNNumeric
+        return tuple(cls(ValueReference(publication.id, field, "values"), decision_id, result,
+                         metadata_provider=self.string_metadata, publication=carried)
+                     for field in facts)
 
     def originate(self, content, policy, *, source, request, decision_id, call_id):
         data = self.session.create({"value": encode(content)},

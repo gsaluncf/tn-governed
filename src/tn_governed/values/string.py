@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import operator
+import re
 from contextvars import ContextVar
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import TYPE_CHECKING, Protocol
 from urllib.parse import quote, urlencode
 
@@ -19,6 +21,20 @@ _STRING_METHODS = frozenset(
     name for name, method in vars(str).items()
     if callable(method) and not name.startswith("_") and name != "maketrans"
 )
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+@lru_cache(maxsize=4096)
+def _locator_root(object_id, group):
+    return "tn-ref:" + quote(object_id, safe="") + "/" + quote(group, safe="") + "/"
+
+
+@lru_cache(maxsize=4096)
+def _locator_citations(decision_id, result_id):
+    citations = {key: value for key, value in (
+        ("decision", decision_id), ("result", result_id),
+    ) if value is not None}
+    return "?" + urlencode(citations) if citations else ""
 
 
 class OperationDenied(PermissionError):
@@ -38,8 +54,7 @@ class ValueReference:
     def __post_init__(self):
         object_digest(self.object_id)
         if any(not isinstance(value, str) or not value or value != value.strip()
-               or any(ord(character) < 32 or ord(character) == 127 for character in value)
-               for value in (self.field, self.group)):
+               or _CONTROL.search(value) for value in (self.field, self.group)):
             raise ValueError("invalid native publication field reference")
 
     def to_dict(self):
@@ -100,15 +115,9 @@ class TNString(str):
             from tn_governed.native_objects import CarriedPublication
             if not isinstance(publication, CarriedPublication) or publication.object.id != reference.object_id:
                 raise ValueError("carried publication differs from the value reference")
-        locator = "tn-ref:" + "/".join(
-            quote(part, safe="")
-            for part in (reference.object_id, reference.group, reference.field)
-        )
-        citations = {key: value for key, value in (
-            ("decision", decision_id), ("result", result_id),
-        ) if value is not None}
-        if citations:
-            locator += "?" + urlencode(citations)
+        locator = (_locator_root(reference.object_id, reference.group)
+                   + quote(reference.field, safe="")
+                   + _locator_citations(decision_id, result_id))
         obj = str.__new__(cls, locator)
         object.__setattr__(obj, "reference", reference)
         object.__setattr__(obj, "decision_id", decision_id)
@@ -122,12 +131,6 @@ class TNString(str):
 
     def __delattr__(self, name):
         raise AttributeError("TNString bindings are read-only")
-
-    def __getattribute__(self, name):
-        # Unsupported ordinary methods must not quietly transform the locator.
-        if name in _STRING_METHODS and getattr(type(self), name) is getattr(str, name):
-            raise NotImplementedError(f"governed str.{name} is not implemented yet")
-        return super().__getattribute__(name)
 
     @property
     def identity(self):
@@ -336,3 +339,16 @@ class TNString(str):
     def __format__(self, spec):
         # An ordinary formatted string is content exposure, like str(self).
         return format(str(self), spec)
+
+
+def _unsupported(name):
+    def method(self, *args, **kwargs):
+        raise NotImplementedError(f"governed str.{name} is not implemented yet")
+    method.__name__ = method.__qualname__ = name
+    return method
+
+
+# Unsupported ordinary methods must not quietly transform the locator.
+for _name in _STRING_METHODS:
+    if getattr(TNString, _name) is getattr(str, _name):
+        setattr(TNString, _name, _unsupported(_name))

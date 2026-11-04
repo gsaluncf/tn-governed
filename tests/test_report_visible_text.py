@@ -3,7 +3,7 @@
 import pytest
 
 from tn_governed.values.evidence import EvidenceError
-from tn_governed.values.verify_model import PlainReportText
+from tn_governed.values.report_profile import PlainReportText
 
 
 def visible(html):
@@ -33,6 +33,7 @@ def test_disclosure_in_title_is_not_visible_report_evidence():
     "<head><style>p { display:none }</style></head><p>Review required.</p>",
     "<p style='display:none'>Review required.</p>",
     "<p hidden>Review required.</p>",
+    "<p>Review required.</p><img src='http://collector.invalid/x'>",
     "<head hidden><title>Review required.</title></head><p>value</p>",
     "<body><title>Review required.</title></body>",
     "<head><title>Review required.</head><p>value</p>",

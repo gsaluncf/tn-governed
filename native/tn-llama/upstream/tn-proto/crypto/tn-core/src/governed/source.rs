@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// An admitted input, including the groups used and its governing contract.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceReference {
     object_id: String,
@@ -132,7 +132,7 @@ impl Governance {
         let Some(value) = self.get("source_lineage") else {
             return Ok(Vec::new());
         };
-        let references: Vec<SourceReference> = serde_json::from_value(value.clone())
+        let references = Vec::<SourceReference>::deserialize(value)
             .map_err(|e| invalid(format!("source lineage: {e}")))?;
         for reference in &references {
             reference.validate()?;

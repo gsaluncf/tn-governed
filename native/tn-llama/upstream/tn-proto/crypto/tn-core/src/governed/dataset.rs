@@ -1,6 +1,7 @@
 //! Signed edition records and explicit, application-approved dataset selection.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -533,10 +534,14 @@ struct AcceptedEdition {
     policies: Vec<Governance>,
 }
 
+/// A record that passed validation and authority against one catalog state.
+#[derive(Debug)]
+pub struct PreparedEdition(AcceptedEdition);
+
 /// Append-only catalog of authority-approved exact edition records.
 #[derive(Debug, Clone, Default)]
 pub struct DatasetCatalog {
-    records: BTreeMap<String, AcceptedEdition>,
+    records: BTreeMap<String, Arc<AcceptedEdition>>,
 }
 
 impl DatasetCatalog {
@@ -563,6 +568,21 @@ impl DatasetCatalog {
     where
         F: FnOnce(&DatasetEdition) -> Result<bool>,
     {
+        let prepared = self.prepare(edition, dag, authorize)?;
+        self.commit(prepared);
+        Ok(())
+    }
+
+    /// Run every admission check without changing accepted state.
+    pub fn prepare<F>(
+        &self,
+        edition: DatasetEdition,
+        dag: &PolicyDag,
+        authorize: F,
+    ) -> Result<PreparedEdition>
+    where
+        F: FnOnce(&DatasetEdition) -> Result<bool>,
+    {
         edition.body.validate()?;
         if self.records.contains_key(edition.id()) {
             return Err(invalid(
@@ -575,11 +595,14 @@ impl DatasetCatalog {
                 operation: "dataset.admit".to_owned(),
             });
         }
-        self.records.insert(
-            edition.id().to_owned(),
-            AcceptedEdition { edition, policies },
-        );
-        Ok(())
+        Ok(PreparedEdition(AcceptedEdition { edition, policies }))
+    }
+
+    /// Add a record prepared against this exact catalog state.
+    pub fn commit(&mut self, prepared: PreparedEdition) {
+        let PreparedEdition(accepted) = prepared;
+        self.records
+            .insert(accepted.edition.id().to_owned(), Arc::new(accepted));
     }
 
     /// Pin dataset, edition, signed record, and one complete allowed-use tuple.
@@ -609,7 +632,7 @@ impl DatasetCatalog {
             });
         }
         Ok(DatasetSelection {
-            accepted: record.clone(),
+            accepted: Arc::clone(record),
             use_context: use_context.clone(),
         })
     }
@@ -726,7 +749,7 @@ fn exact_contracts(carried: &[Governance], expected: &[Governance]) -> Result<()
 /// It has no public constructor or deserializer; only catalog selection creates it.
 #[derive(Debug, Clone)]
 pub struct DatasetSelection {
-    accepted: AcceptedEdition,
+    accepted: Arc<AcceptedEdition>,
     use_context: UseContext,
 }
 

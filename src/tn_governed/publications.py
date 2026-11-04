@@ -8,20 +8,52 @@ import json
 import os
 import re
 import tempfile
+from functools import lru_cache
 from pathlib import Path
 
 import tn
 
 
+_IDENTITY = re.compile(r"sha256:[0-9a-f]{64}")
+_IDENTITY_ERROR = "publication identity requires sha256 and 64 lowercase hexadecimal digits"
+
+
 def object_digest(object_id: str) -> str:
     """Validate an identity before using its digest as a local path component."""
-    if not isinstance(object_id, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", object_id):
-        raise ValueError("publication identity requires sha256 and 64 lowercase hexadecimal digits")
+    if not isinstance(object_id, str):
+        raise ValueError(_IDENTITY_ERROR)
+    return _string_digest(object_id)
+
+
+@lru_cache(maxsize=65536)
+def _string_digest(object_id: str) -> str:
+    if not _IDENTITY.fullmatch(object_id):
+        raise ValueError(_IDENTITY_ERROR)
     return object_id[7:]
 
 
-def write_once(path: Path, content: bytes) -> None:
-    """Atomically expose complete bytes without replacing any existing representation."""
+def sync_writes(paths) -> None:
+    """Make a group of written files and their directory entries durable before their checkpoint."""
+    directories = set()
+    for path in paths:
+        with open(path, "rb+") as stream:
+            os.fsync(stream.fileno())
+        directories.add(Path(path).parent)
+    if not hasattr(os, "O_DIRECTORY"):
+        return
+    for directory in directories:
+        descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
+def write_once(path: Path, content: bytes, *, sync: bool = True) -> None:
+    """Atomically expose complete bytes without replacing any existing representation.
+
+    A caller that passes ``sync=False`` owes a later ``sync_writes`` over the same paths.
+    """
     if path.exists():
         if path.read_bytes() != content:
             raise ValueError(f"immutable publication representation differs: {path.name}")
@@ -32,7 +64,8 @@ def write_once(path: Path, content: bytes) -> None:
         with os.fdopen(descriptor, "wb") as output:
             output.write(content)
             output.flush()
-            os.fsync(output.fileno())
+            if sync:
+                os.fsync(output.fileno())
         try:
             os.link(temporary, path)
         except FileExistsError:
@@ -47,9 +80,12 @@ def write_once(path: Path, content: bytes) -> None:
 class PublicationStore:
     """Append-only signed wire storage with an immutable, explicitly verified index."""
 
-    def __init__(self, root: Path | str, *, read_only: bool = False) -> None:
+    def __init__(self, root: Path | str, *, read_only: bool = False,
+                 group_commit: bool = False) -> None:
         self.root = Path(root)
         self.read_only = read_only
+        self.group_commit = group_commit
+        self._unsynced = []
 
     def __enter__(self):
         return self
@@ -60,6 +96,16 @@ class PublicationStore:
     def close(self) -> None:
         """The file backend has no persistent connection to close."""
 
+    def _write(self, path: Path, content: bytes) -> None:
+        write_once(path, content, sync=not self.group_commit)
+        if self.group_commit:
+            self._unsynced.append(path)
+
+    def commit(self) -> None:
+        """End a group of writes. Readers rely on them only after this returns."""
+        sync_writes(self._unsynced)
+        self._unsynced.clear()
+
     def publication_sizes(self) -> dict[str, int]:
         """Logical wire sizes for measurement, not a verification result."""
         return {"sha256:" + p.stem: p.stat().st_size for p in (self.root / "objects").glob("*.tn")}
@@ -68,8 +114,8 @@ class PublicationStore:
         validate_record_position(context_id, sequence)
         self.put(snapshot)
         self.put(publication)
-        write_once(self.root / "tapes" / context_id / f"{sequence:08d}.ref",
-                   publication.id.encode("ascii"))
+        self._write(self.root / "tapes" / context_id / f"{sequence:08d}.ref",
+                    publication.id.encode("ascii"))
 
     def record_ids(self, context_id) -> tuple[str, ...]:
         validate_record_position(context_id, 1)
@@ -99,20 +145,19 @@ class PublicationStore:
         if not isinstance(object, tn.GovernedObject):
             raise TypeError("publication storage requires a native GovernedObject")
         wire = object.forward()
-        verified = tn.GovernedObject.read(io.BytesIO(wire))
-        digest = object_digest(verified.id)
+        digest = object_digest(object.id)
         relative = f"objects/{digest}.tn"
-        write_once(self.root / relative, wire)
+        self._write(self.root / relative, wire)
         index = {
-            "object_id": verified.id,
+            "object_id": object.id,
             "file": relative,
             "wire_sha256": hashlib.sha256(wire).hexdigest(),
         }
-        write_once(
+        self._write(
             self.root / "index" / f"{digest}.json",
             json.dumps(index, sort_keys=True, separators=(",", ":")).encode("utf-8"),
         )
-        return verified.id
+        return object.id
 
     def get(self, object_id: str) -> bytes:
         return self.read(object_id).forward()

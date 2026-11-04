@@ -66,6 +66,11 @@ def _context(session, policy, audit_policy, writers, *, actor="analyst"):
     )
 
 
+def _merged_source():
+    scope = {key: item for key, item in _source(0).items() if key != "row"}
+    return {**scope, "rows": [[0, 1]]}
+
+
 def _source(row):
     return {
         "table": "observations",
@@ -121,7 +126,7 @@ def test_numeric_operations_carry_native_objects_without_persistence(monkeypatch
         assert isinstance(result, TNNumeric)
         assert isinstance(publication, tn.GovernedObject)
         assert publication.id == result.reference.object_id
-        assert binding["origins"] == [_source(0), _source(1)]
+        assert binding["origins"] == [_merged_source()]
 
 
 def test_string_operations_preserve_claims_without_persistence(monkeypatch):
@@ -143,7 +148,7 @@ def test_string_operations_preserve_claims_without_persistence(monkeypatch):
         assert claims[0].issuer == session.did
         assert claims[0].subjects == (first.reference,)
         assert claims[0].statement == "Approved spelling"
-        assert binding["origins"] == [_source(0), _source(1)]
+        assert binding["origins"] == [_merged_source()]
 
 
 @pytest.fixture
@@ -190,7 +195,7 @@ def test_fresh_receiver_uses_carried_claims_after_producer_session_closes(enroll
         decision = receiver.recorder.read(result.decision_id)
     assert actual == 36
     assert binding["parents"] == [supplied.reference.to_dict()]
-    assert binding["origins"] == [_source(0), _source(1)]
+    assert binding["origins"] == [_merged_source()]
     assert claims[0].issuer == issuer
     assert claims[0].subjects == (first.reference,)
     assert claims[0].statement == "Estimated amount"
@@ -239,13 +244,14 @@ def test_carried_publication_does_not_authorize_a_forged_field_citation(monkeypa
             context = _context(
                 session, policy, session.policy("experiment.evidence"), {session.did}
             )
-            first, second = _originate(context, contents, policy)
+            first = _originate(context, contents[:1], policy)[0]
+            second = _originate(context, contents[1:], policy)[0]
             forged = type(first)(
                 second.reference,
-                first.decision_id,
+                second.decision_id,
                 first.result_id,
                 metadata_provider=context.string_metadata,
-                publication=first.publication,
+                publication=second.publication,
             )
             with pytest.raises(EvidenceError):
                 context._metadata(forged)
@@ -314,7 +320,7 @@ def test_serialized_native_objects_supply_claims_and_contributors_to_receiver(
     assert actual == 19
     assert received.publication.object is not supplied.publication.object
     assert received.metadata_provider is None
-    assert binding["origins"] == [_source(0), _source(1)]
+    assert binding["origins"] == [_merged_source()]
     assert claims[0].issuer == sessions["producer"].did
     assert claims[0].subjects == (first.reference,)
     assert claims[0].statement == "Estimated amount"

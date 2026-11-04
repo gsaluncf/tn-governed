@@ -17,6 +17,7 @@ from tn_governed.native_objects import NativeObjects
 from .evidence import EvidenceError, EvidenceRecorder
 from .obligations import ObligationResult as ObligationResult
 from .obligations import ObligationRun, run_obligations
+from .references import pack_references, unpack_references
 from .string import (
     OperationDenied, StringMetadataProvider, TNString, ValueReference, _active, _exposure,
 )
@@ -282,7 +283,7 @@ class Context:
         binding = manifest.get("bindings", {}).get(value.reference.field)
         if not isinstance(binding, dict) or set(binding) != {"claims", "parents", "decision_id"}:
             raise EvidenceError("missing signed field binding")
-        if not isinstance(binding["claims"], list) or not isinstance(binding["parents"], list):
+        if not isinstance(binding["claims"], list) or not isinstance(binding["parents"], (list, dict)):
             raise EvidenceError("invalid signed string lineage")
         decision_id = binding["decision_id"]
         if decision_id is not None:
@@ -313,7 +314,8 @@ class Context:
             if not isinstance(statement, str) or not statement.strip():
                 raise EvidenceError("invalid signed claim statement")
             claims.append(Claim(record.id, record.writer,
-                                tuple(ValueReference(**r) for r in record.body["inputs"]), statement))
+                                tuple(ValueReference(**r) for r in unpack_references(record.body["inputs"])),
+                                statement))
         return data, binding, tuple(claims)
 
     def inspect(self, value):
@@ -483,7 +485,7 @@ class Context:
                 "decision_id": decision_id, "output": reference.to_dict(), "claims": claims,
                 "field_commitment": publication.envelope["strings"]["field_hashes"][field],
                 "transition": {
-                    "governed_inputs": [v.reference.to_dict() for v in values],
+                    "governed_inputs": pack_references(v.reference.to_dict() for v in values),
                     "governance": "retain-all-contributing-governance",
                     "literal_inputs": ([{
                         "parameter_index": 0, "position": parameters[1], "claims": [],

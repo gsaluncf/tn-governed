@@ -6,9 +6,16 @@ use super::{
 };
 use crate::sealed_object::GroupBlock;
 use crate::{Error, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+
+/// What one admitted input adds when another object includes it.
+pub struct Inclusion {
+    policies: Vec<Governance>,
+    bindings: Vec<DatasetBinding>,
+    sources: Vec<SourceReference>,
+}
 
 /// A mutable working object. Policy attachment is append-only; releases retain snapshots.
 #[derive(Clone)]
@@ -367,17 +374,39 @@ impl DataObject {
     /// Include another admitted input's causal references and every attached policy.
     /// Data assignment stays explicit; the additional source object remains available to its owner.
     pub fn include(&mut self, other: &Self) -> Result<()> {
+        self.include_all([other.inclusion()?])
+    }
+    /// The contracts, dataset bindings and causal references this object contributes.
+    pub fn inclusion(&self) -> Result<Inclusion> {
+        Ok(Inclusion {
+            policies: self.policies()?,
+            bindings: self.dataset_bindings()?,
+            sources: self.sources.clone(),
+        })
+    }
+    /// Include several admitted inputs with one merge over their references.
+    pub fn include_all(&mut self, inputs: impl IntoIterator<Item = Inclusion>) -> Result<()> {
         let mut candidate = self.governance.clone();
-        for policy in other.policies()? {
-            append_policy(&mut candidate, &policy)?;
-        }
-        merge_bindings(&mut candidate, other.dataset_bindings()?)?;
+        let mut policies = candidate.policies()?;
+        let mut bindings = Vec::new();
+        let mut known: HashSet<SourceReference> = self.sources.iter().cloned().collect();
         let mut sources = self.sources.clone();
-        for source in &other.sources {
-            if !sources.contains(source) {
-                sources.push(source.clone());
+        for input in inputs {
+            for policy in &input.policies {
+                let policy = base_contract(policy);
+                if !policies.contains(&policy) {
+                    append_policy(&mut candidate, &policy)?;
+                    policies.push(policy);
+                }
+            }
+            bindings.extend(input.bindings);
+            for source in input.sources {
+                if known.insert(source.clone()) {
+                    sources.push(source);
+                }
             }
         }
+        merge_bindings(&mut candidate, bindings)?;
         self.governance = candidate;
         self.sources = sources;
         self.changed();
@@ -460,16 +489,22 @@ fn descend<'a>(mut node: &'a mut Value, path: &[Value]) -> Result<&'a mut Value>
     Ok(node)
 }
 pub(super) fn base_contract(policy: &Governance) -> Governance {
-    let mut policy = policy.clone();
-    for name in [
+    const CARRIED: [&str; 4] = [
         "attached_policies",
         "source_lineage",
         "release_context",
         "dataset_bindings",
-    ] {
-        policy.fields.remove(name);
+    ];
+    // Carried lists can be long. Leave them behind before removing their keys.
+    let mut fields = Map::new();
+    for (name, value) in &policy.fields {
+        let kept = !CARRIED.contains(&name.as_str());
+        fields.insert(name.clone(), if kept { value.clone() } else { Value::Null });
     }
-    policy
+    for name in CARRIED {
+        fields.remove(name);
+    }
+    Governance::with_fields(policy, fields)
 }
 fn append_policy(target: &mut Governance, additional: &Governance) -> Result<()> {
     let policies = target.policies()?;
@@ -502,14 +537,11 @@ impl Governance {
         if values.len() > 1024 {
             return Err(invalid("object supports at most 1024 dataset bindings"));
         }
-        let bindings: Vec<DatasetBinding> = serde_json::from_value(value.clone())
+        let bindings = Vec::<DatasetBinding>::deserialize(value)
             .map_err(|error| invalid(format!("dataset bindings: {error}")))?;
-        for (index, binding) in bindings.iter().enumerate() {
-            binding.validate()?;
-            if bindings[..index]
-                .iter()
-                .any(|existing| existing.edition_record_id() == binding.edition_record_id())
-            {
+        let mut editions = BTreeSet::new();
+        for binding in &bindings {
+            if !editions.insert(binding.edition_record_id()) {
                 return Err(invalid(
                     "each edition record must have exactly one dataset binding",
                 ));
@@ -578,6 +610,60 @@ mod tests {
         assert_eq!(policies.len(), 2);
         assert_eq!(policies[0].get("region"), Some(&json!("eu")));
         assert_eq!(policies[1].get("region"), Some(&json!("us")));
+    }
+
+    fn regional(device: &crate::DeviceKey, region: &str) -> Governance {
+        let mut policy=Governance::from_markdown(device.did(),
+            "## data\n### instruction\nAnalyze.\n### use_for\nResearch.\n### do_not_use_for\nDisclosure.\n### consequences\nReview.\n### on_violation_or_error\nRefuse.\n",
+            "unity/data", "data").unwrap();
+        policy.fields.insert("region".into(), json!(region));
+        policy
+    }
+
+    #[test]
+    fn include_all_matches_repeated_include() {
+        let device = crate::DeviceKey::generate();
+        let object = |region| {
+            DataObject::new("data", regional(&device, region), "data", json!({})).unwrap()
+        };
+        let others = [object("eu"), object("us"), object("eu"), object("ap")];
+        let mut repeated = object("base");
+        for other in &others {
+            repeated.include(other).unwrap();
+        }
+        let mut bulk = object("base");
+        bulk.include_all(others.iter().map(|other| other.inclusion().unwrap()))
+            .unwrap();
+        assert_eq!(bulk.policies().unwrap(), repeated.policies().unwrap());
+        assert_eq!(bulk.policies().unwrap().len(), 4);
+        assert_eq!(bulk.sources(), repeated.sources());
+    }
+
+    #[test]
+    fn base_contract_keeps_the_key_order_of_removal_from_a_full_copy() {
+        let device = crate::DeviceKey::generate();
+        let mut policy = regional(&device, "eu");
+        for name in [
+            "dataset_bindings",
+            "release_context",
+            "source_lineage",
+            "attached_policies",
+        ] {
+            policy.fields.insert(name.into(), json!([name]));
+        }
+        policy.fields.insert("purpose".into(), json!("research"));
+        let mut expected = policy.clone();
+        for name in [
+            "attached_policies",
+            "source_lineage",
+            "release_context",
+            "dataset_bindings",
+        ] {
+            expected.fields.remove(name);
+        }
+        let contract = base_contract(&policy);
+        assert!(contract.fields.keys().eq(expected.fields.keys()));
+        assert_eq!(contract, expected);
     }
 }
 
@@ -702,20 +788,27 @@ fn merge_bindings(
     additions: impl IntoIterator<Item = DatasetBinding>,
 ) -> Result<()> {
     let mut bindings = governance.dataset_bindings()?;
+    let mut positions: BTreeMap<String, usize> = bindings
+        .iter()
+        .enumerate()
+        .map(|(index, binding)| (binding.edition_record_id().to_owned(), index))
+        .collect();
     for binding in additions {
         binding.validate()?;
-        if bindings.iter().any(|existing| {
-            existing.edition_record_id() == binding.edition_record_id() && existing != &binding
-        }) {
-            return Err(invalid(
-                "a selected edition record cannot acquire a different binding",
-            ));
-        }
-        if !bindings.contains(&binding) {
-            if bindings.len() >= 1024 {
-                return Err(invalid("object supports at most 1024 dataset bindings"));
+        match positions.get(binding.edition_record_id()) {
+            Some(&index) if bindings[index] != binding => {
+                return Err(invalid(
+                    "a selected edition record cannot acquire a different binding",
+                ));
             }
-            bindings.push(binding);
+            Some(_) => {}
+            None => {
+                if bindings.len() >= 1024 {
+                    return Err(invalid("object supports at most 1024 dataset bindings"));
+                }
+                positions.insert(binding.edition_record_id().to_owned(), bindings.len());
+                bindings.push(binding);
+            }
         }
     }
     if !bindings.is_empty() {

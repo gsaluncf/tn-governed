@@ -17,6 +17,7 @@ from tn_governed.llama import submit_governed_report
 from tn_governed.native_objects import CarriedPublication, NativeObjects
 from tn_governed.publications import write_once
 
+from .report_profile import visible_text
 from .string import OperationDenied, _active
 
 
@@ -172,6 +173,8 @@ class NativeModelEndpoint:
                 publication_store=context.recorder.store, bind_request=True)
             # NativeOutputReader has already accepted the report's intended internal use.
             html = opened.get("report_html", group="default")
+            # Refuse here what the offline verifier would refuse, before review is queued.
+            visible_text(html)
             review = None
             if requirements["review"] is not None:
                 action = requirements["review"]

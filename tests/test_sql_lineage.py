@@ -4,7 +4,13 @@ import sqlite3
 
 import pytest
 
-from tn_governed.values.query import SourceColumn, SQLFunction, SQLiteQuery, decode_sql
+from tn_governed.values.query import (
+    SourceColumn,
+    SQLFunction,
+    SQLiteQuery,
+    decode_sql,
+    lineage_cells,
+)
 
 
 @pytest.fixture
@@ -26,7 +32,7 @@ def execute(database, sql, parameters=()):
         rows = query.execute()
         binding = {"sources": [source.to_dict() for source in query.dependencies]}
         lineage = query.result_lineage(binding, rows)
-        return plan, rows, lineage
+        return plan, rows, {**lineage, "cells": lineage_cells(lineage)}
 
 
 def keys(cell, table, column, role="value"):
@@ -220,7 +226,7 @@ def test_function_external_dependencies_remain_explicitly_unmapped(database):
     assert lineage["row_support"] == "partial"
     assert any(
         item["table"] == "accounts" and item["column"] == "active" and item["row_key"] is None
-        for item in lineage["cells"][0]["contributors"]
+        for item in lineage_cells(lineage)[0]["contributors"]
     )
 
 

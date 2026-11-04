@@ -158,18 +158,26 @@ class SQLiteQuery:
         self._executed = False
         self._lineage_plan = None
 
-    def _assert_snapshot(self):
+    def _file_fingerprint(self):
+        status = Path(self.database).stat()
+        return status.st_size, status.st_mtime_ns
+
+    def _assert_snapshot(self, *, full=False):
+        """Check the signed snapshot; file metadata suffices between full hashes."""
         wal = Path(str(self.database) + "-wal")
         if wal.exists() and wal.stat().st_size:
             raise OperationDenied("SQL WAL content is outside the signed database-file snapshot")
         from .sql import source_identity
 
+        if not full and self._file_fingerprint() == self._fingerprint:
+            return
         if source_identity(self.database) != self.identity:
             raise OperationDenied("SQL source changed since its signed governance assignment")
 
     def __enter__(self):
         from .sql import source_identity
 
+        self._fingerprint = self._file_fingerprint()
         self.identity = source_identity(self.database)
         self._assert_snapshot()
         try:
@@ -285,6 +293,15 @@ class SQLiteQuery:
         self._assert_snapshot()
         return self._lineage_plan
 
+    def track_source_scope(self):
+        """Retain authorized source columns without row identity projections."""
+        from .sql_lineage import SQLiteLineagePlan
+
+        if self.connection is None or self._executed or self._lineage_plan is not None:
+            raise RuntimeError("lineage is prepared once before query execution")
+        self._lineage_plan = SQLiteLineagePlan(reason="source-scope-requested")
+        return self._lineage_plan
+
     def result_lineage(self, binding, result):
         if self._lineage_plan is None:
             return contributor_manifest(binding, result)
@@ -335,7 +352,7 @@ class SQLiteQuery:
         )
         if plan is not None and plan.sql is not None:
             result = plan.extract(result.columns, result.rows)
-        self._assert_snapshot()
+        self._assert_snapshot(full=True)
         return result
 
     def __exit__(self, *_):
@@ -408,6 +425,32 @@ class LineageProvider:
             or self.precision not in {"exact", "conservative"}
         ):
             raise ValueError("lineage provider requires an identity, mapper and validator")
+
+
+def row_key(member):
+    """Return the typed key of one retained row identity."""
+    return [encode_sql(member)] if type(member) is int else json.loads(member)
+
+
+def lineage_cells(lineage):
+    """Return contributors for each result position, expanding shared row identities."""
+    rows = lineage.get("contributor_rows")
+    if rows is None:
+        return lineage["cells"]
+    cells = []
+    for row, identities in enumerate(rows):
+        for column, sources in enumerate(lineage["contributor_columns"]):
+            contributors = {}
+            for source in sources:
+                index = source["identity"]
+                keys = [None] if index is None else [row_key(item) for item in identities[index]]
+                for key in keys:
+                    item = {name: source[name] for name in ("table", "column", "role")}
+                    item["row_key"] = key
+                    contributors[json.dumps(item, sort_keys=True)] = item
+            cells.append({"row": row, "column": column,
+                          "contributors": [contributors[key] for key in sorted(contributors)]})
+    return cells
 
 
 def contributor_manifest(binding, result, provider=None):

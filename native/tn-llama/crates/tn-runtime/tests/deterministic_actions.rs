@@ -1,9 +1,10 @@
 mod governed_support;
 mod support;
 
-use governed_support::{accept, Fixture};
+use governed_support::{accept, report_turn, select, Fixture};
 use serde_json::{json, Value};
 use std::io;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tn_runtime::{ActionOutcome, Phase, State};
 use tn_runtime::{
@@ -12,7 +13,7 @@ use tn_runtime::{
 };
 
 #[test]
-fn singleton_selection_and_required_action_reach_report_without_inference() {
+fn required_action_runs_in_the_runtime_after_the_models_decrypt_call() {
     let mut fixture = Fixture::new();
     fixture.require_compliance();
     fixture
@@ -26,7 +27,7 @@ fn singleton_selection_and_required_action_reach_report_without_inference() {
     let audit_path = fixture.config.audit_path.clone();
     let (_keys, runtime) = fixture.runtime();
     let mut session = runtime.start_session(&request).unwrap();
-    let turn = session.next_model_turn().unwrap();
+    let turn = report_turn(&mut session);
     assert_eq!(turn.permit.phase(), Phase::GovernedAction);
     let body: Value = serde_json::from_slice(&turn.request_json).unwrap();
     assert_eq!(body["tools"][0]["function"]["name"], "emit_governed_record");
@@ -37,11 +38,14 @@ fn singleton_selection_and_required_action_reach_report_without_inference() {
     )
     .unwrap();
     assert_eq!(runtime_result["runtime_action"], "record_review_receipt");
-    assert!(body["messages"]
+    let assistant = body["messages"]
         .as_array()
         .unwrap()
         .iter()
-        .all(|message| message["role"] != "assistant"));
+        .filter(|message| message["role"] == "assistant")
+        .collect::<Vec<_>>();
+    assert_eq!(assistant.len(), 1);
+    assert_eq!(assistant[0]["tool_calls"][0]["function"]["name"], "decrypt_value");
     let control: Value =
         serde_json::from_str(body["messages"][1]["content"].as_str().unwrap()).unwrap();
     assert_eq!(
@@ -52,9 +56,10 @@ fn singleton_selection_and_required_action_reach_report_without_inference() {
         2
     );
     let audit = std::fs::read_to_string(audit_path).unwrap();
-    assert!(audit.contains("sections_selected_runtime"));
+    assert!(!audit.contains("sections_selected_runtime"));
+    assert!(audit.contains("sections_selected"));
     assert!(audit.contains("governed_tool_executed_runtime"));
-    assert!(!audit.contains("turn_begin_authorized"));
+    assert_eq!(audit.matches("turn_begin_authorized").count(), 1);
     let ActionOutcome::GovernedRelease(release) = accept(
         &mut session,
         turn,
@@ -69,7 +74,7 @@ fn singleton_selection_and_required_action_reach_report_without_inference() {
 }
 
 #[test]
-fn multiple_selectable_sections_still_require_a_model_choice() {
+fn multiple_sections_are_all_offered_to_the_decrypt_call() {
     let mut fixture = Fixture::new();
     fixture
         .config
@@ -82,7 +87,7 @@ fn multiple_selectable_sections_still_require_a_model_choice() {
     let turn = session.next_model_turn().unwrap();
     assert_eq!(turn.permit.phase(), Phase::SectionSelection);
     let body: Value = serde_json::from_slice(&turn.request_json).unwrap();
-    assert_eq!(body["tools"][0]["function"]["name"], "select_sections");
+    assert_eq!(body["tools"][0]["function"]["name"], "decrypt_value");
 }
 
 #[test]
@@ -100,6 +105,7 @@ fn required_action_readback_failure_blocks_any_model_turn() {
     .unwrap();
     let (_keys, runtime) = fixture.runtime();
     let mut session = runtime.start_session(&request).unwrap();
+    select(&mut session, &["finance"]).unwrap();
     assert_eq!(
         session.next_model_turn().unwrap_err().code(),
         "tn_output_readback_failed"
@@ -116,7 +122,7 @@ fn an_outstanding_report_permit_cannot_repeat_runtime_actions() {
     let audit_path = fixture.config.audit_path.clone();
     let (_keys, runtime) = fixture.runtime();
     let mut session = runtime.start_session(&request).unwrap();
-    let _turn = session.next_model_turn().unwrap();
+    let _turn = report_turn(&mut session);
     assert_eq!(
         session.next_model_turn().unwrap_err().code(),
         "tn_turn_outstanding"
@@ -143,12 +149,14 @@ impl DecisionAudit for AuditSink {
     }
 }
 struct TraceSink {
-    fail_prepare: bool,
+    prepared_turns: AtomicUsize,
 }
 impl SensitiveTraceSink for TraceSink {
     fn append(&self, event: SensitiveTraceEvent<'_>) -> io::Result<()> {
-        if self.fail_prepare && event.kind == SensitiveTraceKind::TurnPrepared {
-            return Err(io::Error::other("trace unavailable"));
+        if event.kind == SensitiveTraceKind::TurnPrepared {
+            self.prepared_turns
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| left.checked_sub(1))
+                .map_err(|_| io::Error::other("trace unavailable"))?;
         }
         Ok(())
     }
@@ -157,7 +165,7 @@ impl SensitiveTraceSink for TraceSink {
 #[test]
 fn runtime_action_audit_failure_blocks_inference_and_release() {
     for kind in [
-        "sections_selected_runtime",
+        "sections_selected",
         "governed_tool_executed_runtime",
         "tool_result_accepted_runtime",
     ] {
@@ -174,24 +182,27 @@ fn runtime_action_audit_failure_blocks_inference_and_release() {
             move |_| Ok(sink.clone() as Arc<dyn DecisionAudit>),
             |_| {
                 Ok(Arc::new(TraceSink {
-                    fail_prepare: false,
+                    prepared_turns: AtomicUsize::new(usize::MAX),
                 }) as Arc<dyn SensitiveTraceSink>)
             },
         )
         .unwrap();
         let mut session = runtime.start_session(&request).unwrap();
-        assert_eq!(
-            session.next_model_turn().unwrap_err().code(),
-            "tn_audit_append_failed"
-        );
+        let error = select(&mut session, &["finance"])
+            .and_then(|()| session.next_model_turn().map(|_| ()))
+            .unwrap_err();
+        assert_eq!(error.code(), "tn_audit_append_failed");
         assert_eq!(session.state(), State::Failed);
-        assert!(audit
-            .events
-            .lock()
-            .unwrap()
+        let events = audit.events.lock().unwrap();
+        let begun = events
             .iter()
-            .all(|event| event.kind != "turn_begin_authorized"
-                && event.kind != "standalone_use_completed"));
+            .filter(|event| event.kind == "turn_begin_authorized")
+            .count();
+        assert_eq!(begun, 1, "only the decrypt turn ran");
+        assert!(events
+            .iter()
+            .all(|event| event.kind != "standalone_use_completed"));
+        drop(events);
         assert!(runtime.start_session(&request).is_ok());
     }
 }
@@ -209,11 +220,15 @@ fn report_trace_failure_blocks_the_model_after_runtime_actions() {
     let runtime = GovernedRuntime::from_config_with_sink_factories(
         fixture.config,
         move |_| Ok(sink.clone() as Arc<dyn DecisionAudit>),
-        |_| Ok(Arc::new(TraceSink { fail_prepare: true }) as Arc<dyn SensitiveTraceSink>),
+        |_| {
+            Ok(Arc::new(TraceSink {
+                prepared_turns: AtomicUsize::new(1),
+            }) as Arc<dyn SensitiveTraceSink>)
+        },
     )
     .unwrap();
     let mut session = runtime.start_session(&request).unwrap();
-    let turn = session.next_model_turn().unwrap();
+    let turn = report_turn(&mut session);
     assert_eq!(
         turn.permit
             .prepare(
@@ -234,8 +249,12 @@ fn report_trace_failure_blocks_the_model_after_runtime_actions() {
             .count(),
         1
     );
+    let begun = events
+        .iter()
+        .filter(|event| event.kind == "turn_begin_authorized")
+        .count();
+    assert_eq!(begun, 1, "only the decrypt turn ran");
     assert!(events
         .iter()
-        .all(|event| event.kind != "turn_begin_authorized"
-            && event.kind != "standalone_use_completed"));
+        .all(|event| event.kind != "standalone_use_completed"));
 }

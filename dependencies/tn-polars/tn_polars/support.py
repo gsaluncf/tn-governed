@@ -26,6 +26,21 @@ def _sources(identity):
     return frozenset({identity}) if isinstance(identity, str) else identity
 
 
+def _contributor_cells(contributors, row_count):
+    """Validate (output_row, source_id, source_row) tuples and hold them as columns."""
+    rows, sources, ordinals = [], [], []
+    for row, source, ordinal in contributors:
+        if (type(row) is not int or not 0 <= row < row_count
+                or not isinstance(source, str) or not source or "::" in source
+                or type(ordinal) is not int or ordinal < 0):
+            raise ValueError("contributors require valid row coordinates and source identities")
+        rows.append(row)
+        sources.append(source)
+        ordinals.append(ordinal)
+    return pl.DataFrame({"row": rows, "source": sources, "ordinal": ordinals},
+                        schema={"row": pl.UInt32, "source": pl.String, "ordinal": pl.UInt64})
+
+
 SCALAR, ROW, REDUCED, MIXED, UNKNOWN = "scalar", "row", "reduced", "mixed", "unknown"
 
 
@@ -218,27 +233,22 @@ class Support:
                 if not isinstance(source, str) or not source or "::" in source:
                     raise ValueError("source identities must be nonempty and exclude ::")
                 memberships.setdefault(source, set()).add(revision)
-        packed, identities = {}, {}
+        identities = {}
         for source, revisions in memberships.items():
-            identity = frozenset(revisions)
-            identities.setdefault(identity, set()).add(source)
-        for row, source, ordinal in contributors:
-            if (type(row) is not int or not 0 <= row < row_count
-                    or not isinstance(source, str) or not source or "::" in source
-                    or type(ordinal) is not int or ordinal < 0):
-                raise ValueError("contributors require valid row coordinates and source identities")
-            identity = frozenset(memberships.get(source, ()))
-            identities.setdefault(identity, set()).add(source)
-            if identity not in packed:
-                packed[identity] = [[] for _ in range(row_count)]
-            packed[identity][row].append(f"{source}::{ordinal}")
+            identities.setdefault(frozenset(revisions), set()).add(source)
+        cells = _contributor_cells(contributors, row_count)
+        for source in cells.get_column("source").unique():
+            identities.setdefault(frozenset(memberships.get(source, ())), set()).add(source)
+        token = pl.concat_str(pl.col("source"), pl.lit("::"), pl.col("ordinal").cast(pl.String))
+        rows = pl.DataFrame({"row": pl.int_range(row_count, dtype=pl.UInt32, eager=True)})
         columns, ids = [], {}
-        for identity, sources in identities.items():
+        for sources in identities.values():
             name = _name()
-            rows = packed.get(identity)
-            if rows is None:
-                rows = [[] for _ in range(row_count)]
-            columns.append(pl.Series(name, rows, dtype=pl.List(pl.String)))
+            tokens = (cells.filter(pl.col("source").is_in(sorted(sources)))
+                      .group_by("row", maintain_order=True).agg(token.alias(name)))
+            columns.append(rows.join(tokens, on="row", how="left", maintain_order="left")
+                           .select(pl.col(name).fill_null(pl.lit([], dtype=pl.List(pl.String))))
+                           .to_series())
             ids[name] = frozenset(sources)
         return cls(frame.with_columns(columns), ids, {}, policies)
 

@@ -129,6 +129,13 @@ def expression_record(expression):
 
 
 @dataclass(frozen=True)
+class _Event:
+    id: str
+    parents: tuple
+    text: str
+
+
+@dataclass(frozen=True)
 class AuditTrail:
     """Persistent event DAG; branches share serialized values, never mutable dicts."""
 
@@ -136,26 +143,58 @@ class AuditTrail:
     heads: tuple = ()
 
     def records(self):
-        return [json.loads(event) for event in self._events]
+        return [json.loads(event.text) for event in self._events]
 
     def append(self, kind, details):
         body = {"kind": kind, "details": details, "parents": sorted(self.heads)}
         event = {"id": _digest(body), **body}
-        return AuditTrail(self._events + (_json(event),), (event["id"],))
+        stored = _Event(event["id"], tuple(body["parents"]), _json(event))
+        return AuditTrail(self._events + (stored,), (event["id"],))
 
-    def merge(self, other):
-        records = {}
-        for event in self.records() + other.records():
-            records.setdefault(event["id"], event)
-        parents = {parent for event in records.values() for parent in event["parents"]}
-        heads = tuple(sorted(set(records) - parents))
-        return AuditTrail(tuple(_json(event) for event in records.values()), heads)
+    def merge(self, *others):
+        events, seen = list(self._events), {event.id for event in self._events}
+        for event in (event for other in others for event in other._events):
+            if event.id not in seen:
+                seen.add(event.id)
+                events.append(event)
+        parents = {parent for event in events for parent in event.parents}
+        return AuditTrail(tuple(events), tuple(sorted(seen - parents)))
+
+
+def _member_ranges(tokens):
+    """Keep short token lists readable and turn long ones into inclusive ordinal ranges."""
+    if len(tokens) < 64:
+        return tokens
+    ranges = []
+    for ordinal in sorted(int(token.rpartition("::")[2]) for token in tokens):
+        if ranges and ordinal == ranges[-1][1] + 1:
+            ranges[-1][1] = ordinal
+        else:
+            ranges.append([ordinal, ordinal])
+    return {"ranges": ranges}
+
+
+def _valid_members(source, members):
+    """Accept sorted unique tokens, or the single canonical range form of a long list."""
+    if isinstance(members, list):
+        return members == sorted(set(members)) and all(
+            item.startswith(source + "::") for item in members
+        )
+    ranges = members["ranges"]
+    return (
+        set(members) == {"ranges"}
+        and all(len(pair) == 2 and all(type(item) is int for item in pair) for pair in ranges)
+        and all(0 <= first <= last for first, last in ranges)
+        and all(left[1] + 1 < right[0] for left, right in zip(ranges, ranges[1:], strict=False))
+        and sum(last - first + 1 for first, last in ranges) >= 64
+    )
 
 
 def _support_record(support, materialized):
     rows = None
     if support.known:
-        rows = list(support.row_members(materialized))
+        rows = [{source: _member_ranges(tokens) for source, tokens in row.items()}
+                for row in support.row_members(materialized)]
         if not support.ids:
             rows = [{} for _ in range(materialized.height)]
     return {
@@ -502,9 +541,7 @@ def _verify_audit(record, *, rows, expected_sources, expected_artifacts, evaluat
             _require(set(members) <= source_ids, "audit row support has an unbound source")
             for source, contributors in members.items():
                 _require(
-                    contributors == sorted(set(contributors))
-                    and all(item.startswith(source + "::") for item in contributors),
-                    "audit row contributor identity differs",
+                    _valid_members(source, contributors), "audit row contributor identity differs"
                 )
     else:
         _require(support["rows"] is None, "unknown support must not claim precise contributors")

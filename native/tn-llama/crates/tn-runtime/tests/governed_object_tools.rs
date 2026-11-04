@@ -66,7 +66,7 @@ fn native_action_request_binds_source_and_action_without_model_arguments() {
         assert_ne!(current.id(), original_id);
         let (_keys, runtime) = fixture.runtime();
         let mut session = runtime.start_session(&request).unwrap();
-        let turn = session.next_model_turn().unwrap();
+        let turn = report_turn(&mut session);
         let body: Value = serde_json::from_slice(&turn.request_json).unwrap();
         let context: Value =
             serde_json::from_str(body["messages"][1]["content"].as_str().unwrap()).unwrap();
@@ -103,7 +103,7 @@ fn native_tool_executes_once_and_signed_result_reenters_before_report() {
         .clone();
     let (_keys, runtime) = fixture.runtime();
     let mut session = runtime.start_session(&request).unwrap();
-    let turn = session.next_model_turn().unwrap();
+    let turn = report_turn(&mut session);
     let body: Value = serde_json::from_slice(&turn.request_json).unwrap();
     assert_eq!(body["tools"].as_array().unwrap().len(), 1);
     assert_eq!(body["tools"][0]["function"]["name"], "emit_governed_record");
@@ -222,7 +222,7 @@ fn runtime_completed_tool_cannot_be_replayed_or_replaced_by_model_output() {
         let request = fixture.request("calculation");
         let (_keys, runtime) = fixture.runtime();
         let mut session = runtime.start_session(&request).unwrap();
-        let turn = session.next_model_turn().unwrap();
+        let turn = report_turn(&mut session);
         assert_eq!(accept(&mut session, turn, name, arguments).unwrap_err().code(), expected);
         assert_eq!(session.state(), State::Failed);
         assert!(runtime.start_session(&request).is_ok());
@@ -243,6 +243,7 @@ fn native_tool_readback_failure_never_reinserts_a_receipt_or_releases_report() {
     .unwrap();
     let (_keys, runtime) = fixture.runtime();
     let mut session = runtime.start_session(&request).unwrap();
+    select(&mut session, &["finance"]).unwrap();
     assert_eq!(
         session.next_model_turn().unwrap_err().code(),
         "tn_output_readback_failed"

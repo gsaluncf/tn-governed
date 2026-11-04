@@ -36,6 +36,7 @@ from uuid import uuid4
 
 from tn_governed.values.numeric import TNNumeric
 from tn_governed.values.numeric_codec import NUMERIC_TYPES
+from tn_governed.values.manifests import unique_origins
 from tn_governed.values.string import OperationDenied, TNString, _active
 
 
@@ -88,11 +89,8 @@ class ExplicitOperations:
         )
         try:
             claims = list(dict.fromkeys(claim.id for claim in request.claims))
-            origins = []
-            for _, binding, _ in metadata:
-                for origin in binding["origins"]:
-                    if origin not in origins:
-                        origins.append(origin)
+            origins = unique_origins(origin for _, binding, _ in metadata
+                                     for origin in binding["origins"])
 
             opened = context._open_values(request, values)
             data = context._merge_opened(values, opened)

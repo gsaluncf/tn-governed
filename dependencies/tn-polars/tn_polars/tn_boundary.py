@@ -5,7 +5,7 @@ This boundary never reconstructs governance or creates an accepted selection.
 """
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 from types import MappingProxyType
@@ -40,6 +40,23 @@ class _PolicyEntry:
     artifacts: object
     source_ids: frozenset
     dtypes: dict | None
+
+
+def _merged_entry(current, entry):
+    """Check two evaluators for one signed revision and keep the first with both field sets."""
+    if current.artifacts != entry.artifacts:
+        raise _refusal("Conflicting evaluator artifacts for the same signed revision")
+    policy = current.policy
+    if current.policy.to_dict() != entry.policy.to_dict():
+        local = (isinstance(current.artifacts, dict)
+                 and current.artifacts.get("kind") == "endpoint-evaluator")
+        if (not local or current.policy.release != entry.policy.release
+                or any(current.policy.fields[name] != entry.policy.fields[name]
+                       for name in current.policy.fields.keys() & entry.policy.fields.keys())):
+            raise _refusal("Conflicting evaluator profiles for the same signed revision")
+        policy = CompiledPolicy(current.policy.schema, current.policy.policy_ref,
+            current.policy.fields | entry.policy.fields, current.policy.release)
+    return replace(current, policy=policy)
 
 
 class PolicySet:
@@ -97,28 +114,22 @@ class PolicySet:
         return result
 
     def include(self, other):
-        merged = dict(self._entries)
-        for revision, entry in other._entries.items():
-            if revision in merged:
-                current = merged[revision]
-                if current.artifacts != entry.artifacts:
-                    raise _refusal("Conflicting evaluator artifacts for the same signed revision")
-                policy = current.policy
-                if current.policy.to_dict() != entry.policy.to_dict():
-                    local = (isinstance(current.artifacts, dict)
-                             and current.artifacts.get("kind") == "endpoint-evaluator")
-                    if (not local or current.policy.release != entry.policy.release
-                            or any(current.policy.fields[name] != entry.policy.fields[name]
-                                   for name in current.policy.fields.keys() & entry.policy.fields.keys())):
-                        raise _refusal("Conflicting evaluator profiles for the same signed revision")
-                    policy = CompiledPolicy(current.policy.schema, current.policy.policy_ref,
-                        current.policy.fields | entry.policy.fields, current.policy.release)
-                entry = _PolicyEntry(policy, current.evaluator, current.artifacts,
-                    current.source_ids | entry.source_ids, current.dtypes)
-            merged[revision] = entry
-        result = PolicySet(merged, audit=self.audit.merge(other.audit))
+        return self.include_all((other,))
+
+    def include_all(self, others):
+        """Merge several policy sets with one pass over their entries, events and claims."""
+        merged, sources = dict(self._entries), {}
+        for other in others:
+            for revision, entry in other._entries.items():
+                if revision in merged:
+                    sources.setdefault(revision, set(merged[revision].source_ids)).update(entry.source_ids)
+                    entry = _merged_entry(merged[revision], entry)
+                merged[revision] = entry
+        for revision, members in sources.items():
+            merged[revision] = replace(merged[revision], source_ids=frozenset(members))
+        result = PolicySet(merged, audit=self.audit.merge(*(other.audit for other in others)))
         claims = {item["id"]: item for item in self.claims}
-        for item in other.claims:
+        for item in (item for other in others for item in other.claims):
             if item["id"] in claims and claims[item["id"]] != item:
                 raise _refusal("Claim identity has conflicting attributed records")
             claims[item["id"]] = item

@@ -13,14 +13,53 @@ from contextlib import ExitStack
 from functools import lru_cache
 import hashlib
 import json
+from json.encoder import encode_basestring_ascii as json_string
 from pathlib import Path
 
 import tn
 from tn_governed.publications import open_publication_store
 
+from .collection import pauses_collection
 from .evidence import EvidenceError, verify_tape
-from .primitives import SCHEMA, VALUE_TYPE, unique_origins
+from .manifests import SCHEMAS, signed_manifest, unique_origins
+from .primitives import VALUE_TYPE
+from .references import unpack_references
 from .provision import POLICY
+
+
+# Default count of source cells above which the written graph has one node per source publication.
+GRAPH_CELL_LIMIT = 10000
+
+
+def report_graph(nodes, edges, policy_edges, cell_limit=GRAPH_CELL_LIMIT):
+    """The graph a reader can open. The in-memory cell graph is what was verified.
+
+    Above ``cell_limit`` source cells each source publication is one node; None keeps every cell.
+    """
+    cells = {node["id"]: node for node in nodes if node["operation"] == "select"}
+    if cell_limit is None or len(cells) <= cell_limit:
+        return {"nodes": nodes, "edges": edges, "policy_edges": policy_edges}
+    publications = {}
+    for node in cells.values():
+        item = publications.setdefault(node["object_id"], {
+            "id": node["object_id"], "object_id": node["object_id"], "kind": node["kind"],
+            "operation": "select", "cells": 0, "policy_revisions": node["policy_revisions"],
+            "claims": [], "source": {k: v for k, v in node["source"].items() if k != "row"}})
+        item["cells"] += 1
+    linked = {(cells[edge["parent"]]["object_id"] if edge["parent"] in cells else edge["parent"],
+               edge["child"], edge["operation"]): None for edge in edges}
+    return {"nodes": [node for node in nodes if node["id"] not in cells] + list(publications.values()),
+            "edges": [{"parent": parent, "child": child, "operation": operation}
+                      for parent, child, operation in linked],
+            "policy_edges": policy_edges, "source_cells": "one node per source publication"}
+
+
+def cache_bound(store):
+    """Entries for one verification run: at least 128, and two per retained publication.
+
+    Every key names a publication of the run, so a run never evicts what it reads again.
+    """
+    return max(128, 2 * len(store.publication_sizes()))
 
 
 def require(condition, message):
@@ -36,19 +75,22 @@ def reference_node_id(key):
     """Identify a field without conflating siblings in the same publication."""
     if key[1:] == ("values", "value"):
         return key[0]
-    return key[0] + "#" + json.dumps(key[1:], ensure_ascii=True, separators=(",", ":"))
+    return f"{key[0]}#[{json_string(key[1])},{json_string(key[2])}]"
 
 
-def verify(root):
+@pauses_collection
+def verify(root, *, graph_cell_limit=GRAPH_CELL_LIMIT):
     root = Path(root).resolve()
     run = json.loads((root / "run.json").read_text())
     require(run["schema"] == "tn.primitive-run.v1", "unknown run manifest")
     store = open_publication_store(root / "publications", read_only=True)
     authority, writers = run["authority"], set(run["writers"])
     with store, tn.Session.from_config(str(root / run["observer_config"])) as session, ExitStack() as caches:
+        bound = cache_bound(store)
+
         def cached(function):
             # All entries belong to this reader and this fixed verification run.
-            result = lru_cache(maxsize=128)(function)
+            result = lru_cache(maxsize=bound)(function)
             caches.callback(result.cache_clear)
             return result
 
@@ -176,12 +218,6 @@ def verify(root):
                 # A SELECT yielding zero rows has SQLRead but no Result.
                 require(all(t == expected for t in terminal), "wrong completion kind for operation")
 
-        results = {}
-        for record in records:
-            if record.body["kind"] == "Result":
-                key = ref_key(record.body["details"]["output"])
-                require(key not in results, "more than one Result for an incarnation")
-                results[key] = record
         visited, visiting, nodes, edges, bindings_by_key = set(), set(), {}, [], {}
         def accepted_value(ctx):
             return (ctx.writer in writers and ctx.object_type == VALUE_TYPE and bool(ctx.policies)
@@ -199,13 +235,72 @@ def verify(root):
             obj = object_(identity)
             working = session.receive(obj, use=tn.UseContext("offline-verifier", "inspect-evidence", "read"),
                                       groups=["evidence"], decide=accepted_value)
-            manifest = working.get("manifest", group="evidence")
-            require(manifest["schema"] == SCHEMA, "unknown primitive manifest")
-            return working, manifest
+            manifest = signed_manifest(working)
+            require(manifest["schema"] in SCHEMAS, "unknown primitive manifest")
+            return manifest, {p.revision_id for p in working.policies}
+
+        @cached
+        def commitments(identity, group):
+            return object_(identity).envelope[group]["field_hashes"]
 
         @cached
         def lineage(identity):
             return tn.LineageVerifier(max_objects=65536, max_depth=256).verify(view(identity), catalog, dag, view)
+
+        results = {}
+        for record in records:
+            if record.body["kind"] == "Result":
+                output = record.body["details"]["output"]
+                fields = (output["field"],) if "field" in output else evidence(output["object_id"])[0]["bindings"]
+                for field in fields:
+                    key = output["object_id"], output["group"], field
+                    require(key not in results, "more than one Result for an incarnation")
+                    results[key] = record
+
+        source_scopes = {}
+
+        def check_source_scope(key, record, source, actual_policies, decision, whole_publication):
+            """Facts every SQL cell of one publication, Result, and source scope share."""
+            rb, rd = record.body, record.body["details"]
+            scope = ({name: item for name, item in source.items() if name != "row"}
+                     if whole_publication else source)
+            require(rd["source"] == scope and key[0] in source_editions,
+                    "source primitive lacks its signed SQL origin or edition")
+            require(source_editions[key[0]].dataset == source["table"] + "." + source["column"],
+                    "source edition does not identify the assigned SQL column")
+            field = assignment["columns"][source["column"]]
+            require(actual_policies == {field["revision"]} and source["assignment_id"] == assignment_obj.id
+                    and source["snapshot_sha256"] == assignment["source"]["snapshot_sha256"]
+                    and source["table"] == assignment["table"],
+                    "SQL source was hydrated under the wrong column assignment")
+            require(actual_policies <= {p["revision"] for p in decision.body["details"]["policies"]},
+                    "SQL cell's policy was not included in its query Decision")
+            sql_records = sql_reads_by_call[rb["context_id"], rb["call_id"]]
+            require(len(sql_records) == 1 and sql_records[0].body["sequence"] < rb["sequence"]
+                    and sql_records[0].body["details"]["query_id"] == source["query_id"]
+                    and sql_records[0].body["details"]["source"] == assignment["source"]
+                    and sql_records[0].body["details"]["assignment_id"] == assignment_obj.id,
+                    "source publication does not follow its authorized SQL read")
+            row_count = sql_records[0].body["details"]["row_count"]
+            require(type(row_count) is int, "source primitive has an invalid SQL row ordinal")
+            return field, row_count
+
+        def check_source(key, record, binding, actual_policies, decision, whole_publication):
+            source = binding["source"]
+            require(source is not None and binding["origins"] == [source],
+                    "source primitive lacks its signed SQL origin or edition")
+            shared = frozenset((name, item) for name, item in source.items() if name != "row")
+            scope_key = key[0], record.id, whole_publication or source.get("row"), shared
+            if scope_key not in source_scopes:
+                source_scopes[scope_key] = check_source_scope(
+                    key, record, source, actual_policies, decision, whole_publication)
+            field, row_count = source_scopes[scope_key]
+            require(binding["declared"]["kind"] == field["kind"],
+                    "SQL source was hydrated under the wrong column assignment")
+            require(type(source["row"]) is int and 0 <= source["row"] < row_count,
+                    "source primitive has an invalid SQL row ordinal")
+            require(key[1] == "values" and key[2] in {"value", "value_" + str(source["row"])},
+                    "source primitive SQL field differs from its signed row ordinal")
 
         def visit(key):
             if key in visited:
@@ -218,11 +313,13 @@ def verify(root):
             decision = by_id[rd["decision_id"]]
             obj = object_(key[0])
             require(record.writer == obj.writer, "Result is not from the incarnation's publisher")
-            working, manifest = evidence(key[0])
+            manifest, actual_policies = evidence(key[0])
             binding = manifest["bindings"][key[2]]
             require(binding["decision_id"] == decision.id and binding["parents"] == rb["inputs"]
                     and binding["claims"] == rd["claims"], "signed binding disagrees with Result")
-            require(rd["field_commitment"] == obj.envelope[key[1]]["field_hashes"][key[2]],
+            whole_publication = "field" not in rd["output"]
+            commitment = commitments(key[0], key[1]).get(key[2])
+            require(commitment is not None and (whole_publication or rd["field_commitment"] == commitment),
                     "Result does not bind the exact native field commitment")
             transition = rd["transition"]
             require(transition["governed_inputs"] == binding["parents"] and transition["retained_claims"] == binding["claims"],
@@ -230,19 +327,19 @@ def verify(root):
             for literal in transition["literal_inputs"]:
                 require(literal["claims"] == [], "literal invents a claimant")
             parent_policies, parent_claims = set(), set()
-            for parent in binding["parents"]:
-                pk = ref_key(parent)
-                visit(pk)
-                parent_policies.update(nodes[pk]["policy_revisions"])
-                pb = bindings_by_key[pk]
-                parent_claims.update(pb["claims"])
-                edges.append({"parent": reference_node_id(pk), "child": reference_node_id(key),
-                              "operation": rb["operation"]})
-            parent_origins = unique_origins(
-                origin for parent in binding["parents"]
-                for origin in bindings_by_key[ref_key(parent)]["origins"]
-            )
-            actual_policies = {p.revision_id for p in working.policies}
+            if binding["parents"]:
+                parents = unpack_references(binding["parents"])
+                for parent in parents:
+                    pk = ref_key(parent)
+                    visit(pk)
+                    parent_policies.update(nodes[pk]["policy_revisions"])
+                    parent_claims.update(bindings_by_key[pk]["claims"])
+                    edges.append({"parent": reference_node_id(pk), "child": reference_node_id(key),
+                                  "operation": rb["operation"]})
+                parent_origins = unique_origins(
+                    origin for parent in parents
+                    for origin in bindings_by_key[ref_key(parent)]["origins"]
+                )
             require(parent_claims <= set(binding["claims"]), "a derivative dropped a contributing claim")
             require(parent_claims == set(decision.body["details"]["considered_claims"]),
                     "Decision did not consider the complete set of contributing claims")
@@ -252,33 +349,12 @@ def verify(root):
                 require(parent_policies == {p["revision"] for p in decision.body["details"]["policies"]},
                         "Decision did not evaluate the complete contributing governance")
             else:
-                source = binding["source"]
-                require(source is not None and rd["source"] == source and key[0] in source_editions,
-                        "source primitive lacks its signed SQL origin or edition")
-                require(source_editions[key[0]].dataset == source["table"] + "." + source["column"],
-                        "source edition does not identify the assigned SQL column")
-                field = assignment["columns"][source["column"]]
-                require(actual_policies == {field["revision"]} and source["assignment_id"] == assignment_obj.id
-                        and source["snapshot_sha256"] == assignment["source"]["snapshot_sha256"]
-                        and source["table"] == assignment["table"] and binding["declared"]["kind"] == field["kind"],
-                        "SQL source was hydrated under the wrong column assignment")
-                require(actual_policies <= {p["revision"] for p in decision.body["details"]["policies"]},
-                        "SQL cell's policy was not included in its query Decision")
-                sql_records = sql_reads_by_call[rb["context_id"], rb["call_id"]]
-                require(len(sql_records) == 1 and sql_records[0].body["sequence"] < rb["sequence"]
-                        and sql_records[0].body["details"]["query_id"] == source["query_id"]
-                        and sql_records[0].body["details"]["source"] == assignment["source"]
-                        and sql_records[0].body["details"]["assignment_id"] == assignment_obj.id,
-                        "source publication does not follow its authorized SQL read")
-                row_count = sql_records[0].body["details"]["row_count"]
-                require(type(row_count) is int and type(source["row"]) is int
-                        and 0 <= source["row"] < row_count,
-                        "source primitive has an invalid SQL row ordinal")
-                require(key[1] == "values" and key[2] in {"value", "value_" + str(source["row"])},
-                        "source primitive SQL field differs from its signed row ordinal")
+                check_source(key, record, binding, actual_policies, decision, whole_publication)
             for identity in binding["claims"]:
                 claim = by_id.get(identity)
                 require(claim is not None and claim.body["kind"] == "Claim", "unverifiable contributing claim")
+                statement = claim.body["details"].get("statement")
+                require(isinstance(statement, str) and bool(statement.strip()), "claim has no statement")
                 if identity not in parent_claims:
                     require(rb["operation"] == "attest" and claim.body["call_id"] == rb["call_id"]
                             and claim.writer == record.writer and claim.body["inputs"] == binding["parents"],
@@ -320,17 +396,18 @@ def verify(root):
             summary["model"] = verify_model(root, run, records, by_id, rules, nodes, bindings_by_key,
                                             store, catalog, dag, view)
             summary["scope"] += " Model verification additionally admits and opens the signed report under the enrolled recipient's declared use; source primitive payloads remain closed."
-        graph = {"nodes": list(nodes.values()), "edges": edges, "policy_edges": policy_edges}
+        graph = report_graph(list(nodes.values()), edges, policy_edges, graph_cell_limit)
     (root / "verification.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    (root / "dag.json").write_text(json.dumps(graph, indent=2), encoding="utf-8")
-    names = {node["id"]: "n" + str(i) for i, node in enumerate(nodes.values())}
+    (root / "dag.json").write_text(json.dumps(graph), encoding="utf-8")
+    names = {node["id"]: "n" + str(i) for i, node in enumerate(graph["nodes"])}
     mermaid = ["flowchart LR"]
-    for node in nodes.values():
+    for node in graph["nodes"]:
         identity = node["id"]
         source = node["source"]
-        label = (source["column"] + " row " + str(source["row"])) if source else node["operation"]
+        place = f" row {source['row']}" if source and "row" in source else f" {node.get('cells')} cells"
+        label = (source["column"] + place) if source else node["operation"]
         mermaid.append(f'  {names[identity]}["{node["kind"]}: {label}<br/>{identity[7:17]}"]')
-    mermaid.extend(f'  {names[e["parent"]]} --> {names[e["child"]]}' for e in edges)
+    mermaid.extend(f'  {names[e["parent"]]} --> {names[e["child"]]}' for e in graph["edges"])
     (root / "dag.mmd").write_text("\n".join(mermaid) + "\n", encoding="utf-8")
     model = summary.get("model", {})
     if model.get("completed"):
@@ -344,13 +421,14 @@ def verify(root):
             review_edges.append({"parent": model["output_object_id"], "child": review["record_id"],
                                  "operation": "request_review", "relation": "signed-subject-reference"})
         model_graph = {"nodes": graph["nodes"] + native_nodes,
-                       "edges": edges + model["native_edges"] + review_edges, "policy_edges": policy_edges}
+                       "edges": graph["edges"] + model["native_edges"] + review_edges,
+                       "policy_edges": policy_edges}
         for node in native_nodes:
             names[node["id"]] = "n" + str(len(names))
             mermaid.append(f'  {names[node["id"]]}["{node["kind"]}<br/>{node["id"][7:17]}"]')
         mermaid.extend(f'  {names[e["parent"]]} --> {names[e["child"]]}' for e in model["native_edges"])
         mermaid.extend(f'  {names[e["parent"]]} -. "review requested" .-> {names[e["child"]]}' for e in review_edges)
-        (root / "model-dag.json").write_text(json.dumps(model_graph, indent=2), encoding="utf-8")
+        (root / "model-dag.json").write_text(json.dumps(model_graph), encoding="utf-8")
         (root / "model-dag.mmd").write_text("\n".join(mermaid) + "\n", encoding="utf-8")
     print(json.dumps({k: summary[k] for k in ("network_used", "record_count", "record_kinds", "incarnations",
                                               "derivation_edges", "source_editions", "policy_revisions")}, indent=2))
@@ -365,4 +443,7 @@ def verify(root):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_directory", type=Path)
-    verify(parser.parse_args().run_directory)
+    parser.add_argument("--graph-cell-limit", type=int, default=GRAPH_CELL_LIMIT,
+                        help="source cells above which dag.json has one node per source publication")
+    arguments = parser.parse_args()
+    verify(arguments.run_directory, graph_cell_limit=arguments.graph_cell_limit)

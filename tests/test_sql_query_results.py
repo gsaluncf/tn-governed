@@ -647,13 +647,13 @@ def test_recipient_rejects_invalid_signed_contributor_mappings(sql_endpoint, mon
     def malformed(context, rows, binding, lineage, **kwargs):
         lineage = deepcopy(lineage)
         if damage == "missing":
-            lineage["cells"].pop()
+            lineage["contributor_rows"].pop()
         elif damage == "duplicate":
-            lineage["cells"].append(lineage["cells"][0])
+            lineage["contributor_rows"].append(lineage["contributor_rows"][0])
         elif damage == "source":
-            lineage["cells"][0]["contributors"][0]["table"] = "unassigned"
+            lineage["contributor_columns"][0][0]["table"] = "unassigned"
         else:
-            lineage["cells"][0]["contributors"][0]["row_key"] = [{"kind": "int", "value": "01"}]
+            lineage["contributor_rows"][0][0][0] = '[{"kind":"int","value":"01"}]'
         return publish(context, rows, binding, lineage, **kwargs)
 
     monkeypatch.setattr(query_result, "publish_result", malformed)

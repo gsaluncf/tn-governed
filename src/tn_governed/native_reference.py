@@ -58,7 +58,7 @@ Contract review.
 Refuse release.
 """
 REPORT_PROMPT = (
-    "Select the finance section. Write a short HTML report of its calculation. "
+    "Write a short HTML report of the supplied calculation. "
     "State the function, numerical result, units, and method from the supplied result. "
     "Explain that a negative maximum drawdown records the fall from an earlier peak. "
     "Use the supplied calculation; do not calculate a different metric or recommend a trade."

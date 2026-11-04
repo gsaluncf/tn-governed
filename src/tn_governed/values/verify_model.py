@@ -3,7 +3,6 @@
 import base64
 import hashlib
 import json
-from html.parser import HTMLParser
 
 import tn
 from tn.canonical import _canonical_bytes
@@ -11,13 +10,8 @@ from tn_llama_client.clients import NativeOutputReader
 from tn_llama_client.protocol import NativeModelRelease
 
 from ..context_evidence import inspect_governance_context
-from .evidence import EvidenceError
 from .model import runtime_limits_from_config
-
-
-def require(condition, message):
-    if not condition:
-        raise EvidenceError(message)
+from .report_profile import require, visible_text
 
 
 def sha(raw):
@@ -25,81 +19,15 @@ def sha(raw):
 
 
 def verified_context_observation(
-    audit, trace, *, run_id, request_digest, source_id, expected_release=None,
+    audit, trace, *, run_id, request_digest, source_id, expected_release=None, source_envelope=None,
 ):
     evidence = inspect_governance_context(
         audit, trace, run_id=run_id, request_digest=request_digest, source_id=source_id,
-        expected_release=expected_release,
+        expected_release=expected_release, source_envelope=source_envelope,
     )
     require(evidence.verified,
             "native governance context evidence failed: " + "; ".join(evidence.errors))
     return evidence.to_dict()
-
-
-class PlainReportText(HTMLParser):
-    """Inspect unstyled body text, excluding document titles and refusing CSS/scripts."""
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.parts = []
-        self._head_seen = False
-        self._head_open = False
-        self._title_open = False
-        self._visible_started = False
-
-    def handle_starttag(self, tag, attrs):
-        require(tag in {"html", "head", "title", "body", "p", "div", "span", "br",
-                        "h1", "h2", "h3", "h4",
-                        "ul", "ol", "li", "strong", "b", "em", "i", "code", "pre",
-                        "table", "thead", "tbody", "tr", "th", "td"} and not attrs,
-                "report is outside the unstyled, visible-element inspection profile")
-        if tag == "head":
-            require(not self._head_seen and not self._visible_started,
-                    "ambiguous document header structure")
-            self._head_seen = self._head_open = True
-            return
-        if tag == "title":
-            require(self._head_open and not self._title_open,
-                    "ambiguous document title structure")
-            self._title_open = True
-            return
-        require(not self._head_open, "visible element inside document header")
-        if tag != "html":
-            self._visible_started = True
-        if tag in {"p", "div", "br", "li", "h1", "h2", "h3", "td"}:
-            self.parts.append(" ")
-
-    def handle_startendtag(self, tag, attrs):
-        require(tag not in {"head", "title"}, "self-closing document header or title")
-        super().handle_startendtag(tag, attrs)
-
-    def handle_endtag(self, tag):
-        if tag == "title":
-            require(self._head_open and self._title_open,
-                    "ambiguous document title structure")
-            self._title_open = False
-            return
-        if tag == "head":
-            require(self._head_open and not self._title_open,
-                    "ambiguous document header structure")
-            self._head_open = False
-            return
-        require(not self._head_open, "unexpected closing element inside document header")
-        if tag in {"p", "div", "li", "h1", "h2", "h3", "td"}:
-            self.parts.append(" ")
-
-    def handle_data(self, data):
-        if self._head_open:
-            require(self._title_open or not data.strip(),
-                    "non-title text inside document header")
-            return
-        if data.strip():
-            self._visible_started = True
-        self.parts.append(data)
-
-    def close(self):
-        super().close()
-        require(not self._head_open and not self._title_open,
-                "unclosed document header or title")
 
 
 def verify_model(root, run, records, by_id, rules, nodes, bindings, store, catalog, dag, resolve):
@@ -190,6 +118,7 @@ def verify_model(root, run, records, by_id, rules, nodes, bindings, store, catal
     observations["governance_context"] = verified_context_observation(
         audit, trace, run_id=release.run_id, request_digest=request_digest, source_id=source.id,
         expected_release=json.loads(base64.b64decode(responses[0]["body_b64"])),
+        source_envelope=source.envelope,
     )
     require(release.output_object.id == model["output_object_id"] == rd["output_object_id"]
             and [o.id for o in release.tool_objects] == model["tool_object_ids"] == rd["tool_object_ids"]
@@ -250,10 +179,7 @@ def verify_model(root, run, records, by_id, rules, nodes, bindings, store, catal
         html = opened.get("report_html", group="default")
         require(sha(html.encode()) == rd["report_html_sha256"] and (root / "report.html").read_bytes() == html.encode(),
                 "display artifact differs from signed native report")
-        parser = PlainReportText()
-        parser.feed(html)
-        parser.close()
-        visible = " ".join("".join(parser.parts).split())
+        visible = visible_text(html)
         require(all(" ".join(n.split()) in visible for n in notices), "required notice is absent from plain report text")
     source_node_id = nodes[key]["id"]
     edges = [{"parent": source_node_id, "child": t.id, "operation": section["required_tool"]} for t in release.tool_objects]

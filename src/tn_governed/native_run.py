@@ -79,6 +79,10 @@ def _stop_owned_server(process, *, wsl, pid_path):
         process.wait(timeout=5)
 
 
+# llama.cpp offloads at most a model's own layers, so this places every layer on the GPU.
+ALL_GPU_LAYERS = 999
+
+
 @contextmanager
 def governed_server(
     *, binary: Path, model: Path, config: Path, port: int, api_key: str, wsl: bool = False,
@@ -94,6 +98,8 @@ def governed_server(
         if probe.connect_ex(("127.0.0.1", port)) == 0:
             raise ValueError("the model port is already occupied; choose an unused local port")
     with socket.socket() as probe:
+        # A preceding server on this port can leave connections in TIME_WAIT.
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         probe.bind(("127.0.0.1", port))
     directory = config.parent
     pid_path = directory / f"server-{uuid.uuid4().hex}.pid"
@@ -121,7 +127,7 @@ def governed_server(
         "0",
         "--no-cache-idle-slots",
         "--n-gpu-layers",
-        str(gpu_layers if gpu_layers is not None else (99 if wsl else 0)),
+        str(ALL_GPU_LAYERS if gpu_layers is None else gpu_layers),
     ]
     environment = {
         key: value

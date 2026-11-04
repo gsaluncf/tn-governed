@@ -1,9 +1,12 @@
 """Relational query shapes retain admitted source scope through transport."""
 
+import os
+
 import pytest
 from test_sql_query_results import database as database
 from test_sql_query_results import sql_endpoint as sql_endpoint
 
+from tn_governed.values.query import SQLiteQuery
 from tn_governed.values.query_result import GovernedQueryResult, QueryTransport
 from tn_governed.values.string import OperationDenied
 
@@ -98,6 +101,31 @@ def assert_precision_refusal(context):
     assert decision.body["details"]["permitted"] is False
     assert "lineage precision" in decision.body["details"]["reason"]
     assert refusal.body["details"]["reason"] == decision.body["details"]["reason"]
+
+
+def test_snapshot_change_preserving_file_metadata_fails_the_final_hash(database):
+    with SQLiteQuery(database, "SELECT amount FROM orders") as query:
+        status = database.stat()
+        content = bytearray(database.read_bytes())
+        content[-1] ^= 1
+        database.write_bytes(bytes(content))
+        os.utime(database, ns=(status.st_atime_ns, status.st_mtime_ns))
+        with pytest.raises(OperationDenied, match="changed"):
+            query.execute()
+
+
+def test_source_scope_is_selectable_for_a_query_with_known_contributors(sql_endpoint):
+    sql = "SELECT sum(o.amount) FROM orders o"
+    tracked = sql_endpoint.driver.execute_query(sql)
+    scoped = sql_endpoint.driver.execute_query(sql, contributor_tracking=False)
+    assert tracked.metadata()["lineage"]["row_support"] == "known"
+    assert tracked.metadata()["lineage"]["contributor_rows"]
+    lineage = scoped.metadata()["lineage"]
+    assert lineage["row_support"] == "unknown"
+    assert lineage["cells"] == []
+    assert {item["column"] for item in lineage["source_columns"]} == {"amount"}
+    assert {p.revision_id for p in scoped.policies} == {p.revision_id for p in tracked.policies}
+    assert scoped.reveal("support-console") == tracked.reveal("support-console") == [(19,)]
 
 
 @pytest.mark.parametrize("sql,parameters,expected,required_sources", QUERY_CASES)

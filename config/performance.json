@@ -8,7 +8,9 @@
   "recipient_repetitions": 30,
   "warmups": 1,
   "model": true,
-  "sql_batch_size": 256,
+  "gpu_layers": 99,
+  "sql_batch_size": 4096,
+  "retain_cases": false,
   "runtime_limits": {
     "max_request_bytes": 100663296,
     "max_message_bytes": 16384,

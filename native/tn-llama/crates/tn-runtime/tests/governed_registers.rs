@@ -55,7 +55,7 @@ fn register_child() {
         .clone();
     let (_keys, runtime) = fixture.runtime();
     let mut session = runtime.start_session(&request).unwrap();
-    let turn = session.next_model_turn().unwrap();
+    let turn = report_turn(&mut session);
     let ActionOutcome::GovernedRelease(release) = accept(
         &mut session,
         turn,

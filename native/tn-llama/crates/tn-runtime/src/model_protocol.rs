@@ -14,6 +14,7 @@ pub const RENDERED_PROMPT_DIGEST_DOMAIN: &[u8] = b"tn.llama.rendered-prompt.v1\0
 pub const RUNNABLE_TASK_DIGEST_DOMAIN: &[u8] = b"tn.llama.runnable-task.v1\0";
 pub const RUNNABLE_TASK_SCHEMA: &str = "tn.llama.runnable-task.v1";
 
+const HASH_KEY_PATTERN: &str = "^hmac-sha256:v1:[0-9a-f]{64}$";
 pub(crate) const SYSTEM_CONTENT: &str = "This is a server-governed action interaction. Call exactly one available tool and return no prose. Generate only the requested business arguments and output fields. Governance in the current request applies to every decision; source identities, cryptographic evidence, and authorization are bound by the runtime. The server validates, executes, emits, and releases every action.";
 
 pub(crate) fn governance_presentation(
@@ -150,10 +151,75 @@ pub(crate) fn section_selection_body(
     }))
 }
 
+/// The governed object stays encrypted here. The context carries the governance
+/// and the hash keys; the model asks the runtime to decrypt by presenting them.
+pub(crate) fn decrypt_turn_body(
+    user_content: &str,
+    encrypted_data: &BTreeMap<String, BTreeMap<String, String>>,
+    governance_hash: &str,
+    governance: &BTreeMap<String, Value>,
+    max_tokens: u32,
+) -> Result<Vec<u8>, TnLlamaError> {
+    let encrypted_data = encrypted_data
+        .iter()
+        .flat_map(|(group, fields)| {
+            fields.iter().map(move |(field, hash)| {
+                json!({"group": group, "field": field, "data_hash": hash})
+            })
+        })
+        .collect::<Vec<_>>();
+    let control = canonical_text(&json!({
+        "phase": "decrypt",
+        "user_request": user_content,
+        "encrypted_data": encrypted_data,
+        "governance_hash": governance_hash,
+        "applicable_source_governance": governance,
+        "output_instruction": "The data is encrypted and you can decrypt it. Call decrypt_value. Copy governance_hash exactly. Copy into data_hashes the data_hash of each encrypted_data entry you need.",
+    }))?;
+    canonical_value(&json!({
+        "cache_prompt": false,
+        "max_tokens": max_tokens,
+        "messages": [
+            {"role": "system", "content": SYSTEM_CONTENT},
+            {"role": "user", "content": control}
+        ],
+        "n": 1,
+        "n_cache_reuse": 0,
+        "parallel_tool_calls": false,
+        "reasoning_effort": "none",
+        "stream": false,
+        "temperature": 0,
+        "tool_choice": "required",
+        "tools": [{
+            "type": "function",
+            "function": {
+                "name": "decrypt_value",
+                "description": "Decrypt governed data using the hash key of its governance object and the hash keys of the encrypted data.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "governance_hash": {"type": "string", "pattern": HASH_KEY_PATTERN},
+                        "data_hashes": {
+                            "type": "array",
+                            "items": {"type": "string", "pattern": HASH_KEY_PATTERN},
+                            "minItems": 1,
+                            "uniqueItems": true
+                        }
+                    },
+                    "required": ["governance_hash", "data_hashes"],
+                    "additionalProperties": false
+                }
+            }
+        }]
+    }))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn governed_object_action_body(
     user_content: &str,
     selected: &BTreeMap<String, Value>,
+    governance_hash: &str,
+    decrypt_call: AcceptedCall<'_>,
     governance: &BTreeMap<String, Value>,
     report_policy: Option<&tn_core::governed::Governance>,
     attributions: &[String],
@@ -171,13 +237,17 @@ pub(crate) fn governed_object_action_body(
     let mut messages = vec![
         json!({"role":"system","content":SYSTEM_CONTENT}),
         json!({"role":"user","content":canonical_text(&json!({
-        "phase":"governed_action", "user_request":user_content, "selected_values":selected,
+        "phase":"governed_action", "user_request":user_content,
         "applicable_source_governance":governance, "required_attributions":attributions,
         "source_object_id":source_object_id, "operation":action,
         "required_tools":required_tools,
         "additional_report_contract": report_policy.map(|policy| json!({"governed_by":policy.governed_by(),"fields":policy.fields()})),
         "output_instruction":"Call the required tools using the business arguments in their schemas. The runtime binds each invocation to the admitted source and authorized action. When emission is offered, write report_html only and use the authenticated tool results when relevant. The runtime retains and signs every inherited contract, dataset binding, exact input source, and accepted tool publication."
     }))?}),
+        assistant_call_message(decrypt_call),
+        json!({"role":"tool", "tool_call_id":decrypt_call.id, "content":canonical_text(&json!({
+            "data":selected, "governance_hash":governance_hash,
+        }))?}),
     ];
     for exchange in tool_exchanges {
         if exchange.call.runtime {

@@ -11,9 +11,9 @@ use crate::contract::ReportContract;
 use crate::governance::{GovernanceReader, VerifiedGovernance};
 use crate::model_phase::Phase;
 use crate::model_protocol::{
-    governance_context_digest, governed_action_body, model_request_digest, rendered_prompt_digest,
-    section_selection_body, session_error, AcceptedCall, GovernedActionBodyInput, NativeToolResult,
-    ToolExchange,
+    decrypt_turn_body, governance_context_digest, governed_action_body, model_request_digest,
+    rendered_prompt_digest, section_selection_body, session_error, AcceptedCall,
+    GovernedActionBodyInput, NativeToolResult, ToolExchange,
 };
 use crate::output_tn::{
     ComplianceReceipt, OutputPublisher, ReportProposal, SourceLineage, TrustedDerivation,
@@ -114,6 +114,8 @@ pub(crate) struct GovernedSessionState {
     pub view: Option<tn_core::governed::GovernanceView>,
     pub data: Option<tn_core::governed::DataObject>,
     pub tools: Vec<crate::output_tn::GovernedPublication>,
+    /// The decision context computed for these tool objects.
+    pub context: Option<(Vec<String>, BTreeMap<String, Value>)>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -570,7 +572,7 @@ impl Session {
                 ));
             }
         };
-        let governance_context = match model_governance(&core) {
+        let governance_context = match model_governance(&mut core) {
             Ok(context) => context,
             Err(error) => return Err(terminalize(&mut core, error, FailedSink::None)),
         };
@@ -580,6 +582,16 @@ impl Session {
                     "tn_turn_phase_mismatch",
                     "reserved model phase cannot issue a turn",
                 )),
+                Phase::SectionSelection if core.governed.is_some() => {
+                    let (governance_hash, encrypted_data) = governed_hash_keys(&core)?;
+                    decrypt_turn_body(
+                        &core.user_content,
+                        &encrypted_data,
+                        &governance_hash,
+                        &governance_context,
+                        core.final_max_tokens,
+                    )
+                }
                 Phase::SectionSelection => {
                     let available_sections = available_section_manifest(&core)?;
                     section_selection_body(
@@ -697,11 +709,14 @@ impl Session {
         };
         let arguments = crate::envelope::parse_duplicate_safe_json(call.arguments.as_bytes())
             .expect("native call arguments were validated");
-        let selected_sections = match validate_section_selection_arguments(&core, &arguments) {
+        let selected_sections = match selection_arguments(&core, &arguments) {
             Ok(sections) => sections,
             Err(error) => return Err(terminalize(&mut core, error, FailedSink::None)),
         };
-        apply_section_selection(&mut core, Some(permit.phase), call, selected_sections)
+        let outcome =
+            apply_section_selection(&mut core, Some(permit.phase), call, selected_sections)?;
+        retain_presented_fields(&mut core, &arguments);
+        Ok(outcome)
     }
 
     fn accept_governed_action(
@@ -1160,7 +1175,7 @@ fn available_action_tools(core: &SessionCore) -> Result<Vec<Value>, TnLlamaError
 
 fn advance_runtime_actions(core: &mut SessionCore) -> Result<(), TnLlamaError> {
     let result = (|| {
-        if core.state == State::SectionSelection {
+        if core.state == State::SectionSelection && core.governed.is_none() {
             let manifest = available_section_manifest(core)?;
             if manifest.len() != 1 {
                 return Ok(());
@@ -1362,24 +1377,38 @@ fn admit_governance(core: &mut SessionCore) -> Result<(), TnLlamaError> {
     Ok(())
 }
 
-fn model_governance(core: &SessionCore) -> Result<BTreeMap<String, Value>, TnLlamaError> {
+fn model_governance(core: &mut SessionCore) -> Result<BTreeMap<String, Value>, TnLlamaError> {
     let governance = core
         .governance
         .as_ref()
         .ok_or_else(|| session_error("tn_session_state", "verified governance is unavailable"))?;
-    if let Some(state) = &core.governed {
-        let view = state.view.as_ref().ok_or_else(|| {
-            session_error(
-                "tn_session_state",
-                "verified source governance is unavailable",
-            )
-        })?;
-        state
-            .input
-            .decision_context(core.governed_request(), view, &state.tools)
-    } else {
-        Ok(governance.plaintext.clone())
+    let Some(state) = &core.governed else {
+        return Ok(governance.plaintext.clone());
+    };
+    let view = state.view.as_ref().ok_or_else(|| {
+        session_error(
+            "tn_session_state",
+            "verified source governance is unavailable",
+        )
+    })?;
+    // The request and its admitted inputs are fixed; only a tool object can change the context.
+    let tools: Vec<String> = state
+        .tools
+        .iter()
+        .map(|tool| tool.object.id().to_owned())
+        .collect();
+    if let Some((cached, context)) = &state.context {
+        if *cached == tools {
+            return Ok(context.clone());
+        }
     }
+    let context = state
+        .input
+        .decision_context(core.governed_request(), view, &state.tools)?;
+    if let Some(state) = core.governed.as_mut() {
+        state.context = Some((tools, context.clone()));
+    }
+    Ok(context)
 }
 
 fn governed_action_request(
@@ -1396,9 +1425,15 @@ fn governed_action_request(
                 result: &exchange.result,
             })
             .collect::<Vec<_>>();
+        let (governance_hash, _) = governed_hash_keys(core)?;
+        let decrypt_call = core.selection_call.as_ref().ok_or_else(|| {
+            session_error("tn_session_state", "decrypt call history is unavailable")
+        })?;
         return crate::model_protocol::governed_object_action_body(
             &core.user_content,
             &selected_values(core)?,
+            &governance_hash,
+            stored_call(decrypt_call),
             governance_context,
             core.governed
                 .as_ref()
@@ -2231,6 +2266,7 @@ fn validate_native_call(
                 "reserved model phase cannot accept a result",
             ))
         }
+        Phase::SectionSelection if core.governed.is_some() => "decrypt_value",
         Phase::SectionSelection => "select_sections",
         Phase::GovernedAction => std::str::from_utf8(call.name)
             .ok()
@@ -2264,7 +2300,7 @@ fn validate_native_call(
     match phase {
         Phase::GovernanceRead | Phase::CommitmentEcho => unreachable!("reserved phase rejected"),
         Phase::SectionSelection => {
-            validate_section_selection_arguments(core, &arguments_value)?;
+            selection_arguments(core, &arguments_value)?;
         }
         Phase::GovernedAction => {}
     }
@@ -2274,6 +2310,116 @@ fn validate_native_call(
         name: expected_name.to_string(),
         arguments: arguments.to_string(),
     })
+}
+
+fn selection_arguments(
+    core: &SessionCore,
+    arguments: &Value,
+) -> Result<BTreeSet<String>, TnLlamaError> {
+    if core.governed.is_some() {
+        validate_decrypt_arguments(core, arguments)
+    } else {
+        validate_section_selection_arguments(core, arguments)
+    }
+}
+
+/// The hash key of the governance object and the hash keys of the encrypted data.
+fn governed_hash_keys(
+    core: &SessionCore,
+) -> Result<(String, BTreeMap<String, BTreeMap<String, String>>), TnLlamaError> {
+    let envelope = core.governed_request().object.envelope();
+    let governance_hash = envelope["tn.agents"]["field_hashes"]["policy"]
+        .as_str()
+        .ok_or_else(|| session_error("tn_session_state", "governance hash key is unavailable"))?
+        .to_owned();
+    let encrypted = available_section_manifest(core)?
+        .into_keys()
+        .map(|section| {
+            let hashes = serde_json::from_value(envelope[&section]["field_hashes"].clone())
+                .map_err(|_| {
+                    session_error("tn_session_state", "data hash keys are unavailable")
+                })?;
+            Ok((section, hashes))
+        })
+        .collect::<Result<_, TnLlamaError>>()?;
+    Ok((governance_hash, encrypted))
+}
+
+fn validate_decrypt_arguments(
+    core: &SessionCore,
+    arguments: &Value,
+) -> Result<BTreeSet<String>, TnLlamaError> {
+    let object = arguments
+        .as_object()
+        .filter(|object| exact_keys(object, &["data_hashes", "governance_hash"]))
+        .ok_or_else(decrypt_keys_error)?;
+    let (governance_hash, encrypted) = governed_hash_keys(core)?;
+    if object.get("governance_hash").and_then(Value::as_str) != Some(governance_hash.as_str()) {
+        return Err(decrypt_keys_error());
+    }
+    let hashes = object
+        .get("data_hashes")
+        .and_then(Value::as_array)
+        .filter(|hashes| !hashes.is_empty())
+        .ok_or_else(decrypt_keys_error)?;
+    let count = hashes.len();
+    let hashes = hashes
+        .iter()
+        .map(|hash| hash.as_str().ok_or_else(decrypt_keys_error))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    if hashes.len() != count {
+        return Err(decrypt_keys_error());
+    }
+    hashes
+        .into_iter()
+        .map(|hash| {
+            encrypted
+                .iter()
+                .find(|(_, fields)| fields.values().any(|token| token == hash))
+                .map(|(section, _)| section.clone())
+                .ok_or_else(decrypt_keys_error)
+        })
+        .collect()
+}
+
+/// Encryption opens a whole group. The model receives only the fields it asked for.
+fn retain_presented_fields(core: &mut SessionCore, arguments: &Value) {
+    if core.governed.is_none() {
+        return;
+    }
+    let presented = arguments["data_hashes"]
+        .as_array()
+        .expect("validated decrypt arguments")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<BTreeSet<_>>();
+    let retained = core
+        .opened_sections
+        .keys()
+        .map(|section| {
+            let hashes = core.governed_request().object.envelope()[section]["field_hashes"]
+                .as_object()
+                .expect("native field hashes");
+            let fields = hashes
+                .iter()
+                .filter(|(_, hash)| hash.as_str().is_some_and(|hash| presented.contains(hash)))
+                .map(|(field, _)| field.clone())
+                .collect::<BTreeSet<_>>();
+            (section.clone(), fields)
+        })
+        .collect::<BTreeMap<_, _>>();
+    for (section, value) in &mut core.opened_sections {
+        if let Some(fields) = value.as_object_mut() {
+            fields.retain(|field, _| retained[section].contains(field));
+        }
+    }
+}
+
+fn decrypt_keys_error() -> TnLlamaError {
+    session_error(
+        "tn_decrypt_keys_invalid",
+        "decrypt_value requires the governance hash key and hash keys of this encrypted data",
+    )
 }
 
 fn validate_section_selection_arguments(

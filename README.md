@@ -6,6 +6,8 @@ Applications can enforce access controls when reading a database and still lose 
 
 TN keeps that information connected to individual string and numeric values. A governed value carries the basis for accountable decisions about its use. Preserving a claim does not require every recipient to accept or obey it: the recipient evaluates the claimant and the claim under the authorities it recognizes and the requested use.
 
+Governed values carry native TN objects, their signed records, and supporting publications in memory. Ordinary operations pass and return these values. SQL supplies the example's input rows; it does not store the working TN state. Native wire is serialized at endpoint handoffs and explicit archival boundaries. An application can also persist a required action, such as the review queue or ledger used by the tool examples.
+
 The reusable interfaces cover SQL results, Polars plans, governed JSON artifacts, and multi-step tools. [Governed execution](docs/governed-execution.md) describes their shared authorization and evidence contracts; [tool workflows](docs/tool-workflows.md) includes provider and tool registration examples.
 
 | Capability | Interface and behavior |
@@ -13,12 +15,12 @@ The reusable interfaces cover SQL results, Polars plans, governed JSON artifacts
 | SQL | `GovernedSQL.execute_query` executes parameterized SQLite queries, resolves the contributing source assignments, and publishes typed results with value and selection dependencies. Predicates, joins, expressions, aggregates, windows, and registered functions use the [query-result path](docs/sql-query-results.md). |
 | Dataframes | `GovernedLazyFrame` supports expressions and relational operations; `PlanTransform` admits registered general lazy plans. Policies and original claims remain attached. Contributor precision is explicit in the endpoint decision. See the [adapter contract](dependencies/tn-polars/README.md). |
 | Tools | `ToolWorkflow` and `ToolRunner` authorize registered calls, validate local or remote results, retain dependencies across model turns, and require completed actions before release. |
-| Independent endpoints | `Endpoint.export` and `receive` transfer native publication bundles between separate stores. Each endpoint supplies its own keys, recognized authorities, and evaluator. |
+| Independent endpoints | `Endpoint.export` and `receive` transfer native publication bundles. Working artifacts carry native objects in memory. Each endpoint supplies its own keys, recognized authorities, and evaluator. |
 | Policies and claims | `AuthorityEvaluator` supports local conjunction or authority precedence and required-action dependencies. `attest` and `dispute` retain the original claim author and subject. |
 | Application boundaries | `GovernedBoundary` requires governed handles and verifies contributing ancestry. `Endpoint.reveal` authorizes and records an explicit transfer to ordinary values. |
 | Value evolution | `ValueHistory` records insertions, re-derivations, tombstones, and restorations with atomic predecessor checks and retained signed history. |
 
-The [pipeline correctness tests](tests/test_governed_pipeline.py) compose a SQL join, Polars processing, attributed claims, dependent tool calls, a required ledger action, and verification by a recipient with a separate store. Component tests cover denied operations, partial action failures, independent authority decisions, and contributor mappings.
+The [pipeline correctness tests](tests/test_governed_pipeline.py) compose a SQL join, Polars processing, attributed claims, dependent tool calls, a required ledger action, and recipient verification. Component tests cover denied operations, partial action failures, independent authority decisions, and contributor mappings. [Object lifetime tests](tests/test_application_object_lifetime.py) check that the SQL-to-dataframe application opens only its source database and exports its publications after computation.
 
 ## Quick Start
 
@@ -206,6 +208,8 @@ bash scripts/build_llama.sh cpu
 
 The build installs `llama-server` **and its shared libraries** together in `.runtime/dependencies/tn-llama/`. The launcher discovers that server automatically. Keep the directory together when moving it. `build.json` records the backend and SHA-256 of every installed binary and library. `native/tn-llama/source-manifest.json` identifies the included source files and upstream revisions. Model weights are not downloaded by the build.
 
+Before compiling, the build verifies the source manifest. When a sibling `tn-llama` checkout is present, it also requires matching runtime sources, headers, and llama.cpp integration patches. Run `python scripts/runtime_sources.py --against PATH` to compare another checkout. After reviewing and synchronizing source changes, `python scripts/runtime_sources.py --refresh` records their digests; it refuses divergent runtime copies. Standalone Python bindings remain in `tn-llama` and use the same native session.
+
 ## Install Unity and run the complete example
 
 The single-command launcher creates a Python environment, installs the application,
@@ -361,7 +365,7 @@ result = (
 # claims, and publishes the aggregate with its declared numeric type.
 ```
 
-The context stores the signed operation records. A refusal therefore has a record even when no result is produced. Returning plaintext also produces a record, even though the ordinary Python value has no attached governance.
+The context retains signed operation records in memory. A refusal therefore has a record even when no result is produced. Returning plaintext also produces a record, even though the ordinary Python value has no attached governance.
 
 ## Run the complete model/report workflow
 
@@ -456,7 +460,7 @@ Each SQL/dataframe run writes `case-summary.json`. Successful runs have `complet
 | `run.json` | Source identities, requested use, publications and record checkpoints |
 | `dag.json` | Derived values and their contributing input references |
 | `frame-verification.json` | Checked dataframe types, source assignments and replayed OPA decisions |
-| `publications/` | Exact encrypted, signed TN publications |
+| `publications/` | Exact encrypted, signed TN publications exported after computation |
 | `tapes/` | Signed operation records exported by each context |
 | `report.html` | Accepted report content, when model generation completes |
 | `review.json` | Pending-review registration returned by the application |
@@ -488,7 +492,7 @@ Choose an output directory that does not already exist. Use `--unity-url` when U
 
 The experiment compares ordinary SQLite/Polars processing, explicit TN input tracking, and automatic TN input tracking. Each uses the same integer rows, SQL query, dataframe operations, scalar increment, and output string. Both TN modes use the same SQL and dataframe controls; they differ in how scalar operations supply their input references.
 
-The SQL-to-string time covers the query, dataframe calculation, scalar operations, and return of the ordinary output string. In TN, the query also encrypts, signs, publishes, and registers the source values, then admits them at the consumer. The full path includes claim attachment and disclosure. Scalar time measures only the operations after the dataframe calculation. Setup, record export, and offline verification are recorded separately. The ordinary case has no governed publication or governance verification. Each TN case uses fresh sessions, assignments, and storage. Mode order rotates across repetitions; one ordinary warmup initializes Polars, and Unity starts before measurement.
+The SQL-to-string time covers the query, dataframe calculation, scalar operations, and return of the ordinary output string. In TN, the query also encrypts, signs, publishes, and registers the source values, then admits them at the consumer. The full path includes claim attachment and disclosure. Scalar time measures only the operations after the dataframe calculation. Setup, record export, and offline verification are recorded separately. The ordinary case has no governed publication or governance verification. Each TN case uses fresh sessions, assignments, and native objects. Mode order rotates across repetitions; one ordinary warmup initializes Polars, and Unity starts before measurement.
 
 `measurements.json` contains every observation and the median, minimum, and maximum for each configuration. The experiment checks the calculated result and runs the production offline verifiers for each TN execution. It also records the exact size of the final TN publication.
 
@@ -513,11 +517,11 @@ Copy `config/performance-environment.example.json` to `.runtime/performance-loca
 
 The scale workload performs the SQL query, source publication and admission, claim attachment, governed Polars filtering/sorting/aggregation, scalar composition, explicit disclosure, model preparation, native generation, recipient acceptance, and review registration. The plain path executes the same ordinary SQL/Polars/scalar calculation and generates an HTML report from the same business input. Both use the same GGUF, CPU execution, disabled prompt caching, temperature zero, and a 2,048-token report ceiling. TN also verifies governance natively and executes required actions. Each model decision receives its applicable governance context. Raw model transcripts and ordinary token counts are retained.
 
-Reported processing time sums the query through disclosure and the generation/release stages. Database creation, enrollment, catalog assignment, native endpoint configuration (including model-file hashing and ancestry serialization), model startup, offline verification, and artifact export are timed separately and excluded from processing latency. Each scale case creates fresh sessions, stores, and a model process; the operating-system file cache is retained. Warmup observations remain in the raw files and are excluded from summaries. Mode order alternates across repetitions.
+Reported processing time sums the query through disclosure and the generation/release stages. Source database creation, enrollment, catalog assignment, native endpoint configuration (including model-file hashing and ancestry serialization), model startup, offline verification, and artifact export are timed separately and excluded from processing latency. Working publications and records remain native objects in memory; `publications/` is a file archive written after the processing stages. The `export` timer records that boundary. Each scale case creates fresh sessions, native objects, and a model process; the operating-system file cache is retained. Warmup observations remain in the raw files and are excluded from summaries. Mode order alternates across repetitions.
 
-Recipients run in separate spawned processes with distinct signing identities, reader kits, stores, local catalogs, and evaluators. Each request hydrates the retained scalar, verifies its ancestry, authorizes disclosure, decrypts, records the decision, and checks the value. Enrollment, store transfer, and catalog admission precede the timed interval. Batch wall time includes dispatch, barrier synchronization, and result collection. Throughput is successful requests divided by total measured batch wall time; median and nearest-rank p95 use individual successful request latencies. Failed attempts remain visible.
+Recipients run in separate spawned processes with distinct signing identities, reader kits, native object collections, local catalogs, and evaluators. Each request hydrates the received scalar, verifies its ancestry, authorizes disclosure, decrypts, records the decision in memory, and checks the value. Enrollment, publication transfer, and catalog admission precede the timed interval. Each response carries its signed native records, serialized after the request timer. Batch wall time includes dispatch, barrier synchronization, evidence serialization, and result collection. Throughput is successful requests divided by total measured batch wall time; median and nearest-rank p95 use individual successful request latencies. Failed attempts remain visible.
 
-Each tool-depth trial executes the full data/model path afresh. Depth counts the native compliance tool plus dependent review-registration tools. The latter consume the accepted report and then each predecessor receipt; a signed ledger action gates release. The native runtime verifies governance before the first model turn. Section selection and report emission are model decisions; application-tool depth counts the executed tools. The tool endpoint applies an explicit local grant for the named application, purpose, operations, and destinations while retaining the source contracts and claims.
+Each tool-depth trial executes the full data/model path afresh. Depth counts the native compliance tool plus dependent review-registration tools. The latter consume the accepted report and then each predecessor receipt; a signed ledger action gates release. The native runtime verifies governance before the first model turn. That turn holds the governance and the hash keys of the encrypted data, and `decrypt_value` is its only tool. The model passes the governance hash key and the data hash keys it needs, and the runtime compares them with the admitted object and returns the values as the tool result. The runtime then executes a sole required action whose closed schema admits only an empty argument object. These steps retain authorization, publication verification, and runtime action records. The model handles the decrypt call and report content; application-tool depth counts the executed tools. The tool endpoint applies an explicit local grant for the named application, purpose, operations, and destinations while retaining the source contracts and claims.
 
 `experiment.json` records parameters, hardware, versions, source and binary hashes, and timing boundaries. `samples.jsonl`, `scale.json`, recipient `rounds.jsonl`, and tool trial files retain observations and signed evidence. Byte accounting distinguishes the scalar publication from unique retained native bytes, including snapshots, metadata, and signed records; decimal KB means 1,000 bytes. Signed recorder counts and native model tool publications are separate quantities. Run directories contain local synthetic enrollment material and remain excluded from Git.
 
@@ -525,7 +529,7 @@ Runtime resource bounds are explicit profile parameters. Python preparation, nat
 
 Both profiles use 256 compatible cells per SQL publication, retaining a distinct field reference and signed result for each cell. The 100,000-row workload therefore uses 782 source publications and 200,000 direct cell references. Profile validation checks the required dataset-binding count against the native bound before processing begins.
 
-The runtime retains and verifies full native governance and ancestry. In the model presentation, provenance arrays with more than 16 entries become references bound to the source publication, field, entry count, and authenticated field commitment. Policy text, attached contracts, claims, conditions, and extension fields remain present. Each decision receives the verified source governance and accepted tool dependencies. The runtime binds that context to the issued request, rendered prompt, token manifest, and execution identity before inference. The model produces selections, tool requests, and report content; the runtime constructs authoritative metadata, verifies receipts, and gates release. Released publications retain the complete source bindings.
+The runtime retains and verifies full native governance and ancestry. In the model presentation, provenance arrays with more than 16 entries become references bound to the source publication, field, entry count, and authenticated field commitment. Policy text, attached contracts, claims, conditions, and extension fields remain present. Each model decision receives the verified source governance and accepted tool dependencies. The runtime binds that context to the issued request, rendered prompt, token manifest, and execution identity before inference. Determined actions appear as runtime results, without fabricated model calls. The model produces selections and tool arguments when a choice remains, and generates report content; the runtime constructs authoritative metadata, verifies receipts, and gates release. Released publications retain the complete source bindings. Report evidence verification requires the last inference, its emission and completion records, and a retained release matching the received publication.
 
 ## Check policy accumulation
 
@@ -547,6 +551,14 @@ Run the accumulation and adjacent dataframe checks with:
 python -m pytest tests/test_policy_accumulation.py tests/test_query_dataframe.py -q
 ```
 
+## Check dataframe edge cases
+
+`experiments/pvldb_evaluation/edge_cases.py` runs fixtures with negative amounts, unsorted names, duplicate sort ties, and an empty selection through the governed SQL and dataframe path. It compares each result with a calculation made outside the plan and runs the offline verifiers. `--with-model` adds a `Decimal` report through the governed server.
+
+```powershell
+python -m experiments.pvldb_evaluation.edge_cases --run-directory experiments/results/edge-cases
+```
+
 ## Check recipient decisions and review completion
 
 With the project environment and its development dependencies installed, run:
@@ -555,9 +567,35 @@ With the project environment and its development dependencies installed, run:
 python -m pytest tests/test_recipient_authority.py tests/test_report_review_completion.py -q
 ```
 
-These nine tests use native encryption and signatures. Independent recipient Sessions receive the same publication and decide according to their own purpose and recognized writer. The checks distinguish permission from possession of a decryption key, verify original claim attribution after another transformation, and reject changes to encrypted content or governance.
+These tests use native encryption and signatures. Independent recipient Sessions receive the same publication and decide according to their own purpose and recognized writer. The checks distinguish permission from possession of a decryption key, verify original claim attribution after another transformation, and reject changes to encrypted content or governance. Report tests cover native objects and file-archive compatibility, including a recipient that verifies the carried report after access to the sender's object collection is disabled.
 
-The report tests use constructed, signed tool and report publications returned by a local transport. They exercise the production recipient and review-registration code. A successful call returns after the recipient accepts the report and the application stores a signed pending-review request in the queue. Recipient refusal, failure to store that record, or failure to write the queue prevents success and produces a signed Failure. A retry is recorded as a separate call. The full report example above runs the model service.
+The report tests use constructed, signed tool and report publications returned by a local transport. They exercise the production recipient and review-registration code. A successful call returns after the recipient accepts the report and the application writes a signed pending-review request to the queue. Recipient refusal, failure to append the signed record, or failure to write the queue prevents success and produces a signed Failure. A retry is recorded as a separate call. The full report example above runs the model service.
+
+## Check the model runtime under faults
+
+`experiments/pvldb_evaluation/runtime_faults.py` runs the SQL-to-report path with a fresh server and the real model for each case. Route faults change the HTTP request, and configuration faults change the runtime configuration or metadata before server start. Task faults change the prepared task between preparation and the slot gate, and result faults change a completed model result before the runtime validates it. Those two groups use a test server built by `experiments/pvldb_evaluation/fault_injection/build_fault_server.sh`, whose hooks are absent from the packaged server. Adversarial prompts and a company name containing an instruction use the packaged server, and the same inputs run through the plain server as a baseline.
+
+```bash
+bash experiments/pvldb_evaluation/fault_injection/build_fault_server.sh
+python -m experiments.pvldb_evaluation.runtime_faults --run-directory experiments/results/runtime-faults \
+  --binary .runtime/dependencies/tn-llama/llama-server \
+  --fault-binary .runtime/dependencies/tn-llama-fault/llama-server \
+  --plain-binary .runtime/llama-build/plain-cpu/bin/llama-server \
+  --model-path .artifacts/models/Qwen3-4B-Q4_K_M.gguf \
+  --sdk-build-record .runtime/sdk-build-linux.json
+```
+
+Each case records whether a task reached a slot, the tokens decoded, the refusal codes, and whether a report and review request exist. `context_sensitivity.py` measures prompt tokens and inference time across provenance entries and claims.
+
+## Check the verifiers with mutants
+
+`experiments/pvldb_evaluation/propagation_mutants.py` changes one step of a live run so the endpoint's keys sign an incorrect output, then records whether the runtime stopped it and whether the offline verifiers reject the evidence. `evidence_mutants.py` alters retained evidence, including model traces and audit logs, without keys. Pass `--model-baseline` with a completed model run to include the model family. The evaluation's expected-value comparison is reported separately and is not counted as detection.
+
+## Compare relation and cell granularity
+
+`experiments/pvldb_evaluation/relation_study.py` measures the query-result path on the market workload and on TPC-H-shaped data from `tpch_data.py`, which is derived from the specification and is not an audited TPC-H implementation. `GovernedSQL.execute_query(sql, contributor_tracking=False)` records source columns and unknown row support in place of contributor rows. Contributor cases run in their own process so exhausted memory is a recorded outcome.
+
+`scripts/setup_linux_evaluation.sh` prepares an Ubuntu 24.04 host from prebuilt servers and the Linux SDK wheel. Archive export performs one `fsync` per file; large runs can use `eatmydata`, since export is excluded from processing time.
 
 ## Policy across endpoints
 

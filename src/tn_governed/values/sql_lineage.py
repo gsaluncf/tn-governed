@@ -21,7 +21,14 @@ from .query import Contributor, QueryRows, SourceColumn, contributor_manifest, e
 def _key(*values):
     if all(value is None for value in values):
         return None
+    # A lone integer row identity stays a number, so grouped arrays stay compact.
+    if len(values) == 1 and type(values[0]) is int:
+        return values[0]
     return json.dumps([encode_sql(value) for value in values], separators=(",", ":"))
+
+
+def _member_order(member):
+    return type(member) is str, member
 
 
 def _parameters(sql, parameters):
@@ -102,7 +109,7 @@ class SQLiteLineagePlan:
         tables += [join.this for join in tree.args.get("joins", [])]
         if not tables or any(not isinstance(table, exp.Table) for table in tables):
             raise ValueError("row identities require enrolled base relations")
-        aliases, fields, keys, extra = {}, {}, {}, set()
+        aliases, fields, keys, extra, rowid_aliases = {}, {}, {}, set(), set()
         for table in tables:
             alias, name = table.alias_or_name, table.name
             if alias in aliases:
@@ -122,6 +129,7 @@ class SQLiteLineagePlan:
                 if identity is None:
                     raise ValueError("implicit row identity is shadowed")
                 keys[alias] = (identity,)
+                rowid_aliases.add(alias)
             else:
                 keys[alias] = tuple(
                     column[1] for column in sorted(columns, key=lambda c: c[5]) if column[5]
@@ -246,11 +254,16 @@ class SQLiteLineagePlan:
             token = alias, mode
             if token in indices:
                 return indices[token]
-            key = exp.Anonymous(
-                this="__tn_row_key",
-                expressions=[
-                    exp.column(column, table=alias, quoted=True) for column in keys[alias]
-                ],
+            # A rowid is already the integer form of a row key, so no row needs a Python call.
+            key = (
+                exp.column(keys[alias][0], table=alias, quoted=True)
+                if alias in rowid_aliases
+                else exp.Anonymous(
+                    this="__tn_row_key",
+                    expressions=[
+                        exp.column(column, table=alias, quoted=True) for column in keys[alias]
+                    ],
+                )
             )
             collected = exp.Anonymous(this="JSON_GROUP_ARRAY", expressions=[key])
             if window is not None:
@@ -329,57 +342,47 @@ class SQLiteLineagePlan:
             if value is None:
                 return []
             values = json.loads(value) if self.metadata[index][1] else [value]
-            return [json.loads(item) for item in values if item is not None]
+            unique = set(values)
+            unique.discard(None)
+            try:
+                return sorted(unique)
+            except TypeError:
+                return sorted(unique, key=_member_order)
 
-        cells = []
-        for row, identities in enumerate(self.identities):
-            for column, mapping in enumerate(self.roots):
-                contributors = {}
-                for (alias, field), indices in mapping.items():
-                    for index in indices:
-                        for key in members(identities, index):
-                            item = {
-                                "table": self.aliases[alias],
-                                "column": field,
-                                "role": "value",
-                                "row_key": key,
-                            }
-                            contributors[json.dumps(item, sort_keys=True)] = item
-                for (alias, field), index in self.controls:
-                    for key in members(identities, index):
-                        item = {
-                            "table": self.aliases[alias],
-                            "column": field,
-                            "role": "control",
-                            "row_key": key,
-                        }
-                        contributors[json.dumps(item, sort_keys=True)] = item
-                for alias, field, index in self.presence:
-                    for key in members(identities, index):
-                        item = {
-                            "table": self.aliases[alias],
-                            "column": field,
-                            "role": "presence",
-                            "row_key": key,
-                        }
-                        contributors[json.dumps(item, sort_keys=True)] = item
-                for source in self.function_sources:
-                    item = Contributor(source.table, source.column).to_dict()
-                    contributors[json.dumps(item, sort_keys=True)] = item
-                cells.append(
-                    {
-                        "row": row,
-                        "column": column,
-                        "contributors": [contributors[key] for key in sorted(contributors)],
-                    }
-                )
+        def column_sources(mapping):
+            sources = [
+                (alias, field, "value", index)
+                for (alias, field), indices in mapping.items()
+                for index in indices
+            ]
+            sources += [(alias, field, "control", index) for (alias, field), index in self.controls]
+            sources += [(alias, field, "presence", index) for alias, field, index in self.presence]
+            listed = [
+                {"table": self.aliases[alias], "column": field, "role": role, "identity": index}
+                for alias, field, role, index in sources
+            ]
+            listed += [
+                {"table": item.table, "column": item.column, "role": "value", "identity": None}
+                for item in self.function_sources
+            ]
+            return listed
+
+        # Output columns share each row's identity lists, so a group of n source
+        # rows costs n entries in total, not n per column and dependency.
+        columns = [column_sources(mapping) for mapping in self.roots]
+        rows = [
+            [members(identities, index) for index in range(len(self.metadata))]
+            for identities in self.identities
+        ]
         scopes = {(self.aliases[alias], column) for (alias, column), _ in self.controls}
         presence_scopes = {(self.aliases[alias], column) for alias, column, _ in self.presence}
         return {
             "precision": "conservative",
             "row_support": "partial" if self.function_sources else "known",
             "provider": "sqlite-ast",
-            "cells": cells,
+            "cells": [],
+            "contributor_columns": columns,
+            "contributor_rows": rows,
             "controls": [
                 Contributor(table, column, role="control").to_dict()
                 for table, column in sorted(scopes)

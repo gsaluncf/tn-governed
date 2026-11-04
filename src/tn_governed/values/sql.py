@@ -12,6 +12,7 @@ import re
 import sqlite3
 from uuid import uuid4
 
+from .collection import pauses_collection
 from .numeric_codec import KINDS
 from .primitives import MAX_SOURCE_PUBLICATION_CELLS
 from .query import SQLiteQuery, contributor_manifest, digest, encode_sql
@@ -95,10 +96,12 @@ class GovernedSQL:
         self.gateway, self.consumer, self.edition_publisher = gateway, consumer, edition_publisher
         self.directory = Path(directory)
         self.executions, self.editions, self.published_values = [], [], []
+        self.edition_transports = {}
 
     def table(self, name):
         return TableQuery(self, name)
 
+    @pauses_collection
     def execute(self, sql, parameters=()):
         with SQLiteQuery(self.database, sql, parameters, functions=self.functions,
                          detect_types=self.detect_types) as prepared:
@@ -112,16 +115,24 @@ class GovernedSQL:
                     return self._execute_direct(sql, parameters, prepared)
             return self._execute_query(prepared)
 
-    def execute_query(self, sql, parameters=()):
-        """Return a governed relation for any authorized read-only SQLite query."""
+    def execute_query(self, sql, parameters=(), *, contributor_tracking=True):
+        """Return a governed relation for any authorized read-only SQLite query.
+
+        Without contributor tracking the result records its authorized source
+        columns and unknown row support; a recipient that requires row support
+        refuses it under its own evidence rule.
+        """
         with SQLiteQuery(self.database, sql, parameters, functions=self.functions,
                          detect_types=self.detect_types) as prepared:
-            return self._execute_query(prepared)
+            return self._execute_query(prepared, contributor_tracking)
 
-    def _execute_query(self, prepared):
+    def _execute_query(self, prepared, contributor_tracking=True):
         from .query_result import GovernedQueryResult, publish_result
         gateway = self.gateway
-        plan = prepared.track_contributors() if self.lineage_provider is None else None
+        plan = None
+        if self.lineage_provider is None:
+            plan = (prepared.track_contributors() if contributor_tracking
+                    else prepared.track_source_scope())
         resolution = gateway.resolver.resolve_query(prepared.dependencies, actor=gateway.actor,
             application=gateway.application, purpose=gateway.purpose, expected_source=prepared.identity)
         provider = self.lineage_provider
@@ -227,6 +238,7 @@ class GovernedSQL:
                 for info, transport in editions:
                     self.consumer.resolver.admit_edition(info, self.consumer, transport=transport)
                     self.editions.append(info)
+                    self.edition_transports[info["record_id"]] = transport
                 for position, value in zip(positions, self.consumer.hydrate_many(handles), strict=True):
                     rows[position[0]][position[1]] = value
                 self.published_values.extend(value for row in rows for value in row)

@@ -121,7 +121,7 @@ def observation(monkeypatch):
 
 def assert_cleared(observation, *, minimum=3):
     assert len(observation.caches) >= minimum
-    assert all(cache.cache_info().maxsize == 128 for cache in observation.caches)
+    assert all(cache.cache_info().maxsize is not None for cache in observation.caches)
     assert all(cache.cache_info().currsize == 0 for cache in observation.caches)
     assert len(observation.clears) == len(observation.caches)
 

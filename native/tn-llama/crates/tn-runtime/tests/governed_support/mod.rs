@@ -149,8 +149,30 @@ pub fn accept(
     };
     session.accept_model_action(turn.permit, result.native())
 }
+pub fn control(turn: &ModelTurn) -> Value {
+    let body: Value = serde_json::from_slice(&turn.request_json).unwrap();
+    serde_json::from_str(body["messages"][1]["content"].as_str().unwrap()).unwrap()
+}
+/// The hash keys the decrypt turn shows for the named groups.
+pub fn decrypt_arguments(turn: &ModelTurn, groups: &[&str]) -> Value {
+    let control = control(turn);
+    let data_hashes = control["encrypted_data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| groups.contains(&entry["group"].as_str().unwrap()))
+        .map(|entry| entry["data_hash"].clone())
+        .collect::<Vec<_>>();
+    json!({"governance_hash":control["governance_hash"], "data_hashes":data_hashes})
+}
 pub fn select(session: &mut Session, groups: &[&str]) -> Result<(), TnLlamaError> {
     let turn = session.next_model_turn()?;
-    accept(session, turn, "select_sections", json!({"sections":groups}))?;
+    let arguments = decrypt_arguments(&turn, groups);
+    accept(session, turn, "decrypt_value", arguments)?;
     Ok(())
+}
+/// The first turn after the model decrypts the finance group.
+pub fn report_turn(session: &mut Session) -> ModelTurn {
+    select(session, &["finance"]).unwrap();
+    session.next_model_turn().unwrap()
 }

@@ -142,7 +142,7 @@ def main():
                 with context:
                     report = endpoint.generate(brief, prompt=(
                         "Prepare a short internal HTML draft about the supplied synthetic calculation for a human reviewer. "
-                        "Select the values section. State the supplied demonstration amount without treating it as a market quote. "
+                        "State the supplied demonstration amount without treating it as a market quote. "
                         "Mark the report as requiring human review, using the exact carried review notice in a visible paragraph. "
                         "Generate the report now; do not claim a human has reviewed it. Use no CSS, hidden content, or external resources."))
             write_once(root / "report.html", report.report_html.encode())

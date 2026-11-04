@@ -1,6 +1,6 @@
 mod governed_support;
 mod support;
-use governed_support::Fixture;
+use governed_support::{report_turn, Fixture};
 use serde_json::{json, Value};
 use tn_runtime::{Phase, State};
 
@@ -10,7 +10,7 @@ fn decision_context_retains_nested_records_without_generated_bookkeeping() {
     let request = fixture.request("calculation");
     let (_keys, runtime) = fixture.runtime();
     let mut session = runtime.start_session(&request).unwrap();
-    let turn = session.next_model_turn().unwrap();
+    let turn = report_turn(&mut session);
     assert_eq!(turn.permit.phase(), Phase::GovernedAction);
     let body: Value = serde_json::from_slice(&turn.request_json).unwrap();
     let context: Value =
@@ -30,7 +30,7 @@ fn nested_policy_substitution_fails_the_model_request_binding() {
     let request = fixture.request("calculation");
     let (_keys, runtime) = fixture.runtime();
     let mut session = runtime.start_session(&request).unwrap();
-    let turn = session.next_model_turn().unwrap();
+    let turn = report_turn(&mut session);
     let mut body: Value = serde_json::from_slice(&turn.request_json).unwrap();
     let mut context: Value =
         serde_json::from_str(body["messages"][1]["content"].as_str().unwrap()).unwrap();

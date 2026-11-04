@@ -13,9 +13,9 @@ from contextlib import contextmanager, suppress
 from pathlib import Path
 from uuid import uuid4
 
-from tn_governed.native_run import wsl_command, wsl_path
+from tn_governed.native_run import ALL_GPU_LAYERS, wsl_command, wsl_path
 from tn_governed.values.market_report import NOTICE
-from tn_governed.values.verify_model import PlainReportText
+from tn_governed.values.report_profile import PlainReportText
 
 from .processing_comparison import ordinary_case
 from .run import PROMPT
@@ -68,12 +68,16 @@ def response_html(response):
 
 
 @contextmanager
-def ordinary_server(directory, *, binary, model, port, startup_timeout=180):
-    """Own a loopback-only CPU inference process with prompt caching disabled."""
+def ordinary_server(directory, *, binary, model, port, startup_timeout=180, gpu_layers=ALL_GPU_LAYERS):
+    """Own a loopback-only inference process with prompt caching disabled."""
+    if type(gpu_layers) is not int or gpu_layers < 1:
+        raise ValueError("the plain baseline runs every model layer on the GPU")
     binary, model, directory = Path(binary).resolve(), Path(model).resolve(), Path(directory)
     linux = os.name == "nt" and binary.suffix.lower() != ".exe"
     translate = wsl_path if linux else str
     with socket.socket() as probe:
+        # A preceding server on this port can leave connections in TIME_WAIT.
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         probe.bind(("127.0.0.1", port))
     key = uuid4().hex
     arguments = [
@@ -98,7 +102,7 @@ def ordinary_server(directory, *, binary, model, port, startup_timeout=180):
         "0",
         "--no-cache-idle-slots",
         "--n-gpu-layers",
-        "0",
+        str(gpu_layers),
     ]
     environment = {
         key: value
@@ -138,7 +142,7 @@ def ordinary_server(directory, *, binary, model, port, startup_timeout=180):
                 "model": str(model),
                 "context": 16384,
                 "parallel": 1,
-                "gpu_layers": 0,
+                "gpu_layers": gpu_layers,
                 "prompt_cache": False,
                 "wsl": linux,
             },
@@ -207,14 +211,15 @@ def ordinary_server(directory, *, binary, model, port, startup_timeout=180):
                     process.wait(timeout=5)
 
 
-def _generate_plain(directory, result, *, binary, model, port):
+def _generate_plain(directory, result, *, binary, model, port, gpu_layers=ALL_GPU_LAYERS):
     timings = result["timings_seconds"]
     request_body = plain_request(result["expected_content"])
     directory.joinpath("model-request.json").write_text(
         json.dumps(request_body, indent=2), encoding="utf-8"
     )
     startup = time.perf_counter()
-    with ordinary_server(directory, binary=binary, model=model, port=port) as (url, key):
+    with ordinary_server(directory, binary=binary, model=model, port=port,
+                         gpu_layers=gpu_layers) as (url, key):
         timings["server_start"] = time.perf_counter() - startup
         generation = time.perf_counter()
         request = urllib.request.Request(
@@ -248,13 +253,14 @@ def _generate_plain(directory, result, *, binary, model, port):
     )
 
 
-def ordinary_model_case(directory, rows, *, binary, model, port):
+def ordinary_model_case(directory, rows, *, binary, model, port, gpu_layers=ALL_GPU_LAYERS):
     directory = Path(directory)
     started = time.perf_counter()
     result = ordinary_case(directory, rows)
     result["completed"] = result["verified"] = False
     try:
-        _generate_plain(directory, result, binary=binary, model=model, port=port)
+        _generate_plain(directory, result, binary=binary, model=model, port=port,
+                        gpu_layers=gpu_layers)
     except Exception as exc:
         result["error_type"] = type(exc).__name__
     finally:

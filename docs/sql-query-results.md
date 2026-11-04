@@ -44,6 +44,16 @@ and window operands retain their respective dependencies. Ranking and navigation
 functions retain the partition as conservative support. Outer-join NULLs do not
 create source row identities.
 
+The manifest stores each output row's identities once for each source table in
+`contributor_rows`, and `contributor_columns` lists the sources of each output
+column with the identity list each one uses. A group of n source rows therefore
+costs n identities rather than n for every column and dependency. A lone integer
+row identity stays a number. `lineage_cells(lineage)` expands this to contributors
+for each result position.
+
+`execute_query(sql, parameters, contributor_tracking=False)` skips row identity
+projections and records source columns with `row_support="unknown"`.
+
 Selection and absence also depend on the source snapshot, including excluded
 rows. Those dependencies remain snapshot-scoped, so the built-in manifest uses
 `precision="conservative"` even when positive row identities are known. Queries

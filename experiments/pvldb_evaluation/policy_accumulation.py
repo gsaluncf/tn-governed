@@ -18,6 +18,8 @@ from tn_polars.support import Support
 from tn_governed.native_objects import NativeObjects
 from tn_governed.values.catalog import AssignedRules, markdown
 from tn_governed.values.evidence import EvidenceRecorder, verify_tape
+from tn_governed.values.manifests import origin_rows
+from tn_governed.values.references import unpack_references, unpack_source_cells
 from tn_governed.values.provision import provision
 from tn_governed.values.sql import GovernedSQL, source_identity
 from tn_governed.values.string import OperationDenied
@@ -175,7 +177,9 @@ def run_case(directory, *, rows, survivors, sources):
             policy_members = {member for source in policy_sources[revision]
                               for member in members[source]}
             assert entry["request"]["aggregate_support"]["group_sizes"] == [len(policy_members)]
-        selected_rows = [cell for cell in facts["source_cells"] if cell["column"] == "value"
+        input_references = unpack_references(facts["input_references"])
+        source_cells = unpack_source_cells(facts["source_cells"], input_references)
+        selected_rows = [cell for cell in source_cells if cell["column"] == "value"
                          and f"{cell['source_object_id']}::{cell['source_row']}"
                          in members[cell["source_object_id"]]]
         observed_survivors = len(selected_rows)
@@ -189,8 +193,8 @@ def run_case(directory, *, rows, survivors, sources):
         assert len(claims) == 1 and claims[0] == source_claim
         assert claims[0].subjects == (original.reference,)
         assert claims[0].issuer == sessions["worker"].did
-        assert binding["parents"] == [value.reference.to_dict()
-                                      for row in frame_rows for value in row]
+        parents = unpack_references(binding["parents"])
+        assert parents == [value.reference.to_dict() for row in frame_rows for value in row]
         assert len(data.policies) == 2 * sources
         assert {policy.revision_id for policy in data.policies} == input_revisions
 
@@ -238,8 +242,8 @@ def run_case(directory, *, rows, survivors, sources):
             "rows": rows, "survivors": observed_survivors, "sources": sources,
             "input_policy_revisions": sorted(input_revisions),
             "policy_revisions": sorted(p.revision_id for p in data.policies),
-            "policy_count": len(data.policies), "input_reference_count": len(binding["parents"]),
-            "origin_count": len(binding["origins"]), "claim_count": len(claims),
+            "policy_count": len(data.policies), "input_reference_count": len(parents),
+            "origin_count": origin_rows(binding["origins"]), "claim_count": len(claims),
             "claim_id": claims[0].id, "claim_issuer": claims[0].issuer,
             "claim_subjects": [item.to_dict() for item in claims[0].subjects],
             "claimed_row_survived": claimed_row_survived,

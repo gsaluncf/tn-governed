@@ -44,6 +44,9 @@ def test_native_linux_process_uses_absolute_per_run_config(
         def settimeout(self, timeout):
             pass
 
+        def setsockopt(self, level, option, value):
+            pass
+
         def connect_ex(self, address):
             return 111
 

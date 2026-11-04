@@ -316,6 +316,7 @@ impl GovernedRuntime {
                     view: None,
                     data: None,
                     tools: Vec::new(),
+                    context: None,
                 }),
             );
         }

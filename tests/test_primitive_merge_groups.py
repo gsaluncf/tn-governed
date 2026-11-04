@@ -158,7 +158,7 @@ def test_explicit_sibling_arithmetic_preserves_results_and_each_source_row(conte
     assert output.reveal(context, destination="console") == 15
     metadata, binding, claims = context._metadata(output)
     assert binding["parents"] == [left.reference.to_dict(), right.reference.to_dict()]
-    assert [origin["row"] for origin in binding["origins"]] == [0, 1]
+    assert binding["origins"][0]["rows"] == [[0, 1]]
     assert claims == ()
     assert len(metadata.policies) == 1
     assert metadata.policies[0].matches_contract(context.session.policy(VALUE_TYPE))

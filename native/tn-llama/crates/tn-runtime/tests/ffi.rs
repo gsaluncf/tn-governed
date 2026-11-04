@@ -137,14 +137,23 @@ fn standalone_ffi_release(with_tool: bool) {
             tn_session_create(runtime, view(&request), &mut session, &mut error),
             TN_STATUS_OK
         );
-        for phase_index in 0..1 {
+        for phase_index in 0..2 {
             let (turn, phase, body) = next_turn(session);
-            assert_eq!(phase, 4);
+            assert_eq!(phase, 3 + phase_index);
             let body_value: Value = serde_json::from_slice(&body).unwrap();
-            let (name, args) = (
-                "emit_governed_record",
-                json!({"report_html":"<p>Maximum drawdown is 25%.</p>"}),
-            );
+            let (name, args) = if phase_index == 0 {
+                let control: Value =
+                    serde_json::from_str(body_value["messages"][1]["content"].as_str().unwrap())
+                        .unwrap();
+                let hashes = control["encrypted_data"].as_array().unwrap().iter();
+                let hashes = hashes.map(|entry| &entry["data_hash"]).collect::<Vec<_>>();
+                let presented =
+                    json!({"governance_hash":control["governance_hash"],"data_hashes":hashes});
+                ("decrypt_value", presented)
+            } else {
+                let report = json!({"report_html":"<p>Maximum drawdown is 25%.</p>"});
+                ("emit_governed_record", report)
+            };
             let manifest =
                 literal_runnable_manifest(body_value["max_tokens"].as_u64().unwrap() as u32);
             assert_eq!(
@@ -160,7 +169,7 @@ fn standalone_ffi_release(with_tool: bool) {
             assert_eq!(
                 tn_turn_begin(
                     turn,
-                    41,
+                    41 + i64::from(phase_index),
                     0,
                     view(&body),
                     view(b"rendered-v2"),

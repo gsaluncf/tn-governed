@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
 
 use serde::de::{Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Value};
@@ -15,12 +16,13 @@ use super::{invalid, validate_group, validate_name, GOVERNANCE_GROUP};
 ///
 /// Verification authenticates the writer and the carried binding. Applications
 /// apply their authority and permitted-use rules when admitting the contract.
+/// Parsing fixes the contents, so clones share them.
 #[derive(Clone)]
 pub struct GovernedObject {
-    wire: String,
-    envelope: Map<String, Value>,
-    pub(super) groups: BTreeMap<String, GroupBlock>,
-    pub(super) marker: Map<String, Value>,
+    wire: Arc<str>,
+    envelope: Arc<Map<String, Value>>,
+    pub(super) groups: Arc<BTreeMap<String, GroupBlock>>,
+    pub(super) marker: Arc<Map<String, Value>>,
 }
 
 impl GovernedObject {
@@ -99,10 +101,10 @@ impl GovernedObject {
             ));
         }
         Ok(Self {
-            wire: wire.to_owned(),
-            envelope: env.clone(),
-            groups,
-            marker: marker.clone(),
+            wire: Arc::from(wire),
+            envelope: Arc::new(env.clone()),
+            groups: Arc::new(groups),
+            marker: Arc::new(marker.clone()),
         })
     }
 

@@ -1,22 +1,15 @@
 //! Verified rule meaning and attributable claims supplied at each model decision.
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::Arc;
 
-use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use tn_core::governed::{Governance, GovernanceView, GovernedObject};
 
 use crate::governed_input::{refused, AcceptedGovernedRequest, GovernedInputRuntime};
 use crate::model_protocol::governance_presentation;
 use crate::output_tn::GovernedPublication;
+use crate::reference_runs::{parent_subjects, Subject};
 use crate::TnLlamaError;
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct Subject {
-    object_id: String,
-    group: String,
-    field: String,
-}
 
 struct Binding {
     group: String,
@@ -82,9 +75,9 @@ impl GovernedInputRuntime {
         let mut bindings = BTreeMap::new();
         for (id, view) in &views {
             let evidence = if let Some(tool) = tools.iter().find(|tool| tool.object.id() == id) {
-                tool.data.groups().get("evidence").cloned()
+                tool.data.groups().get("evidence").cloned().map(Arc::new)
             } else {
-                self.open_manifest(view, request)?
+                self.retained_manifest(view, request)?
             };
             if let Some(fields) = evidence {
                 bindings.insert(
@@ -118,11 +111,19 @@ impl GovernedInputRuntime {
             self.claim_ancestry(&root_ids, &mut views)?;
             for (id, view) in &views {
                 if !bindings.contains_key(id) {
-                    if let Some(fields) = self.open_manifest(view, request)? {
+                    if let Some(fields) = self.retained_manifest(view, request)? {
                         bindings.insert(id.clone(), manifest_bindings(view, &fields, false)?);
                     }
                 }
             }
+            let by_field: HashMap<(&str, &str, &str), &Binding> = bindings
+                .iter()
+                .flat_map(|(id, items)| {
+                    items.iter().map(move |item| {
+                        ((id.as_str(), item.group.as_str(), item.field.as_str()), item)
+                    })
+                })
+                .collect();
             for (id, items) in &bindings {
                 let references = views[id]
                     .governance()
@@ -144,11 +145,13 @@ impl GovernedInputRuntime {
                         }) {
                             return Err(refused("tn_claim_subject_invalid"));
                         }
-                        let parent_binding = bindings.get(&parent.object_id).and_then(|items| {
-                            items.iter().find(|item| {
-                                item.group == parent.group && item.field == parent.field
-                            })
-                        });
+                        let parent_binding = by_field
+                            .get(&(
+                                parent.object_id.as_str(),
+                                parent.group.as_str(),
+                                parent.field.as_str(),
+                            ))
+                            .copied();
                         if bindings.contains_key(&parent.object_id)
                             && parent_binding.is_none()
                             && matches!(
@@ -276,6 +279,33 @@ impl GovernedInputRuntime {
         Ok(())
     }
 
+    /// Retained objects and this runtime's reader keys are fixed, so a manifest
+    /// opened and verified for one use is the same for every later turn.
+    fn retained_manifest(
+        &self,
+        view: &GovernanceView,
+        request: &AcceptedGovernedRequest,
+    ) -> Result<Option<Arc<Map<String, Value>>>, TnLlamaError> {
+        let key = (view.object().id().to_owned(), request.use_context.clone());
+        let cached = self
+            .manifests
+            .lock()
+            .map_err(|_| refused("tn_claim_manifest_invalid"))?
+            .get(&key)
+            .cloned();
+        if let Some(found) = cached {
+            return Ok(found);
+        }
+        let opened = self.open_manifest(view, request)?.map(Arc::new);
+        if self.retained.contains_key(&key.0) {
+            self.manifests
+                .lock()
+                .map_err(|_| refused("tn_claim_manifest_invalid"))?
+                .insert(key, opened.clone());
+        }
+        Ok(opened)
+    }
+
     fn open_manifest(
         &self,
         view: &GovernanceView,
@@ -312,12 +342,12 @@ impl GovernedInputRuntime {
             .reader
             .open(&admitted, ["evidence"])
             .map_err(|_| refused("tn_claim_manifest_invalid"))?;
-        let fields = opened.groups()["evidence"]
-            .as_object()
-            .ok_or_else(|| refused("tn_claim_manifest_invalid"))?;
+        let Some(Value::Object(fields)) = opened.into_groups().remove("evidence") else {
+            return Err(refused("tn_claim_manifest_invalid"));
+        };
         self.verifier
-            .verify_native_group(view.object(), "evidence", fields)?;
-        Ok(Some(fields.clone()))
+            .verify_native_group(view.object(), "evidence", &fields)?;
+        Ok(Some(fields))
     }
 
     fn open_claim(
@@ -433,7 +463,7 @@ fn manifest_bindings(
         return Ok(Vec::new());
     };
     let group = match manifest.get("schema").and_then(Value::as_str) {
-        Some("tn.primitive-bindings.v1") => "values",
+        Some("tn.primitive-bindings.v1" | "tn.primitive-batch.v1") => "values",
         Some("tn.string-bindings.v1") => "strings",
         _ if matches!(
             object.object_type(),
@@ -444,8 +474,10 @@ fn manifest_bindings(
         }
         _ => return Ok(Vec::new()),
     };
+    // A source batch keeps one row per cell. Its cells have no parents or claims.
+    let batch = manifest.get("schema").and_then(Value::as_str) == Some("tn.primitive-batch.v1");
     let fields = manifest
-        .get("bindings")
+        .get(if batch { "cells" } else { "bindings" })
         .and_then(Value::as_object)
         .ok_or_else(|| refused("tn_claim_manifest_invalid"))?;
     if complete {
@@ -459,28 +491,39 @@ fn manifest_bindings(
             return Err(refused("tn_claim_manifest_invalid"));
         }
     }
+    let references = view
+        .governance()
+        .source_references()
+        .map_err(|_| refused("tn_claim_manifest_invalid"))?;
+    let sources: BTreeSet<&str> = references
+        .iter()
+        .map(|reference| reference.object_id())
+        .collect();
     fields
         .iter()
         .map(|(field, binding)| {
             if !has_field(object, group, field) {
                 return Err(refused("tn_claim_manifest_invalid"));
             }
+            if batch {
+                return Ok(Binding {
+                    group: group.into(),
+                    field: field.clone(),
+                    claims: Vec::new(),
+                    parents: Vec::new(),
+                });
+            }
             let claims: Vec<String> = serde_json::from_value(binding["claims"].clone())
                 .map_err(|_| refused("tn_claim_manifest_invalid"))?;
-            let parents: Vec<Subject> = serde_json::from_value(binding["parents"].clone())
-                .map_err(|_| refused("tn_claim_manifest_invalid"))?;
+            let parents = parent_subjects(&binding["parents"])
+                .ok_or_else(|| refused("tn_claim_manifest_invalid"))?;
             if claims.iter().collect::<BTreeSet<_>>().len() != claims.len() {
                 return Err(refused("tn_claim_manifest_invalid"));
             }
-            let references = view
-                .governance()
-                .source_references()
-                .map_err(|_| refused("tn_claim_manifest_invalid"))?;
-            if parents.iter().any(|parent| {
-                !references
-                    .iter()
-                    .any(|reference| reference.object_id() == parent.object_id)
-            }) {
+            if parents
+                .iter()
+                .any(|parent| !sources.contains(parent.object_id.as_str()))
+            {
                 return Err(refused("tn_claim_association_invalid"));
             }
             Ok(Binding {

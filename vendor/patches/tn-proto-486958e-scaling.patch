@@ -1,0 +1,932 @@
+--- a/crypto/tn-core/src/governed/data.rs	2026-09-13 15:04:56.000000000 -0400
++++ b/crypto/tn-core/src/governed/data.rs	2026-11-02 22:47:12.937035531 -0500
+@@ -6,9 +6,16 @@
+ };
+ use crate::sealed_object::GroupBlock;
+ use crate::{Error, Result};
+-use serde::Serialize;
++use serde::{Deserialize, Serialize};
+ use serde_json::{json, Map, Value};
+-use std::collections::{BTreeMap, BTreeSet};
++use std::collections::{BTreeMap, BTreeSet, HashSet};
++
++/// What one admitted input adds when another object includes it.
++pub struct Inclusion {
++    policies: Vec<Governance>,
++    bindings: Vec<DatasetBinding>,
++    sources: Vec<SourceReference>,
++}
+ 
+ /// A mutable working object. Policy attachment is append-only; releases retain snapshots.
+ #[derive(Clone)]
+@@ -444,17 +451,39 @@
+     /// Include another admitted input's causal references and every attached policy.
+     /// Data assignment stays explicit; the additional source object remains available to its owner.
+     pub fn include(&mut self, other: &Self) -> Result<()> {
++        self.include_all([other.inclusion()?])
++    }
++    /// The contracts, dataset bindings and causal references this object contributes.
++    pub fn inclusion(&self) -> Result<Inclusion> {
++        Ok(Inclusion {
++            policies: self.policies()?,
++            bindings: self.dataset_bindings()?,
++            sources: self.sources.clone(),
++        })
++    }
++    /// Include several admitted inputs with one merge over their references.
++    pub fn include_all(&mut self, inputs: impl IntoIterator<Item = Inclusion>) -> Result<()> {
+         let mut candidate = self.governance.clone();
+-        for policy in other.policies()? {
+-            append_policy(&mut candidate, &policy)?;
+-        }
+-        merge_bindings(&mut candidate, other.dataset_bindings()?)?;
++        let mut policies = candidate.policies()?;
++        let mut bindings = Vec::new();
++        let mut known: HashSet<SourceReference> = self.sources.iter().cloned().collect();
+         let mut sources = self.sources.clone();
+-        for source in &other.sources {
+-            if !sources.contains(source) {
+-                sources.push(source.clone());
++        for input in inputs {
++            for policy in &input.policies {
++                let policy = base_contract(policy);
++                if !policies.contains(&policy) {
++                    append_policy(&mut candidate, &policy)?;
++                    policies.push(policy);
++                }
++            }
++            bindings.extend(input.bindings);
++            for source in input.sources {
++                if known.insert(source.clone()) {
++                    sources.push(source);
++                }
+             }
+         }
++        merge_bindings(&mut candidate, bindings)?;
+         self.governance = candidate;
+         self.sources = sources;
+         self.changed();
+@@ -537,16 +566,22 @@
+     Ok(node)
+ }
+ pub(super) fn base_contract(policy: &Governance) -> Governance {
+-    let mut policy = policy.clone();
+-    for name in [
++    const CARRIED: [&str; 4] = [
+         "attached_policies",
+         "source_lineage",
+         "release_context",
+         "dataset_bindings",
+-    ] {
+-        policy.fields.remove(name);
++    ];
++    // Carried lists can be long. Leave them behind before removing their keys.
++    let mut fields = Map::new();
++    for (name, value) in &policy.fields {
++        let kept = !CARRIED.contains(&name.as_str());
++        fields.insert(name.clone(), if kept { value.clone() } else { Value::Null });
++    }
++    for name in CARRIED {
++        fields.remove(name);
+     }
+-    policy
++    Governance::with_fields(policy, fields)
+ }
+ fn append_policy(target: &mut Governance, additional: &Governance) -> Result<()> {
+     let policies = target.policies()?;
+@@ -579,14 +614,11 @@
+         if values.len() > 1024 {
+             return Err(invalid("object supports at most 1024 dataset bindings"));
+         }
+-        let bindings: Vec<DatasetBinding> = serde_json::from_value(value.clone())
++        let bindings = Vec::<DatasetBinding>::deserialize(value)
+             .map_err(|error| invalid(format!("dataset bindings: {error}")))?;
+-        for (index, binding) in bindings.iter().enumerate() {
+-            binding.validate()?;
+-            if bindings[..index]
+-                .iter()
+-                .any(|existing| existing.edition_record_id() == binding.edition_record_id())
+-            {
++        let mut editions = BTreeSet::new();
++        for binding in &bindings {
++            if !editions.insert(binding.edition_record_id()) {
+                 return Err(invalid(
+                     "each edition record must have exactly one dataset binding",
+                 ));
+@@ -656,6 +688,60 @@
+         assert_eq!(policies[0].get("region"), Some(&json!("eu")));
+         assert_eq!(policies[1].get("region"), Some(&json!("us")));
+     }
++
++    fn regional(device: &crate::DeviceKey, region: &str) -> Governance {
++        let mut policy=Governance::from_markdown(device.did(),
++            "## data\n### instruction\nAnalyze.\n### use_for\nResearch.\n### do_not_use_for\nDisclosure.\n### consequences\nReview.\n### on_violation_or_error\nRefuse.\n",
++            "unity/data", "data").unwrap();
++        policy.fields.insert("region".into(), json!(region));
++        policy
++    }
++
++    #[test]
++    fn include_all_matches_repeated_include() {
++        let device = crate::DeviceKey::generate();
++        let object = |region| {
++            DataObject::new("data", regional(&device, region), "data", json!({})).unwrap()
++        };
++        let others = [object("eu"), object("us"), object("eu"), object("ap")];
++        let mut repeated = object("base");
++        for other in &others {
++            repeated.include(other).unwrap();
++        }
++        let mut bulk = object("base");
++        bulk.include_all(others.iter().map(|other| other.inclusion().unwrap()))
++            .unwrap();
++        assert_eq!(bulk.policies().unwrap(), repeated.policies().unwrap());
++        assert_eq!(bulk.policies().unwrap().len(), 4);
++        assert_eq!(bulk.sources(), repeated.sources());
++    }
++
++    #[test]
++    fn base_contract_keeps_the_key_order_of_removal_from_a_full_copy() {
++        let device = crate::DeviceKey::generate();
++        let mut policy = regional(&device, "eu");
++        for name in [
++            "dataset_bindings",
++            "release_context",
++            "source_lineage",
++            "attached_policies",
++        ] {
++            policy.fields.insert(name.into(), json!([name]));
++        }
++        policy.fields.insert("purpose".into(), json!("research"));
++        let mut expected = policy.clone();
++        for name in [
++            "attached_policies",
++            "source_lineage",
++            "release_context",
++            "dataset_bindings",
++        ] {
++            expected.fields.remove(name);
++        }
++        let contract = base_contract(&policy);
++        assert!(contract.fields.keys().eq(expected.fields.keys()));
++        assert_eq!(contract, expected);
++    }
+ }
+ 
+ impl GovernedWriter<'_> {
+@@ -779,20 +865,27 @@
+     additions: impl IntoIterator<Item = DatasetBinding>,
+ ) -> Result<()> {
+     let mut bindings = governance.dataset_bindings()?;
++    let mut positions: BTreeMap<String, usize> = bindings
++        .iter()
++        .enumerate()
++        .map(|(index, binding)| (binding.edition_record_id().to_owned(), index))
++        .collect();
+     for binding in additions {
+         binding.validate()?;
+-        if bindings.iter().any(|existing| {
+-            existing.edition_record_id() == binding.edition_record_id() && existing != &binding
+-        }) {
+-            return Err(invalid(
+-                "a selected edition record cannot acquire a different binding",
+-            ));
+-        }
+-        if !bindings.contains(&binding) {
+-            if bindings.len() >= 1024 {
+-                return Err(invalid("object supports at most 1024 dataset bindings"));
++        match positions.get(binding.edition_record_id()) {
++            Some(&index) if bindings[index] != binding => {
++                return Err(invalid(
++                    "a selected edition record cannot acquire a different binding",
++                ));
++            }
++            Some(_) => {}
++            None => {
++                if bindings.len() >= 1024 {
++                    return Err(invalid("object supports at most 1024 dataset bindings"));
++                }
++                positions.insert(binding.edition_record_id().to_owned(), bindings.len());
++                bindings.push(binding);
+             }
+-            bindings.push(binding);
+         }
+     }
+     if !bindings.is_empty() {
+--- a/crypto/tn-core/src/governed/dataset.rs	2026-09-13 15:04:56.000000000 -0400
++++ b/crypto/tn-core/src/governed/dataset.rs	2026-11-02 22:47:12.937512403 -0500
+@@ -1,6 +1,7 @@
+ //! Signed edition records and explicit, application-approved dataset selection.
+ 
+ use std::collections::{BTreeMap, BTreeSet};
++use std::sync::Arc;
+ 
+ use serde::{Deserialize, Deserializer, Serialize};
+ 
+@@ -533,10 +534,14 @@
+     policies: Vec<Governance>,
+ }
+ 
++/// A record that passed validation and authority against one catalog state.
++#[derive(Debug)]
++pub struct PreparedEdition(AcceptedEdition);
++
+ /// Append-only catalog of authority-approved exact edition records.
+ #[derive(Debug, Clone, Default)]
+ pub struct DatasetCatalog {
+-    records: BTreeMap<String, AcceptedEdition>,
++    records: BTreeMap<String, Arc<AcceptedEdition>>,
+ }
+ 
+ impl DatasetCatalog {
+@@ -563,6 +568,21 @@
+     where
+         F: FnOnce(&DatasetEdition) -> Result<bool>,
+     {
++        let prepared = self.prepare(edition, dag, authorize)?;
++        self.commit(prepared);
++        Ok(())
++    }
++
++    /// Run every admission check without changing accepted state.
++    pub fn prepare<F>(
++        &self,
++        edition: DatasetEdition,
++        dag: &PolicyDag,
++        authorize: F,
++    ) -> Result<PreparedEdition>
++    where
++        F: FnOnce(&DatasetEdition) -> Result<bool>,
++    {
+         edition.body.validate()?;
+         if self.records.contains_key(edition.id()) {
+             return Err(invalid(
+@@ -575,11 +595,14 @@
+                 operation: "dataset.admit".to_owned(),
+             });
+         }
+-        self.records.insert(
+-            edition.id().to_owned(),
+-            AcceptedEdition { edition, policies },
+-        );
+-        Ok(())
++        Ok(PreparedEdition(AcceptedEdition { edition, policies }))
++    }
++
++    /// Add a record prepared against this exact catalog state.
++    pub fn commit(&mut self, prepared: PreparedEdition) {
++        let PreparedEdition(accepted) = prepared;
++        self.records
++            .insert(accepted.edition.id().to_owned(), Arc::new(accepted));
+     }
+ 
+     /// Pin dataset, edition, signed record, and one complete allowed-use tuple.
+@@ -609,7 +632,7 @@
+             });
+         }
+         Ok(DatasetSelection {
+-            accepted: record.clone(),
++            accepted: Arc::clone(record),
+             use_context: use_context.clone(),
+         })
+     }
+@@ -726,7 +749,7 @@
+ /// It has no public constructor or deserializer; only catalog selection creates it.
+ #[derive(Debug, Clone)]
+ pub struct DatasetSelection {
+-    accepted: AcceptedEdition,
++    accepted: Arc<AcceptedEdition>,
+     use_context: UseContext,
+ }
+ 
+--- a/crypto/tn-core/src/governed/lineage.rs	2026-09-13 15:04:56.000000000 -0400
++++ b/crypto/tn-core/src/governed/lineage.rs	2026-11-02 22:47:12.937694111 -0500
+@@ -1,9 +1,10 @@
+ //! Bounded verification of exact signed computation parents and selected origins.
+ 
+ use std::collections::{BTreeMap, BTreeSet};
++use std::rc::Rc;
+ 
+ use super::data::base_contract;
+-use super::{invalid, DatasetBinding, DatasetCatalog, GovernanceView, PolicyDag};
++use super::{invalid, DatasetBinding, DatasetCatalog, GovernanceView, Governance, PolicyDag};
+ use crate::Result;
+ 
+ /// The exact object identities reached by a successful lineage verification.
+@@ -72,22 +73,28 @@
+         F: FnMut(&str) -> Result<GovernanceView>,
+     {
+         let bindings = view.governance().dataset_bindings()?;
++        let mut origins: BTreeMap<&str, Vec<&DatasetBinding>> = BTreeMap::new();
+         for binding in &bindings {
+-            catalog.verify_binding(binding, dag)?;
++            origins
++                .entry(binding.source_object_id())
++                .or_default()
++                .push(binding);
+         }
+         let mut walk = Walk {
+             limits: self,
+             catalog,
+             dag,
+-            origins: &bindings,
++            origins,
+             resolve: &mut resolve,
+             visiting: BTreeSet::new(),
+             visited: BTreeMap::new(),
+             heights: BTreeMap::new(),
+             views: BTreeMap::new(),
++            verified: BTreeMap::new(),
+         };
++        walk.verify_bindings(&bindings)?;
+         walk.views
+-            .insert(view.object().id().to_owned(), view.clone());
++            .insert(view.object().id().to_owned(), Rc::new(view.clone()));
+         let roots = walk.visit(view, 0)?;
+         let expected: BTreeSet<_> = bindings
+             .iter()
+@@ -109,15 +116,28 @@
+     limits: &'a LineageVerifier,
+     catalog: &'a DatasetCatalog,
+     dag: &'a PolicyDag,
+-    origins: &'a [DatasetBinding],
++    origins: BTreeMap<&'a str, Vec<&'a DatasetBinding>>,
+     resolve: &'a mut F,
+     visiting: BTreeSet<String>,
+     visited: BTreeMap<String, BTreeSet<String>>,
+     heights: BTreeMap<String, usize>,
+-    views: BTreeMap<String, GovernanceView>,
++    views: BTreeMap<String, Rc<GovernanceView>>,
++    verified: BTreeMap<String, DatasetBinding>,
+ }
+ 
+ impl<F: FnMut(&str) -> Result<GovernanceView>> Walk<'_, F> {
++    /// The catalog and history are fixed for one walk, so each binding is checked once.
++    fn verify_bindings(&mut self, bindings: &[DatasetBinding]) -> Result<()> {
++        for binding in bindings {
++            if self.verified.get(binding.edition_record_id()) != Some(binding) {
++                self.catalog.verify_binding(binding, self.dag)?;
++                self.verified
++                    .insert(binding.edition_record_id().to_owned(), binding.clone());
++            }
++        }
++        Ok(())
++    }
++
+     fn visit(&mut self, view: &GovernanceView, depth: usize) -> Result<BTreeSet<String>> {
+         if depth > self.limits.max_depth {
+             return Err(invalid("lineage depth limit exceeded"));
+@@ -136,17 +156,20 @@
+             return Err(invalid("lineage object limit exceeded"));
+         }
+         self.visiting.insert(id.to_owned());
+-        let policies = view.governance().policies()?;
++        let contracts: Vec<Governance> = view
++            .governance()
++            .policies()?
++            .iter()
++            .map(base_contract)
++            .collect();
+         let bindings = view.governance().dataset_bindings()?;
+-        for binding in &bindings {
+-            self.catalog.verify_binding(binding, self.dag)?;
+-        }
++        self.verify_bindings(&bindings)?;
+ 
+         let mut roots = BTreeSet::new();
+         let mut height = 0;
+         // A catalog selection is the explicit traversal boundary. It authenticates
+         // the origin's complete contract without requiring its creation history.
+-        for binding in self.origins.iter().filter(|b| b.source_object_id() == id) {
++        for binding in self.origins.get(id).into_iter().flatten() {
+             let edition = self
+                 .catalog
+                 .get(binding.edition_record_id())
+@@ -157,7 +180,7 @@
+                     .source_groups()
+                     .iter()
+                     .all(|group| view.object().group_names().contains(&group.as_str()))
+-                || policies.len() != edition.contracts().len()
++                || contracts.len() != edition.contracts().len()
+             {
+                 return Err(invalid(
+                     "selected origin must match its edition's source and contracts",
+@@ -167,10 +190,7 @@
+                 let expected = self
+                     .dag
+                     .select(binding.revision_id(), binding.scope(), |_| Ok(true))?;
+-                if !policies
+-                    .iter()
+-                    .any(|policy| base_contract(policy) == base_contract(&expected))
+-                {
++                if !contracts.contains(&base_contract(&expected)) {
+                     return Err(invalid(
+                         "selected origin contract differs from its accepted revision",
+                     ));
+@@ -179,21 +199,25 @@
+             roots.insert(id.to_owned());
+         }
+         if roots.is_empty() {
++            let carried: BTreeMap<&str, &DatasetBinding> = bindings
++                .iter()
++                .map(|binding| (binding.edition_record_id(), binding))
++                .collect();
+             for reference in view.governance().source_references()? {
+                 let parent_id = reference.object_id();
+                 let parent = match self.views.get(parent_id) {
+-                    Some(parent) => parent.clone(),
++                    Some(parent) => Rc::clone(parent),
+                     None => {
+                         if self.views.len() >= self.limits.max_objects {
+                             return Err(invalid("lineage object limit exceeded"));
+                         }
+-                        let parent = (self.resolve)(parent_id)?;
++                        let parent = Rc::new((self.resolve)(parent_id)?);
+                         if parent.object().id() != parent_id {
+                             return Err(invalid(
+                                 "lineage resolver returned a different publication",
+                             ));
+                         }
+-                        self.views.insert(parent_id.to_owned(), parent.clone());
++                        self.views.insert(parent_id.to_owned(), Rc::clone(&parent));
+                         parent
+                     }
+                 };
+@@ -208,15 +232,12 @@
+                     ));
+                 }
+                 for inherited in parent.governance().policies()? {
+-                    if !policies
+-                        .iter()
+-                        .any(|policy| base_contract(policy) == base_contract(&inherited))
+-                    {
++                    if !contracts.contains(&base_contract(&inherited)) {
+                         return Err(invalid("child must retain every parent contract"));
+                     }
+                 }
+                 for inherited in parent.governance().dataset_bindings()? {
+-                    if !bindings.contains(&inherited) {
++                    if carried.get(inherited.edition_record_id()) != Some(&&inherited) {
+                         return Err(invalid("child must retain every parent dataset binding"));
+                     }
+                 }
+--- a/crypto/tn-core/src/governed/mod.rs	2026-09-13 15:04:56.000000000 -0400
++++ b/crypto/tn-core/src/governed/mod.rs	2026-11-02 22:47:12.924594530 -0500
+@@ -22,10 +22,11 @@
+     AdmissionContext, AttachmentContext, OwnedAdmissionContext, OwnedAttachmentContext,
+     OwnedReleaseContext, ReleaseContext,
+ };
+-pub use data::DataObject;
++pub use data::{DataObject, Inclusion};
+ pub use dataset::{
+     ContractBinding, DatasetBinding, DatasetCatalog, DatasetEdition, DatasetEditionDraft,
+-    DatasetSelection, EvaluatorArtifactSet, DATASET_EDITION_GROUP, DATASET_EDITION_TYPE,
++    DatasetSelection, EvaluatorArtifactSet, PreparedEdition, DATASET_EDITION_GROUP,
++    DATASET_EDITION_TYPE,
+ };
+ pub use lineage::{LineageVerifier, VerifiedLineage};
+ pub use object::GovernedObject;
+--- a/crypto/tn-core/src/governed/object.rs	2026-09-13 15:04:56.000000000 -0400
++++ b/crypto/tn-core/src/governed/object.rs	2026-11-02 22:47:12.924828387 -0500
+@@ -1,5 +1,6 @@
+ use std::collections::BTreeMap;
+ use std::fmt;
++use std::sync::Arc;
+ 
+ use serde::de::{Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
+ use serde_json::{Map, Value};
+@@ -15,12 +16,13 @@
+ ///
+ /// Verification authenticates the writer and the carried binding. Applications
+ /// apply their authority and permitted-use rules when admitting the contract.
++/// Parsing fixes the contents, so clones share them.
+ #[derive(Clone)]
+ pub struct GovernedObject {
+-    wire: String,
+-    envelope: Map<String, Value>,
+-    pub(super) groups: BTreeMap<String, GroupBlock>,
+-    pub(super) marker: Map<String, Value>,
++    wire: Arc<str>,
++    envelope: Arc<Map<String, Value>>,
++    pub(super) groups: Arc<BTreeMap<String, GroupBlock>>,
++    pub(super) marker: Arc<Map<String, Value>>,
+ }
+ 
+ impl GovernedObject {
+@@ -118,10 +120,10 @@
+             ));
+         }
+         Ok(Self {
+-            wire: wire.to_owned(),
+-            envelope: env.clone(),
+-            groups,
+-            marker: marker.clone(),
++            wire: Arc::from(wire),
++            envelope: Arc::new(env.clone()),
++            groups: Arc::new(groups),
++            marker: Arc::new(marker.clone()),
+         })
+     }
+ 
+--- a/crypto/tn-core/src/governed/policy.rs	2026-09-13 15:04:56.000000000 -0400
++++ b/crypto/tn-core/src/governed/policy.rs	2026-11-02 22:47:12.937266762 -0500
+@@ -57,6 +57,15 @@
+         Ok(governance)
+     }
+ 
++    /// The same authority over a contract already validated with this one.
++    pub(super) fn with_fields(contract: &Self, fields: Map<String, Value>) -> Self {
++        Self {
++            governed_by: contract.governed_by.clone(),
++            fields,
++            selected_object_type: contract.selected_object_type.clone(),
++        }
++    }
++
+     pub(super) fn from_body(governed_by: &str, fields: Map<String, Value>) -> Result<Self> {
+         validate_marker(governed_by, string_field(&fields, "policy")?)?;
+         for name in REQUIRED_FIELDS {
+--- a/crypto/tn-core/src/governed/reader.rs	2026-09-13 15:04:56.000000000 -0400
++++ b/crypto/tn-core/src/governed/reader.rs	2026-11-02 22:47:12.948163613 -0500
+@@ -152,7 +152,7 @@
+             .groups
+             .get(name)
+             .ok_or_else(|| invalid(format!("object has no group {name:?}")))?;
+-        let aad = canonical_bytes(&Value::Object(object.marker.clone()))?;
++        let aad = canonical_bytes(&Value::Object((*object.marker).clone()))?;
+         let mut cipher_error = None;
+         for cipher in self.groups.get(name).into_iter().flatten() {
+             let bytes = match cipher.decrypt_with_aad(&block.ciphertext, &aad) {
+@@ -165,10 +165,9 @@
+             };
+             let source = std::str::from_utf8(&bytes)
+                 .map_err(|_| invalid("opened group must be UTF-8 JSON"))?;
+-            let value = parse_json(source)?;
+-            let fields = value
+-                .as_object()
+-                .ok_or_else(|| invalid("opened group must be a JSON object"))?;
++            let Value::Object(fields) = parse_json(source)? else {
++                return Err(invalid("opened group must be a JSON object"));
++            };
+             if fields.len() != block.field_hashes.len()
+                 || !fields.keys().all(|f| block.field_hashes.contains_key(f))
+             {
+@@ -176,7 +175,7 @@
+                     "opened fields must match the group's signed field names",
+                 ));
+             }
+-            return Ok(fields.clone());
++            return Ok(fields);
+         }
+         Err(cipher_error.unwrap_or_else(|| Error::NotEntitled {
+             group: name.to_owned(),
+@@ -358,6 +357,10 @@
+     pub fn groups(&self) -> &BTreeMap<String, Value> {
+         &self.groups
+     }
++    /// The selected plaintext, without a copy.
++    pub fn into_groups(self) -> BTreeMap<String, Value> {
++        self.groups
++    }
+     /// Accepted contract carried with the plaintext.
+     pub fn governance(&self) -> &Governance {
+         self.admitted.governance()
+--- a/crypto/tn-core/src/governed/source.rs	2026-09-13 15:04:56.000000000 -0400
++++ b/crypto/tn-core/src/governed/source.rs	2026-11-02 22:47:12.924973384 -0500
+@@ -5,7 +5,7 @@
+ use serde_json::Value;
+ 
+ /// An admitted input, including the groups used and its governing contract.
+-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
++#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+ #[serde(deny_unknown_fields)]
+ pub struct SourceReference {
+     object_id: String,
+@@ -132,7 +132,7 @@
+         let Some(value) = self.get("source_lineage") else {
+             return Ok(Vec::new());
+         };
+-        let references: Vec<SourceReference> = serde_json::from_value(value.clone())
++        let references = Vec::<SourceReference>::deserialize(value)
+             .map_err(|e| invalid(format!("source lineage: {e}")))?;
+         for reference in &references {
+             reference.validate()?;
+--- a/crypto/tn-core-py/src/governed/data.rs	2026-09-13 15:04:56.000000000 -0400
++++ b/crypto/tn-core-py/src/governed/data.rs	2026-11-02 22:47:12.949139587 -0500
+@@ -8,9 +8,9 @@
+ use pyo3::prelude::*;
+ use pyo3::types::{PyBool, PyDict};
+ use serde_json::Value;
+-use std::sync::{Arc, Mutex};
++use std::sync::{Arc, Mutex, MutexGuard};
+ use tn_core::governed::{
+-    DataObject, OwnedAdmissionContext, PublicationReport, SourceReference, UseContext,
++    DataObject, Inclusion, OwnedAdmissionContext, PublicationReport, SourceReference, UseContext,
+ };
+ use tn_core::runtime::{Publication, Session};
+ 
+@@ -406,11 +406,20 @@
+             default_group,
+         }
+     }
++    /// Borrow the object for one statement. Python code must not run under this lock.
++    fn locked(&self) -> PyResult<MutexGuard<'_, DataObject>> {
++        self.inner.try_lock().map_err(|_| {
++            GovernedError::new_err("object is busy publishing or its data lock is poisoned")
++        })
++    }
+     fn read(&self) -> PyResult<DataObject> {
+         self.inner.try_lock().map(|v| v.clone()).map_err(|_| {
+             GovernedError::new_err("object is busy publishing or its data lock is poisoned")
+         })
+     }
++    fn inclusion(&self) -> PyResult<Inclusion> {
++        self.locked()?.inclusion().map_err(to_py)
++    }
+     fn mutate<T>(&self, f: impl FnOnce(&mut DataObject) -> tn_core::Result<T>) -> PyResult<T> {
+         let mut data = self.inner.try_lock().map_err(|_| {
+             GovernedError::new_err("object is busy publishing or its data lock is poisoned")
+@@ -526,7 +535,7 @@
+     fn inspect(&self) -> PyResult<PyDataState> {
+         guard(|| {
+             Ok(PyDataState {
+-                inner: self.read()?.inspect(),
++                inner: self.locked()?.inspect(),
+             })
+         })
+     }
+@@ -538,13 +547,11 @@
+         group: Option<&str>,
+     ) -> PyResult<Bound<'py, PyAny>> {
+         guard(|| {
+-            codec::to_python(
+-                py,
+-                &self
+-                    .read()?
+-                    .get(group.unwrap_or(&self.default_group), name)
+-                    .map_err(to_py)?,
+-            )
++            let value = self
++                .locked()?
++                .get(group.unwrap_or(&self.default_group), name)
++                .map_err(to_py)?;
++            codec::to_python(py, &value)
+         })
+     }
+     #[pyo3(signature = (name, value, *, group=None))]
+@@ -571,7 +578,7 @@
+         guard(|| {
+             Ok(pyo3::types::PyBytes::new(
+                 py,
+-                self.read()?.forward().map_err(to_py)?,
++                self.locked()?.forward().map_err(to_py)?,
+             ))
+         })
+     }
+@@ -593,7 +600,7 @@
+     }
+     #[getter]
+     fn dataset_bindings(&self) -> PyResult<Vec<PyDatasetBinding>> {
+-        self.read()?
++        self.locked()?
+             .dataset_bindings()
+             .map(|items| {
+                 items
+@@ -608,26 +615,26 @@
+     }
+     #[getter]
+     fn object_type(&self) -> PyResult<String> {
+-        Ok(self.read()?.object_type().to_owned())
++        Ok(self.locked()?.object_type().to_owned())
+     }
+     #[getter]
+     fn governance(&self) -> PyResult<PyGovernance> {
+         Ok(PyGovernance {
+-            inner: self.read()?.governance().clone(),
++            inner: self.locked()?.governance().clone(),
+         })
+     }
+     #[getter]
+     fn policies(&self) -> PyResult<Vec<PyGovernance>> {
+-        policies(&self.read()?)
++        policies(&*self.locked()?)
+     }
+     #[getter]
+     fn sources(&self) -> PyResult<Vec<PySource>> {
+-        Ok(sources(&self.read()?))
++        Ok(sources(&*self.locked()?))
+     }
+     #[getter]
+     fn history(&self) -> PyResult<Vec<PyObject>> {
+         Ok(self
+-            .read()?
++            .locked()?
+             .history()
+             .iter()
+             .cloned()
+@@ -636,7 +643,7 @@
+     }
+     #[getter]
+     fn snapshot(&self) -> PyResult<PyObject> {
+-        self.read()?
++        self.locked()?
+             .snapshot()
+             .cloned()
+             .map(|inner| PyObject { inner })
+@@ -647,7 +654,7 @@
+     #[getter]
+     fn hidden_groups(&self) -> PyResult<Vec<String>> {
+         Ok(self
+-            .read()?
++            .locked()?
+             .hidden_groups()
+             .into_iter()
+             .map(str::to_owned)
+@@ -655,15 +662,15 @@
+     }
+     #[getter]
+     fn register_error(&self) -> PyResult<Option<String>> {
+-        Ok(self.read()?.register_error().map(str::to_owned))
++        Ok(self.locked()?.register_error().map(str::to_owned))
+     }
+     #[getter]
+     fn revision(&self) -> PyResult<u64> {
+-        Ok(self.read()?.revision())
++        Ok(self.locked()?.revision())
+     }
+     #[getter]
+     fn has_unreleased_changes(&self) -> PyResult<bool> {
+-        Ok(self.read()?.has_unreleased_changes())
++        Ok(self.locked()?.has_unreleased_changes())
+     }
+     #[getter]
+     fn state(&self) -> PyResult<PyDataState> {
+@@ -687,7 +694,10 @@
+             .call1((slf, vec![name]))
+     }
+     fn _get<'py>(&self, py: Python<'py>, keys: &Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+-        guard(|| codec::to_python(py, &self.read()?.get_path(&path(keys)?).map_err(to_py)?))
++        guard(|| {
++            let value = self.locked()?.get_path(&path(keys)?).map_err(to_py)?;
++            codec::to_python(py, &value)
++        })
+     }
+     fn _set(&self, keys: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+         guard(|| {
+@@ -852,8 +862,18 @@
+     }
+     fn include(&self, other: &Self) -> PyResult<()> {
+         guard(|| {
+-            let other = other.read()?;
+-            self.mutate(|data| data.include(&other))
++            let other = other.inclusion()?;
++            self.mutate(|data| data.include_all([other]))
++        })
++    }
++    /// Include several inputs with one merge over their references.
++    fn include_all(&self, others: Vec<PyRef<'_, Self>>) -> PyResult<()> {
++        guard(|| {
++            let inputs = others
++                .iter()
++                .map(|other| other.inclusion())
++                .collect::<PyResult<Vec<_>>>()?;
++            self.mutate(|data| data.include_all(inputs))
+         })
+     }
+     #[pyo3(signature=(policy, *, decide=None))]
+--- a/crypto/tn-core-py/src/governed/dataset.rs	2026-09-13 15:04:56.000000000 -0400
++++ b/crypto/tn-core-py/src/governed/dataset.rs	2026-11-02 22:47:12.948415125 -0500
+@@ -1,6 +1,6 @@
+ //! Thin Python views over canonical Rust dataset records and accepted selections.
+ 
+-use std::sync::{Mutex, MutexGuard};
++use std::sync::{Arc, Mutex, MutexGuard};
+ 
+ use pyo3::exceptions::{PyRuntimeError, PyTypeError};
+ use pyo3::prelude::*;
+@@ -274,9 +274,9 @@
+     }
+ }
+ 
+-#[derive(Clone, Default)]
++#[derive(Default)]
+ struct CatalogState {
+-    catalog: DatasetCatalog,
++    catalog: Arc<DatasetCatalog>,
+     version: u64,
+ }
+ 
+@@ -291,8 +291,8 @@
+             .lock()
+             .map_err(|_| GovernedError::new_err("dataset catalog lock poisoned"))
+     }
+-    pub(super) fn snapshot(&self) -> PyResult<DatasetCatalog> {
+-        Ok(self.lock()?.catalog.clone())
++    pub(super) fn snapshot(&self) -> PyResult<Arc<DatasetCatalog>> {
++        Ok(Arc::clone(&self.lock()?.catalog))
+     }
+ }
+ 
+@@ -325,12 +325,14 @@
+         authorize: &Bound<'_, PyAny>,
+     ) -> PyResult<()> {
+         guard(|| {
+-            let mut candidate = self.lock()?.clone();
++            let (accepted, version) = {
++                let state = self.lock()?;
++                (Arc::clone(&state.catalog), state.version)
++            };
+             let dag = dag.snapshot()?;
+             let mut failure = None;
+-            let result = candidate
+-                .catalog
+-                .admit(edition.inner.clone(), &dag, |record| {
++            let result = accepted
++                .prepare(edition.inner.clone(), &dag, |record| {
+                     authorize
+                         .call1((PyDatasetEdition {
+                             inner: record.clone(),
+@@ -353,16 +355,16 @@
+             if let Some(error) = failure {
+                 return Err(error);
+             }
+-            result.map_err(to_py)?;
++            let prepared = result.map_err(to_py)?;
++            drop(accepted);
+             let mut current = self.lock()?;
+-            if current.version != candidate.version {
++            if current.version != version {
+                 return Err(PyRuntimeError::new_err("dataset catalog changed during authority decision; evaluate its current state again"));
+             }
+-            candidate.version = candidate
+-                .version
++            current.version = version
+                 .checked_add(1)
+                 .ok_or_else(|| PyRuntimeError::new_err("dataset catalog version exhausted"))?;
+-            *current = candidate;
++            Arc::make_mut(&mut current.catalog).commit(prepared);
+             Ok(())
+         })
+     }
+@@ -383,8 +385,9 @@
+     }
+     fn verify_binding(&self, binding: &PyDatasetBinding, dag: &PyPolicyDag) -> PyResult<()> {
+         guard(|| {
++            let dag = dag.snapshot()?;
+             self.snapshot()?
+-                .verify_binding(&binding.inner, &dag.snapshot()?)
++                .verify_binding(&binding.inner, &dag)
+                 .map_err(to_py)
+         })
+     }
+--- a/crypto/tn-core-py/src/governed/revision.rs	2026-09-13 15:04:56.000000000 -0400
++++ b/crypto/tn-core-py/src/governed/revision.rs	2026-11-02 22:47:12.948561556 -0500
+@@ -1,6 +1,6 @@
+ //! Signed revision records and authority callbacks over the canonical Rust DAG.
+ 
+-use std::sync::{Mutex, MutexGuard};
++use std::sync::{Arc, Mutex, MutexGuard};
+ 
+ use pyo3::exceptions::{PyRuntimeError, PyTypeError};
+ use pyo3::prelude::*;
+@@ -166,7 +166,7 @@
+ 
+ #[derive(Clone, Default)]
+ struct DagState {
+-    dag: PolicyDag,
++    dag: Arc<PolicyDag>,
+     version: u64,
+ }
+ 
+@@ -177,8 +177,8 @@
+ }
+ 
+ impl PyPolicyDag {
+-    pub(super) fn snapshot(&self) -> PyResult<PolicyDag> {
+-        Ok(self.lock()?.dag.clone())
++    pub(super) fn snapshot(&self) -> PyResult<Arc<PolicyDag>> {
++        Ok(Arc::clone(&self.lock()?.dag))
+     }
+ 
+     fn lock(&self) -> PyResult<MutexGuard<'_, DagState>> {
+@@ -249,8 +249,7 @@
+         guard(|| {
+             let mut candidate = self.lock()?.clone();
+             let mut failure = None;
+-            let result = candidate
+-                .dag
++            let result = Arc::make_mut(&mut candidate.dag)
+                 .admit(revision.inner.clone(), |revision, parent| {
+                     callback_answer(
+                         authorize.call1((
+--- a/python/pyproject.toml	2026-09-13 15:04:56.000000000 -0400
++++ b/python/pyproject.toml	2026-11-02 23:09:58.718185695 -0500
+@@ -19,7 +19,7 @@
+ 
+ [project]
+ name            = "tn-proto"
+-version         = "2026.9.13b1"
++version         = "2026.9.13b1+486958e.scaling"
+ description     = "TN protocol: signed data, encrypted groups, and governed workflows"
+ readme          = "README.md"
+ requires-python = ">=3.10"

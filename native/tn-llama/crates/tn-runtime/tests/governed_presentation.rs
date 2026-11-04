@@ -97,14 +97,8 @@ fn model_references_verified_provenance_while_runtime_retains_the_full_graph() {
     let request = fixture.request("calculation");
     let (_keys, runtime) = fixture.runtime();
     let mut session = runtime.start_session(&request).unwrap();
-    let turn = session.next_model_turn().unwrap();
-    let body: Value = serde_json::from_slice(&turn.request_json).unwrap();
-    let args: Value = serde_json::from_str(
-        body["messages"].as_array().unwrap().last().unwrap()["content"]
-            .as_str()
-            .unwrap(),
-    )
-    .unwrap();
+    let turn = report_turn(&mut session);
+    let args = control(&turn);
     let reference =
         &args["applicable_source_governance"]["sources"][0]["governance"]["source_lineage"];
     assert_eq!(reference["schema"], "tn.governance-reference.v1");
@@ -158,7 +152,7 @@ fn altered_provenance_reference_cannot_prepare_a_model_task() {
         let request = fixture.request("calculation");
         let (_keys, runtime) = fixture.runtime();
         let mut session = runtime.start_session(&request).unwrap();
-        let turn = session.next_model_turn().unwrap();
+        let turn = report_turn(&mut session);
         let mut body: Value = serde_json::from_slice(&turn.request_json).unwrap();
         let mut context: Value =
             serde_json::from_str(body["messages"][1]["content"].as_str().unwrap()).unwrap();

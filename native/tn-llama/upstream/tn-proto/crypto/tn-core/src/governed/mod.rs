@@ -19,10 +19,11 @@ mod use_context;
 mod writer;
 
 pub use admission::{AdmissionContext, AttachmentContext, OwnedAdmissionContext, ReleaseContext};
-pub use data::DataObject;
+pub use data::{DataObject, Inclusion};
 pub use dataset::{
     ContractBinding, DatasetBinding, DatasetCatalog, DatasetEdition, DatasetEditionDraft,
-    DatasetSelection, EvaluatorArtifactSet, DATASET_EDITION_GROUP, DATASET_EDITION_TYPE,
+    DatasetSelection, EvaluatorArtifactSet, PreparedEdition, DATASET_EDITION_GROUP,
+    DATASET_EDITION_TYPE,
 };
 pub use lineage::{LineageVerifier, VerifiedLineage};
 pub use object::GovernedObject;

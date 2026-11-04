@@ -11,8 +11,12 @@ from dataclasses import asdict, dataclass
 from tn.canonical import _canonical_bytes
 
 CONTEXT_PROTOCOL = "tn.llama.governance-context.v1"
-_DECISION_PHASES = {3: "section_selection", 4: "governed_action"}
+_DECISION_PHASES = {3: {"section_selection", "decrypt"}, 4: {"governed_action"}}
 _ARTIFACT_FIELDS = ("request_json_b64", "rendered_prompt_b64", "runnable_manifest_b64")
+_DECRYPT_TOOL = "decrypt_value"
+_DECRYPT_CONTROL = {"phase", "user_request", "encrypted_data", "governance_hash",
+                    "applicable_source_governance", "output_instruction"}
+_ENCRYPTED_FIELD = {"group", "field", "data_hash"}
 _ACTION_EVENTS = {
     "sections_selected",
     "governed_tool_executed",
@@ -106,7 +110,7 @@ def _source(facts, source_id):
     _require(values == [source_id], "context source identity is missing or differs")
 
 
-def _control(request, phase):
+def _control_message(request, phase):
     controls = []
     for message in request.get("messages", []):
         content = message.get("content")
@@ -118,12 +122,16 @@ def _control(request, phase):
             continue
         if (
             isinstance(value, dict)
-            and value.get("phase") == _DECISION_PHASES[phase]
+            and value.get("phase") in _DECISION_PHASES[phase]
             and "applicable_source_governance" in value
         ):
             controls.append((content, value))
     _require(len(controls) == 1, "decision request lacks one exact governance context")
-    content, value = controls[0]
+    return controls[0]
+
+
+def _control(request, phase):
+    content, value = _control_message(request, phase)
     context = value["applicable_source_governance"]
     _require(isinstance(context, dict) and bool(context), "decision governance context is empty")
     return content, context
@@ -244,6 +252,96 @@ def _check_artifacts(start, prepared, facts, source_id):
     _source(facts, source_id)
 
 
+def _decrypt_call(request):
+    """Return the model's retained decrypt call and the runtime's answer to it."""
+    messages = request.get("messages", [])
+    calls = [
+        index for index, message in enumerate(messages)
+        if message.get("role") == "assistant"
+        and [call.get("function", {}).get("name")
+             for call in message.get("tool_calls", [])] == [_DECRYPT_TOOL]
+    ]
+    _require(len(calls) == 1 and calls[0] + 1 < len(messages),
+             "governed action lacks exactly one decrypt call")
+    call, answer = messages[calls[0]]["tool_calls"][0], messages[calls[0] + 1]
+    _require(answer.get("role") == "tool" and answer.get("tool_call_id") == call.get("id"),
+             "decrypted values are not the answer to the model's call")
+    return _json(call["function"]["arguments"]), _json(answer["content"])
+
+
+def _decrypt_control(request, phase):
+    """Return the decrypt turn's control fields, which carry no business value."""
+    _, control = _control_message(request, phase)
+    entries = control.get("encrypted_data")
+    _require(
+        set(control) == _DECRYPT_CONTROL and isinstance(entries, list) and bool(entries)
+        and all(set(item) == _ENCRYPTED_FIELD for item in entries),
+        "decrypt turn lacks the hash keys or holds other data",
+    )
+    return control
+
+
+def _check_signed_hash_keys(control, envelope):
+    """The hash keys shown to the model are the signed object's own."""
+    _require(envelope is not None, "native evidence needs the signed source object")
+    _require(
+        control["governance_hash"] == envelope["tn.agents"]["field_hashes"]["policy"]
+        and all(
+            item["data_hash"] == envelope[item["group"]]["field_hashes"][item["field"]]
+            for item in control["encrypted_data"]
+        ),
+        "decrypt turn hash keys differ from the signed source object",
+    )
+
+
+def _text_values(value):
+    if isinstance(value, dict):
+        value = list(value.values())
+    if isinstance(value, list):
+        return [text for item in value for text in _text_values(item)]
+    return [value] if isinstance(value, str) and len(value) >= 8 else []
+
+
+def _check_decrypt_turn(turns, source_envelope):
+    """The model was shown the governance, then presented its hash keys to decrypt."""
+    (phase, start, result), *actions = turns
+    _require(phase == 3 and bool(actions), "values opened without the model's decrypt call")
+    request = _json(_bytes(start, "request_json_b64"))
+    tools = [tool.get("function", {}).get("name") for tool in request.get("tools", [])]
+    _require(
+        tools == [_DECRYPT_TOOL]
+        and all(item.get("role") in {"system", "user"} for item in request.get("messages", [])),
+        "decrypt turn offers another tool or already holds a tool result",
+    )
+    control = _decrypt_control(request, phase)
+    _check_signed_hash_keys(control, source_envelope)
+    governance_hash = control["governance_hash"]
+    offered = {(item["group"], item["field"]): item["data_hash"] for item in control["encrypted_data"]}
+    generated = _bytes(result, "raw_model_output_b64").decode()
+    prompt = _bytes(start, "rendered_prompt_b64").decode()
+    _require(_DECRYPT_TOOL in generated, "the model's output holds no decrypt call")
+    for _, action, _ in actions:
+        presented, answer = _decrypt_call(_json(_bytes(action, "request_json_b64")))
+        hashes = presented.get("data_hashes")
+        _require(
+            presented.get("governance_hash") == governance_hash
+            and answer.get("governance_hash") == governance_hash,
+            "decrypt call does not present the governance hash key shown to the model",
+        )
+        _require(
+            isinstance(hashes, list) and bool(hashes) and set(hashes) <= set(offered.values())
+            and all(value in generated for value in (governance_hash, *hashes)),
+            "decrypt call does not present the data hash keys the model generated",
+        )
+        returned = {offered.get((group, field)) for group, fields in answer.get("data", {}).items()
+                    for field in fields}
+        _require(returned == set(hashes), "decrypt result differs from the fields the model presented")
+        _require(
+            not any(text in prompt for text in _text_values(answer.get("data"))),
+            "a decrypted value appears before the model's decrypt call",
+        )
+
+
 def _check_completion(audit, trace, binding, *, run_id, source_id, expected_release):
     emitted = [row for row in audit if row.get("kind") == "output_emitted_and_read_back"]
     completed = [
@@ -267,7 +365,8 @@ def _check_completion(audit, trace, binding, *, run_id, source_id, expected_rele
         "report completion is not bound to the last governed decision",
     )
     _require(
-        not any(row.get("kind") == "terminal_error" for row in audit),
+        not any(row.get("kind") == "terminal_error"
+                and row.get("request_digest") == binding.get("request_digest") for row in audit),
         "completed report evidence contains a terminal error",
     )
     releases = [row for row in trace if row.get("kind") == "release"]
@@ -420,7 +519,9 @@ def _check_runtime_actions(audit, admission, bound, *, run_id, request_digest, s
     return bool(selection)
 
 
-def _check_context(audit, trace, *, run_id, request_digest, source_id, expected_release):
+def _check_context(
+    audit, trace, *, run_id, request_digest, source_id, expected_release, source_envelope,
+):
     _require(
         all(isinstance(value, str) and value for value in (run_id, request_digest, source_id)),
         "expected source, request, and run identities are required",
@@ -466,7 +567,7 @@ def _check_context(audit, trace, *, run_id, request_digest, source_id, expected_
         not any(row.get("kind") == "commitments_matched" for row in audit),
         "governance-context evidence contains a model echo assertion",
     )
-    task_ids, phases, seen = [], [], set()
+    task_ids, phases, seen, turns = [], [], set(), []
     executions_by_identity = {}
     previous_authorization = admission["sequence"]
     for index, (binding, begin) in enumerate(zip(bound, authorized, strict=True)):
@@ -527,6 +628,7 @@ def _check_context(audit, trace, *, run_id, request_digest, source_id, expected_
             )
         _bytes(result, "raw_model_output_b64")
         _check_artifacts(start, prepared, facts, source_id)
+        turns.append((phase, start, result))
         if binding.get("llama_task_id") is not None:
             task_ids.append(binding["llama_task_id"])
         phases.append(phase)
@@ -556,6 +658,8 @@ def _check_context(audit, trace, *, run_id, request_digest, source_id, expected_
                 facts.get(field) == bound_facts.get(field),
                 "action execution differs from its governance context binding",
             )
+    if admission_facts.get("source_object_id") is not None:
+        _check_decrypt_turn(turns, source_envelope)
     _check_completion(
         audit, trace, bound[-1], run_id=run_id, source_id=source_id,
         expected_release=expected_release,
@@ -565,11 +669,13 @@ def _check_context(audit, trace, *, run_id, request_digest, source_id, expected_
 
 def inspect_governance_context(
     audit, trace, *, run_id, request_digest, source_id, expected_release=None,
+    source_envelope=None,
 ):
     """Inspect complete local execution evidence, optionally bound to a received release."""
     protocol = "unrecognized"
     try:
         admissions = [row for row in audit if row.get("kind") == "governance_opened_and_verified"]
+        echoed = any(row.get("kind") == "commitments_matched" for row in audit)
         uses_context = (
             any(row.get("kind") == "governance_context_bound" for row in audit)
             or any(_facts(row).get("governance_context_protocol") is not None for row in admissions)
@@ -579,27 +685,10 @@ def inspect_governance_context(
             protocol = CONTEXT_PROTOCOL
             task_ids, phases = _check_context(
                 audit, trace, run_id=run_id, request_digest=request_digest, source_id=source_id,
-                expected_release=expected_release,
+                expected_release=expected_release, source_envelope=source_envelope,
             )
             return ContextEvidence(protocol, True, task_ids, phases)
-        echoes = [row for row in audit if row.get("kind") == "commitments_matched"]
-        _require(len(admissions) == len(echoes) == 1, "no recognized governance evidence protocol")
-        protocol = "legacy_echo"
-        admission, echo = admissions[0], echoes[0]
-        for row in (admission, echo):
-            _identity(row, run_id, request_digest, source_id)
-        opening, match = _facts(admission), _facts(echo)
-        _require(
-            audit.index(admission) < audit.index(echo)
-            and opening.get("hashes_verified") is True
-            and match.get("hashes_matched") is True,
-            "historical governance opening and commitment echo are not verified",
-        )
-        count = opening.get("governance_commitment_count")
-        _require(
-            type(count) is int and count > 0 and count == match.get("governance_commitment_count"),
-            "historical governance commitment counts differ",
-        )
-        return ContextEvidence(protocol, True)
+        raise ValueError("a commitment echo proves nothing" if echoed
+                         else "no recognized governance evidence protocol")
     except (ValueError, KeyError, TypeError, AttributeError, binascii.Error) as error:
         return ContextEvidence(protocol, False, errors=(str(error),))

@@ -20,11 +20,15 @@ import tn
 from tn_polars.opa import OpaWasmEvaluator
 
 from tn_governed.publications import open_publication_store, write_once
+from tn_governed.values.collection import pauses_collection
 from tn_governed.values.evidence import EvidenceError, verify_tape
-from tn_governed.values.primitives import SCHEMA, VALUE_TYPE
+from tn_governed.values.verify import GRAPH_CELL_LIMIT, cache_bound
+from tn_governed.values.manifests import SCHEMAS, signed_manifest
+from tn_governed.values.primitives import VALUE_TYPE
 from tn_governed.values.numeric_codec import decode, encode, record_value
 from tn_governed.values.metadata import describe
 from tn_governed.values.provision import POLICY
+from tn_governed.values.references import unpack_references, unpack_source_cells
 
 
 _STAGES = ("load", "filter", "sort", "with_columns", "select", "release")
@@ -49,6 +53,18 @@ def _digest(raw):
     return hashlib.sha256(raw).hexdigest()
 
 
+def _commitment_report(commitments, limit):
+    """List commitments for a small input; above ``limit``, give their count and digest."""
+    if limit is None or len(commitments) <= limit:
+        return commitments
+    digest = hashlib.sha256()
+    for item in commitments:
+        reference = item["reference"]
+        digest.update(f"{reference['object_id']}/{reference['group']}/{reference['field']}="
+                      f"{item['field_commitment']}\n".encode("ascii"))
+    return {"count": len(commitments), "sha256": digest.hexdigest()}
+
+
 def _artifact_facts(artifact):
     return {name: getattr(artifact, name) for name in ("policy_revision", *_FILES.values())}
 
@@ -67,7 +83,8 @@ def _bundle_members(marker, names):
     return {name: (marker.parent / name).read_bytes() for name in names}
 
 
-def verify_frame(root):
+@pauses_collection
+def verify_frame(root, *, graph_cell_limit=GRAPH_CELL_LIMIT):
     """Verify a completed fixed-plan dataframe result without accessing Unity."""
     root = Path(root).resolve()
     run = json.loads((root / "run.json").read_text())
@@ -76,7 +93,9 @@ def verify_frame(root):
     authority, writers = run["authority"], set(run["writers"])
     use = tn.UseContext(run["request"]["application"], run["request"]["purpose"], "verify")
 
-    @lru_cache(maxsize=128)
+    bound = cache_bound(store)
+
+    @lru_cache(maxsize=bound)
     def object_(identity):
         obj = store.read(identity)
         _require(obj.id == identity, "retained native publication identity differs")
@@ -85,7 +104,7 @@ def verify_frame(root):
     with store, tn.Session.from_config(str(root / run["observer_config"])) as session, ExitStack() as caches:
         caches.callback(object_.cache_clear)
 
-        @lru_cache(maxsize=128)
+        @lru_cache(maxsize=bound)
         def governance(identity):
             return session.governance(object_(identity))
 
@@ -218,7 +237,7 @@ def verify_frame(root):
                      "native ancestor has an unrecognized writer or contract")
             return view
 
-        @lru_cache(maxsize=128)
+        @lru_cache(maxsize=bound)
         def open_publication(identity):
             obj = object_(identity)
             tn.LineageVerifier(max_objects=65536, max_depth=256).verify(governance(identity), catalog, dag, ancestor)
@@ -226,24 +245,25 @@ def verify_frame(root):
             selection = (catalog.select(edition.dataset, edition.edition, edition.id, use)
                          if edition is not None else None)
             data = session.receive(obj, use=use, groups=["values", "evidence"], selection=selection, decide=accepted_value)
-            manifest = data.get("manifest", group="evidence")
-            _require(manifest["schema"] == SCHEMA, "unknown primitive binding schema")
-            return obj, data, manifest
+            manifest = signed_manifest(data)
+            _require(manifest["schema"] in SCHEMAS, "unknown primitive binding schema")
+            return (obj.envelope["values"]["field_hashes"], tuple(data.dataset_bindings),
+                    manifest, data.get(None, group="values"))
 
         caches.callback(open_publication.cache_clear)
 
         def open_value(reference):
             _require(reference["group"] == "values", "unexpected business group")
-            obj, data, manifest = open_publication(reference["object_id"])
+            commitments, dataset_bindings, manifest, payloads = open_publication(reference["object_id"])
             binding = manifest["bindings"][reference["field"]]
-            payload = data.get(reference["field"], group="values")
+            payload = payloads[reference["field"]]
             _require(type(payload) is str, "primitive wire payload is not a string")
             kind = binding["declared"]["kind"]
             _require(kind in {"str", numeric_kind}, "unsupported primitive kind")
             value = decode(payload, kind)
             _require(encode(value) == payload and describe(value) == binding["declared"],
                      "numeric encoding or declared facts differ from the opened value")
-            return obj, data, binding, value
+            return commitments, dataset_bindings, binding, value
 
         database = root / "market.sqlite"
         snapshot_hash = _digest(database.read_bytes())
@@ -264,20 +284,22 @@ def verify_frame(root):
                 expected_amount = expected_amount.quantize(Decimal(1).scaleb(-numeric_profile["scale"]))
         input_roots = {"name": set(), "value": set()}
         input_commitments, retained_editions = [], {}
-        _require(len(facts["source_cells"]) == 2 * count and len(facts["input_references"]) == 2 * count,
+        input_references = unpack_references(facts["input_references"])
+        source_cells = unpack_source_cells(facts["source_cells"], input_references)
+        _require(len(source_cells) == 2 * count and len(input_references) == 2 * count,
                  "dataframe omitted or duplicated an input cell")
-        for index, cell in enumerate(facts["source_cells"]):
+        for index, cell in enumerate(source_cells):
             column, row = ("name" if index % 2 == 0 else "value"), index // 2
-            reference = facts["input_references"][index]
+            reference = input_references[index]
             _require(cell["row"] == row and cell["column"] == column and cell["reference"] == reference,
                      "dataframe cell position differs from signed inputs")
-            obj, data, binding, value = open_value(reference)
+            commitments, dataset_bindings, binding, value = open_value(reference)
             _require(value == selected_rows[row][index % 2] and type(value) is (str if column == "name" else numeric_type),
                      "governed cell differs from the retained SQL value")
-            _require(len(data.dataset_bindings) == 1 and len(binding["origins"]) == 1,
+            _require(len(dataset_bindings) == 1 and len(binding["origins"]) == 1,
                      "input cell has ambiguous original source")
             source = binding["origins"][0]
-            native_binding = data.dataset_bindings[0]
+            native_binding = dataset_bindings[0]
             edition = editions[native_binding.edition_record_id]
             _require(source["column"] == column and source["row"] == row and source["table"] == "market_data"
                      and source["snapshot_sha256"] == snapshot_hash and source["assignment_id"] == assignment_obj.id,
@@ -291,7 +313,7 @@ def verify_frame(root):
                 "record_id": edition.id, "source_object_id": edition.source_object_id,
                 "contracts": [contract.revision_id for contract in edition.contracts]}
             input_commitments.append({"reference": reference,
-                "field_commitment": obj.envelope[reference["group"]]["field_hashes"][reference["field"]]})
+                "field_commitment": commitments[reference["field"]]})
         _require(facts["source_editions"] == list(retained_editions.values()), "frame edition observations differ from native records")
         _require(facts["input_columns"] == {name: sorted(roots) for name, roots in input_roots.items()},
                  "input column lineage omits source roots")
@@ -373,7 +395,7 @@ def verify_frame(root):
             from tn_polars.audit import verify_audit
 
             verify_audit(facts["audit"], rows=[{"amount": expected_amount}],
-                         expected_sources={item["object_id"] for item in facts["input_references"]},
+                         expected_sources={item["object_id"] for item in input_references},
                          expected_artifacts=artifacts, evaluator_for=lambda revision: evaluators[revision])
             _require(facts["audit"]["input_references"] == facts["input_references"],
                      "dataframe audit input references differ from the signed Result")
@@ -381,10 +403,10 @@ def verify_frame(root):
         output_commitments = {}
         for label, expected in (("dataframe_result", expected_amount), ("amount", expected_amount + run["evaluation"]["depth"])):
             reference = run["outputs"][label]["reference"]
-            obj, _data, _binding, value = open_value(reference)
+            commitments, _dataset_bindings, _binding, value = open_value(reference)
             _require(type(value) is numeric_type and value == expected, "encrypted numeric result differs from independent reference calculation")
             output_commitments[label] = {"reference": reference, "value": value,
-                "field_commitment": obj.envelope[reference["group"]]["field_hashes"][reference["field"]]}
+                "field_commitment": commitments[reference["field"]]}
         _require(facts["output"] == {"column": "amount", "value": record_value(expected_amount)}, "signed dataframe output differs from its encrypted value")
         _require(result.body["details"]["field_commitment"] == output_commitments["dataframe_result"]["field_commitment"],
                  "dataframe Result field commitment differs from native output")
@@ -393,8 +415,9 @@ def verify_frame(root):
             "verify_use": {"application": use.application, "purpose": use.purpose, "operation": use.operation},
             "source_snapshot_sha256": snapshot_hash, "source_rows": count, "filtered_rows": len(filtered_rows),
             "opa_decisions_replayed": len(facts["opa_decisions"]), "policy_revisions": sorted(policies),
-            "stages_per_policy": list(_STAGES), "input_commitments": input_commitments,
+            "stages_per_policy": list(_STAGES), "input_commitments": _commitment_report(input_commitments, graph_cell_limit),
             "output_commitments": output_commitments, "artifact_sha256": artifact_hashes,
             "verifier_source_sha256": _digest(Path(__file__).read_bytes())}
-    write_once(root / "frame-verification.json", json.dumps(record_value(summary), indent=2).encode())
-    return record_value(summary)
+    document = record_value(summary)
+    write_once(root / "frame-verification.json", json.dumps(document).encode())
+    return document

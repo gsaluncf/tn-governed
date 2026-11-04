@@ -45,7 +45,7 @@ def main():
     repository = args.project_directory.resolve()
     sdk_record = repository / "config/sdk-build.json"
     sdk = json.loads(sdk_record.read_text())
-    native_module = Path(tn.__file__).parent / "_native.pyd"
+    native_module = Path(importlib.import_module("tn._native").__file__)
     native_digest = hashlib.sha256(native_module.read_bytes()).hexdigest()
     version = importlib.metadata.version("tn-proto")
     if version != sdk["version"] or native_digest != sdk["install"]["native_module_sha256"]:
@@ -139,7 +139,8 @@ def main():
         metadata_only.resolver.resolve("customer_data", ["name", "value"], actor="analyst",
             application="sql-demo", purpose="customer-support", expected_source=source_identity(database))
         for edition in driver.editions:
-            metadata_only.resolver.admit_edition(edition, metadata_only)
+            metadata_only.resolver.admit_edition(edition, metadata_only,
+                                                 transport=driver.edition_transports[edition["record_id"]])
         capability_failure = None
         with metadata_only:
             readable_length = len(name)
@@ -184,7 +185,7 @@ def main():
             "unity_resolutions": {name_: ctx.resolver.requests for name_, ctx in contexts.items()},
             "runtime": {"python": platform.python_version(), "platform": platform.platform(),
                         "tn_proto": version, "native_module_sha256": native_digest,
-                        "wheel_sha256": sdk["wheel_sha256"], "sdk_source": sdk["source"],
+                        "wheel_sha256": sdk["wheel_sha256"],
                         "sdk_build_record_sha256": hashlib.sha256(sdk_record.read_bytes()).hexdigest(),
                         "repository_commit": subprocess.run(["git", "rev-parse", "HEAD"], cwd=repository,
                             check=True, text=True, capture_output=True).stdout.strip(),

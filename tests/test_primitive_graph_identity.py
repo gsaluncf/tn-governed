@@ -121,7 +121,7 @@ def batch_run(tmp_path, monkeypatch, request):
                 def publish_origins(*args, **kwargs):
                     origins = kwargs["origins"]
                     changes = {
-                        "reordered": list(reversed(origins)),
+                        "split": [{**origins[0], "rows": [[0, 0], [1, 1]]}, *origins[1:]],
                         "duplicate": [*origins, origins[0]],
                         "coordinate": [{**origins[0], "row": row_count}, *origins[1:]],
                         "mapping": origins[0],
@@ -162,7 +162,7 @@ def test_equal_sibling_values_keep_distinct_nodes_and_evidence(batch_run):
 
 
 @pytest.mark.parametrize("batch_run", [{"rows": 4, "derive": True}], indirect=True)
-def test_derivation_verifies_first_origin_order_with_repeated_parent_rows(batch_run):
+def test_derivation_merges_repeated_parent_rows(batch_run):
     root, run = batch_run
     summary = verify(root)
     assert summary["incarnations"] == 9
@@ -174,12 +174,12 @@ def test_derivation_verifies_first_origin_order_with_repeated_parent_rows(batch_
         opened = session.receive(output, use=tn.UseContext("offline-verifier", "inspect-evidence", "read"),
                                  groups=["evidence"], decide=lambda _: True)
         binding = opened.get("manifest", group="evidence")["bindings"]["value"]
-    assert [origin["row"] for origin in binding["origins"]] == [1, 2, 3, 0]
+    assert [origin["rows"] for origin in binding["origins"]] == [[[0, 3]]]
 
 
 @pytest.mark.parametrize("batch_run", [
     {"derive": True, "origins": change}
-    for change in ("reordered", "duplicate", "coordinate", "mapping", "null")
+    for change in ("split", "duplicate", "coordinate", "mapping", "null")
 ], indirect=True)
 def test_signed_derivation_cannot_change_or_malform_contributor_origins(batch_run):
     root, _ = batch_run
@@ -325,7 +325,7 @@ def test_verification_cache_is_bounded_and_cleared_on_exit(batch_run, monkeypatc
     else:
         verify(root)
     assert caches
-    assert all(cache.cache_info().maxsize == 128 and cache.cache_info().currsize == 0
+    assert all(cache.cache_info().maxsize is not None and cache.cache_info().currsize == 0
                for cache in caches)
 
 

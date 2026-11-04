@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import tn
 
-from .publications import PublicationStore, object_digest, validate_record_position, write_once
+from .publications import PublicationStore, object_digest, validate_record_position
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -181,16 +181,17 @@ class NativeObjects:
 
     def export(self, directory):
         """Persist native publications once at an explicit archival boundary."""
-        archive = PublicationStore(directory)
+        archive = PublicationStore(directory, group_commit=True)
         with self._lock:
             for obj in self._objects.values():
                 archive.put(obj)
             for context_id, records in self._records.items():
                 for sequence, identity in sorted(records.items()):
-                    write_once(
+                    archive._write(
                         archive.root / "tapes" / context_id / f"{sequence:08d}.ref",
                         identity.encode("ascii"),
                     )
+            archive.commit()
         return archive
 
     @classmethod

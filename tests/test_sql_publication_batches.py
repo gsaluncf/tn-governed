@@ -63,7 +63,7 @@ def test_native_256_cell_batches_preserve_field_positions_policies_and_claims(
     assert len(claims) == 1
     assert claims[0].subjects == (rows[64][1].reference,)
     assert claims[0].issuer == context.session.did
-    assert {origin["row"] for origin in binding["origins"]} == {64, 255}
+    assert [origin["rows"] for origin in binding["origins"]] == [[[64, 64], [255, 255]]]
     assert data.policies[0].matches_contract(policies["amount"])
     assert result.reveal(context, destination="support-console") == 339
 

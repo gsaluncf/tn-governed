@@ -20,6 +20,32 @@ from .string import MetadataUnavailable, ValueReference
 RESULT_SCHEMA = "tn.sql-result.v1"
 
 
+def _verify_row_key(key):
+    if not isinstance(key, list) or not key or [encode_sql(decode_sql(v)) for v in key] != key:
+        raise EvidenceError("query lineage has an invalid row identity")
+
+
+def _verify_contributor_rows(manifest, lineage, sources):
+    """Check shared row identities against the result shape and assigned sources."""
+    rows, columns = lineage["contributor_rows"], lineage["contributor_columns"]
+    width = len(rows[0]) if rows else 0
+    if (len(rows) != manifest["row_count"]
+            or len(columns) != len(manifest["binding"]["output_schema"])
+            or any(len(row) != width for row in rows)):
+        raise EvidenceError("query lineage does not cover its result positions")
+    for item in (source for column in columns for source in column):
+        if ("main", item["table"], item["column"]) not in sources or item["role"] not in {
+            "value", "control", "presence",
+        }:
+            raise EvidenceError("query lineage names an unassigned contributor")
+        index = item["identity"]
+        if index is not None and (type(index) is not int or (rows and not 0 <= index < width)):
+            raise EvidenceError("query lineage has an invalid row identity")
+    for member in (item for row in rows for members in row for item in members):
+        if type(member) is not int:
+            _verify_row_key(json.loads(member))
+
+
 def _verify_lineage(manifest):
     binding, lineage = manifest["binding"], manifest["lineage"]
     sources = {(item["database"], item["table"], item["column"]) for item in binding["sources"]}
@@ -28,6 +54,9 @@ def _verify_lineage(manifest):
             (item["database"], item["table"], item["column"]) for item in lineage["source_columns"]
         } != sources:
             raise EvidenceError("query lineage source scope differs from its assigned sources")
+        if "contributor_rows" in lineage:
+            _verify_contributor_rows(manifest, lineage, sources)
+            return
         positions = set()
         for cell in lineage["cells"]:
             position = cell["row"], cell["column"]
@@ -59,12 +88,8 @@ def _verify_lineage(manifest):
             }:
                 raise EvidenceError("query lineage names an unassigned contributor")
             key = item["row_key"]
-            if key is not None and (
-                not isinstance(key, list)
-                or not key
-                or [encode_sql(decode_sql(value)) for value in key] != key
-            ):
-                raise EvidenceError("query lineage has an invalid row identity")
+            if key is not None:
+                _verify_row_key(key)
             if lineage["precision"] == "exact" and key is None:
                 raise EvidenceError("exact query lineage requires contributor identities")
     except (KeyError, TypeError, ValueError) as exc:

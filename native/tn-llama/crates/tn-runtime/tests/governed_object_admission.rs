@@ -114,27 +114,20 @@ fn metadata_extra_contract_requires_its_own_accepted_authority() {
 }
 
 #[test]
-fn all_contracts_are_accepted_before_selection_or_business_exposure() {
+fn all_contracts_are_accepted_before_decryption_or_business_exposure() {
     let fixture = Fixture::new();
     let request = fixture.request("calculation");
     let (_keys, runtime) = fixture.runtime();
     let mut session = runtime.start_session(&request).unwrap();
     let turn = session.next_model_turn().unwrap();
-    let body: Value = serde_json::from_slice(&turn.request_json).unwrap();
-    let context: Value =
-        serde_json::from_str(body["messages"][1]["content"].as_str().unwrap()).unwrap();
     assert_eq!(
-        context["selected_values"]["finance"]["calculation"]["result"],
-        json!(0.25)
-    );
-    assert_eq!(
-        context["applicable_source_governance"]["sources"][0]["governance"]["dataset_bindings"]
+        control(&turn)["applicable_source_governance"]["sources"][0]["governance"]
+            ["dataset_bindings"]
             .as_array()
             .unwrap()
             .len(),
         2
     );
-    assert!(context["selected_values"].get("audit").is_none());
     assert!(runtime.start_session(&request).is_err());
     session.abort().unwrap();
     assert!(runtime.start_session(&request).is_ok());

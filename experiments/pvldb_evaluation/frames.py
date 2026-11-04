@@ -24,6 +24,7 @@ from tn_polars.opa import OpaModuleCache
 from tn_polars.policy import CompiledPolicy
 from tn_polars.registry import write_edition_bundle
 from tn_polars.support import Support
+from tn_governed.values.collection import pauses_collection
 from tn_polars.tn_boundary import PolicySet, TnBoundary, root_name
 
 from tn_governed.unity import FinanceEditionRequest, resolve_finance_editions
@@ -32,7 +33,9 @@ from tn_governed.values.evidence import EvidenceError
 from tn_governed.values.numeric import TNNumeric
 from tn_governed.values.numeric_codec import KINDS, record_value
 from .numeric_profile import numeric_profile, polars_dtype, build_frame, check_fixed_plan_range
-from tn_governed.values.primitives import Context, OPERATIONS, unique_origins
+from tn_governed.values.manifests import unique_origins
+from tn_governed.values.primitives import Context, OPERATIONS
+from tn_governed.values.references import pack_references, pack_source_cells
 from tn_governed.values.string import OperationDenied, TNString, _active
 
 
@@ -166,47 +169,52 @@ def _artifact_facts(artifacts):
         "policy_revision", "compiled_policy_sha256", "profile_sha256", "wasm_sha256", "data_sha256")}
 
 
+def _checked_edition(context, data, column, use, module_cache, selected):
+    """Check one publication's original edition, once for all its cells in a column."""
+    bindings = data.dataset_bindings
+    if len(bindings) != 1:
+        raise EvidenceError("each input cell must retain exactly one original SQL edition")
+    binding = bindings[0]
+    resolved = context.frame_editions.get(binding.source_object_id)
+    if resolved is None:
+        raise EvidenceError("the cell's original evaluator edition was not resolved")
+    record = resolved.selection.record
+    if (record.id != binding.edition_record_id or record.dataset != binding.dataset
+            or record.edition != binding.edition or not record.dataset.endswith("." + column)):
+        raise EvidenceError("cell position differs from its signed source edition")
+    if record.id not in selected:
+        context.catalog.verify_binding(binding, context.policy_dag)
+        selection = context.catalog.select(record.dataset, record.edition, record.id, use)
+        selected[record.id] = PolicySet.for_selection(resolved.entries, selection, module_cache=module_cache)
+    return {"dataset": record.dataset, "edition": record.edition, "record_id": record.id,
+            "source_object_id": record.source_object_id,
+            "contracts": [item.revision_id for item in record.contracts]}
+
+
 def _select_policies(context, metadata, values, use):
     """Resolve each cell's original edition, including attested descendants."""
-    policy_set = None
-    # Reuse only compiled code within this call. Each cell still has its own
+    # Reuse only compiled code within this call. Each publication still has its own
     # current edition checks and evaluator state, under this context and use.
     module_cache = OpaModuleCache()
     sources = {"name": set(), "value": set()}
-    editions, inputs, selected, bindings_by_publication = {}, [], {}, {}
+    editions, inputs, selected, checked = {}, [], {}, {}
     for index, ((data, primitive_binding, _), value) in enumerate(zip(metadata, values)):
         column = "name" if index % 2 == 0 else "value"
-        identity = value.reference.object_id
-        if identity not in bindings_by_publication:
-            bindings_by_publication[identity] = data.dataset_bindings
-        bindings = bindings_by_publication[identity]
-        if len(bindings) != 1:
-            raise EvidenceError("each input cell must retain exactly one original SQL edition")
-        binding = bindings[0]
-        resolved = context.frame_editions.get(binding.source_object_id)
-        if resolved is None:
-            raise EvidenceError("the cell's original evaluator edition was not resolved")
-        record = resolved.selection.record
-        if (record.id != binding.edition_record_id or record.dataset != binding.dataset
-                or record.edition != binding.edition or not record.dataset.endswith("." + column)):
-            raise EvidenceError("cell position differs from its signed source edition")
+        key = value.reference.object_id, column
+        if key not in checked:
+            checked[key] = _checked_edition(context, data, column, use, module_cache, selected)
+            editions[checked[key]["record_id"]] = checked[key]
+            sources[column].add(root_name(checked[key]["source_object_id"], column))
+        edition = checked[key]
         if len(primitive_binding["origins"]) != 1 or primitive_binding["origins"][0]["column"] != column:
             raise EvidenceError("cell position differs from its retained SQL origin")
-        if record.id not in selected:
-            context.catalog.verify_binding(binding, context.policy_dag)
-            selection = context.catalog.select(record.dataset, record.edition, record.id, use)
-            current = PolicySet.for_selection(resolved.entries, selection, module_cache=module_cache)
-            selected[record.id] = current
-            policy_set = current if policy_set is None else policy_set.include(current)
-        root = root_name(binding.source_object_id, column)
-        sources[column].add(root)
-        editions[record.id] = {"dataset": record.dataset, "edition": record.edition,
-            "record_id": record.id, "source_object_id": record.source_object_id,
-            "contracts": [item.revision_id for item in record.contracts]}
         inputs.append({"row": index // 2, "column": column, "reference": value.reference.to_dict(),
-                       "source_object_id": binding.source_object_id, "edition_record_id": record.id,
-                       "source_row": primitive_binding["origins"][0]["row"], "root": root})
-    return policy_set, sources, list(editions.values()), inputs
+                       "source_object_id": edition["source_object_id"],
+                       "edition_record_id": edition["record_id"],
+                       "source_row": primitive_binding["origins"][0]["row"],
+                       "root": root_name(edition["source_object_id"], column)})
+    first, *others = selected.values()
+    return first.include_all(others), sources, list(editions.values()), inputs
 
 
 def _row_support(lazy, cells, policies, row_count):
@@ -219,6 +227,7 @@ def _row_support(lazy, cells, policies, row_count):
     )
 
 
+@pauses_collection
 def dataframe_calculate(context, rows):
     """Filter, sort, add 250, and sum SQL cells inside one governed operation.
 
@@ -236,7 +245,7 @@ def dataframe_calculate(context, rows):
     call_id = uuid4().hex
     request, metadata, decision = context._prepare(OPERATION, values, None, (deepcopy(PLAN),), call_id)
     facts = {"schema": "tn.pvldb-dataframe.v1", "plan": deepcopy(list(PLAN)),
-             "input_references": [value.reference.to_dict() for value in values],
+             "input_references": pack_references(value.reference.to_dict() for value in values),
              "source_row_count": len(rows), "opa_decisions": []}
     context._frame_pending[call_id] = facts
     try:
@@ -246,7 +255,7 @@ def dataframe_calculate(context, rows):
         policies = PolicySet({revision: replace(entry,
             evaluator=_RecordingEvaluator(entry.evaluator, facts["opa_decisions"]))
             for revision, entry in policies._entries.items()}, audit=policies.audit)
-        facts.update(source_editions=editions, source_cells=cells,
+        facts.update(source_editions=editions, source_cells=pack_source_cells(cells),
             input_columns={column: sorted(roots) for column, roots in sources.items()},
             policy_artifacts=[_artifact_facts(entry.artifacts) for entry in policies._entries.values()])
         profiles = [context.resolver.rules[p.revision_id]["dataframe_numeric"] for p in request.policies]

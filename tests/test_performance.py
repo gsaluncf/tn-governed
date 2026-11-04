@@ -35,6 +35,7 @@ def test_profile_requires_distinct_positive_sizes_and_explicit_model_mode():
         {"recipients": [True]},
         {"sql_batch_size": 64},
         {"sql_batch_size": 0},
+        {"gpu_layers": 0},
     ):
         with pytest.raises(ValueError):
             perf.validate_profile(valid | change)

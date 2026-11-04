@@ -1,7 +1,7 @@
 //! Exact standalone TN publications, admitted under receiver-held authority.
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -167,7 +167,12 @@ pub(crate) struct GovernedInputRuntime {
     pub(crate) retained: BTreeMap<String, GovernanceView>,
     pub(crate) lineage: LineageVerifier,
     pub(crate) claim_records: Vec<String>,
+    /// Opened and verified evidence manifests of retained objects, by object and use.
+    pub(crate) manifests: Mutex<OpenedManifests>,
 }
+
+pub(crate) type OpenedManifests =
+    BTreeMap<(String, tn_core::governed::UseContext), Option<Arc<Map<String, Value>>>>;
 
 impl GovernedInputRuntime {
     pub fn load(
@@ -304,6 +309,7 @@ impl GovernedInputRuntime {
             retained,
             lineage,
             claim_records: metadata.claim_records,
+            manifests: Mutex::new(BTreeMap::new()),
         })
     }
 

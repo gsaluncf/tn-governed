@@ -152,7 +152,7 @@ impl GovernedReader {
             .groups
             .get(name)
             .ok_or_else(|| invalid(format!("object has no group {name:?}")))?;
-        let aad = canonical_bytes(&Value::Object(object.marker.clone()))?;
+        let aad = canonical_bytes(&Value::Object((*object.marker).clone()))?;
         let mut cipher_error = None;
         for cipher in self.groups.get(name).into_iter().flatten() {
             let bytes = match cipher.decrypt_with_aad(&block.ciphertext, &aad) {
@@ -165,10 +165,9 @@ impl GovernedReader {
             };
             let source = std::str::from_utf8(&bytes)
                 .map_err(|_| invalid("opened group must be UTF-8 JSON"))?;
-            let value = parse_json(source)?;
-            let fields = value
-                .as_object()
-                .ok_or_else(|| invalid("opened group must be a JSON object"))?;
+            let Value::Object(fields) = parse_json(source)? else {
+                return Err(invalid("opened group must be a JSON object"));
+            };
             if fields.len() != block.field_hashes.len()
                 || !fields.keys().all(|f| block.field_hashes.contains_key(f))
             {
@@ -176,7 +175,7 @@ impl GovernedReader {
                     "opened fields must match the group's signed field names",
                 ));
             }
-            return Ok(fields.clone());
+            return Ok(fields);
         }
         Err(cipher_error.unwrap_or_else(|| Error::NotEntitled {
             group: name.to_owned(),
@@ -357,6 +356,10 @@ impl OpenedObject {
     /// Selected business plaintext, separated by group.
     pub fn groups(&self) -> &BTreeMap<String, Value> {
         &self.groups
+    }
+    /// The selected plaintext, without a copy.
+    pub fn into_groups(self) -> BTreeMap<String, Value> {
+        self.groups
     }
     /// Accepted contract carried with the plaintext.
     pub fn governance(&self) -> &Governance {

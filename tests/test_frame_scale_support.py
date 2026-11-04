@@ -12,8 +12,8 @@ from tn_polars.support import Support
 from experiments.pvldb_evaluation.frames import _row_support
 
 
-def test_origin_union_preserves_first_occurrence_and_distinct_coordinates():
-    from tn_governed.values.primitives import unique_origins
+def test_origin_union_merges_rows_and_keeps_distinct_scopes():
+    from tn_governed.values.manifests import origin_rows, unique_origins
 
     first = {"publication": "one", "row": 1, "column": "price",
              "snapshot": {"tables": ["market"], "epoch": 1}}
@@ -24,8 +24,10 @@ def test_origin_union_preserves_first_occurrence_and_distinct_coordinates():
     other_publication = {**first, "publication": "two"}
     inputs = [first, other_row, equal, other_column, other_publication, dict(first)]
     union = unique_origins(inputs)
-    assert union == [first, other_row, other_column, other_publication]
-    assert union[0] is first
+    scope = {key: item for key, item in first.items() if key != "row"}
+    assert union == [{**scope, "rows": [[1, 2]]}, other_column, other_publication]
+    assert unique_origins(union) == union
+    assert origin_rows(union) == 4
     assert first == equal
 
 
@@ -136,6 +138,7 @@ def test_native_batched_audit_preserves_policies_claims_and_cell_coordinates(tmp
     from tn_polars.registry import UnityCatalogRegistry
 
     from experiments.pvldb_evaluation.run import run_case
+    from tn_governed.values.references import unpack_references, unpack_source_cells
 
     volumes = {}
 
@@ -164,14 +167,21 @@ def test_native_batched_audit_preserves_policies_claims_and_cell_coordinates(tmp
     assert len(original) == 1
     for label in ("dataframe_result", "model_input"):
         assert nodes[run["outputs"][label]["reference"]["object_id"]]["claims"] == original
-    assert len(facts["input_references"]) == 130
+    references = unpack_references(facts["input_references"])
+    assert len(references) == 130
     expected = defaultdict(set)
-    for cell in facts["source_cells"]:
+    for cell in unpack_source_cells(facts["source_cells"], references):
         source = cell["source_object_id"]
         expected[source].add(f"{source}::{cell['source_row']}")
     assert len(expected) == 4
-    assert audit["support"]["rows"] == [
-        {source: sorted(rows) for source, rows in expected.items()}
-    ]
+
+    def tokens(source, members):
+        if isinstance(members, list):
+            return set(members)
+        return {f"{source}::{row}" for first, last in members["ranges"]
+                for row in range(first, last + 1)}
+
+    assert [{source: tokens(source, members) for source, members in row.items()}
+            for row in audit["support"]["rows"]] == [dict(expected)]
     assert all(facts["group_sizes"] == [65]
                for facts in audit["support"]["policy_facts"].values())

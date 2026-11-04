@@ -11,6 +11,7 @@ import argparse
 from decimal import Decimal
 from contextlib import ExitStack, closing, contextmanager
 from datetime import datetime, timezone
+import gc
 import importlib.metadata
 import json
 from pathlib import Path
@@ -36,6 +37,7 @@ from tn_governed.values.demo import handle
 from tn_governed.values.evidence import EvidenceRecorder
 from tn_governed.values.model import NativeModelEndpoint, digest, prepare_native_model
 from tn_governed.values.provision import provision
+from tn_governed.values.references import pack_references
 from tn_governed.values.sql import GovernedSQL, source_identity
 from .frames import DataframeContext, DataframeGovernance, dataframe_calculate
 from .metrics import stage as profile_stage
@@ -45,7 +47,7 @@ from .performance_env import implementation_library, model_uses_wsl, native_modu
 CLAIM = "Suitable for identifying the synthetic company in this internal demonstration report."
 PROMPT = (
     "Prepare a short internal HTML draft about the supplied synthetic calculation for a human reviewer. "
-    "Select the values section. State the supplied demonstration amount without treating it as a market quote. "
+    "State the supplied demonstration amount without treating it as a market quote. "
     "Mark the report as requiring human review, using the exact carried review notice in a visible paragraph. "
     "Generate the report now; do not claim a human has reviewed it. Use no CSS, hidden content, or external resources."
 )
@@ -124,12 +126,16 @@ def run_case(root, mode, rows=1, depth=1, branches=1, model=False, claim=True,
              unity_url="http://127.0.0.1:8080", binary=None, model_path=None,
              port=18325, numeric_type="int", decimal_precision=38, decimal_scale=4, storage="files",
              sdk_build_record=None, runtime_limits=None, gpu_layers=None,
-             completion_handler=None, sql_batch_size=64):
+             completion_handler=None, sql_batch_size=64, company="ACME", additional_claims=0,
+             fixture=None, cell_reads=0):
     """Return a case summary and preserve the verifier's run manifest.
 
     A model attempt uses one fresh server and one native request. Failures remain
-    failures; no retry, fallback, or fabricated report is performed here.
+    failures; no retry, fallback, or fabricated report is performed here. A fixture
+    replaces the generated rows with caller-supplied (name, value) pairs.
     """
+    if fixture is not None:
+        rows, company = len(fixture), fixture[0][0]
     if mode not in {"primitive", "explicit"}:
         raise ValueError("mode must be primitive or explicit")
     if storage != "files":
@@ -140,6 +146,8 @@ def run_case(root, mode, rows=1, depth=1, branches=1, model=False, claim=True,
         raise ValueError("depth must be a nonnegative integer")
     if completion_handler is not None and not callable(completion_handler):
         raise ValueError("completion_handler must be callable")
+    if model and gpu_layers == 0:
+        raise ValueError("the evaluation runs every model layer on the GPU")
     from tn_governed.values.primitives import MAX_SOURCE_PUBLICATION_CELLS
     if type(sql_batch_size) is not int or not 1 <= sql_batch_size <= MAX_SOURCE_PUBLICATION_CELLS:
         raise ValueError("sql_batch_size exceeds the supported publication size")
@@ -161,14 +169,16 @@ def run_case(root, mode, rows=1, depth=1, branches=1, model=False, claim=True,
     }
     if numeric_type not in {"int", "float", "Decimal"}:
         raise ValueError("unsupported source numeric type")
-    raw_values = [1250 + i for i in range(rows)]
+    raw_values = [value for _, value in fixture] if fixture else [1250 + i for i in range(rows)]
+    names = ([name for name, _ in fixture] if fixture
+             else [company if i == 0 else f"ACME-{i}" for i in range(rows)])
     if numeric_type == "float":
         raw_values = [float(value) + 0.125 for value in raw_values]
     elif numeric_type == "Decimal":
         raw_values = [Decimal(f"{value}.1250") for value in raw_values]
-    expected_amount = sum(value + 250 for value in raw_values) + depth
+    expected_amount = sum(value + 250 for value in raw_values if value >= 0) + depth
     summary["numeric_type"] = numeric_type
-    expected_label = "ACME" + " / A" * (branches - 1)
+    expected_label = company.upper() + " / A" * (branches - 1)
     summary["expected_content"] = f"{expected_label}: {expected_amount} demonstration cents"
     write_once(root / "case-request.json", json.dumps({k: v for k, v in summary.items()
                if k not in {"timings_seconds", "error"}}, indent=2).encode())
@@ -199,7 +209,8 @@ def run_case(root, mode, rows=1, depth=1, branches=1, model=False, claim=True,
             with closing(sqlite3.connect(database)) as connection:
                 connection.execute(f"CREATE TABLE market_data (name TEXT NOT NULL, value {column_type} NOT NULL)")
                 connection.executemany("INSERT INTO market_data VALUES (?, ?)",
-                                       [("ACME" if i == 0 else f"ACME-{i}", str(value) if numeric_type == "Decimal" else value) for i, value in enumerate(raw_values)])
+                                       [(name, str(value) if numeric_type == "Decimal" else value)
+                                        for name, value in zip(names, raw_values, strict=True)])
                 connection.commit()
             paths = provision(root / "sessions", roles=["catalog", "gateway", "worker", "model-reader", "observer"],
                               read_only_roles=("model-reader", "observer"))
@@ -252,11 +263,20 @@ def run_case(root, mode, rows=1, depth=1, branches=1, model=False, claim=True,
                     fetched = db.execute("SELECT name, value FROM market_data LIMIT ?", (rows,)).fetchall()
                     if len(fetched) != rows:
                         raise RuntimeError("SQL returned a different row count")
+                gc.freeze()
+                if cell_reads:
+                    stage = "cell_read"
+                    with _timed(timings, stage), context:
+                        ops = _Operations(context, mode)
+                        for index in range(cell_reads):
+                            ops.add_literal(fetched[index * rows // cell_reads][1], 1)
                 stage = "claim"
                 with _timed(timings, stage), context:
                     name = fetched[0][0]
                     if claim:
                         name = name.attest(CLAIM, context)
+                        for number in range(additional_claims):
+                            name = name.attest(f"{CLAIM} Reviewed statement {number + 2}.", context)
                         outputs["attested_name"] = handle(name)
                 frame_rows = [(name, fetched[0][1]), *fetched[1:]]
                 stage = "dataframe"
@@ -348,7 +368,8 @@ def run_case(root, mode, rows=1, depth=1, branches=1, model=False, claim=True,
                     "administration_policy": admin.fields, "assignment_id": assignment_id,
                     "source": source_identity(database), "observer_config": "sessions/observer/tn.yaml",
                     "tapes": tapes, "source_editions": db.editions,
-                    "sources": [handle(v) for v in db.published_values], "outputs": outputs,
+                    "sources": pack_references(v.reference.to_dict() for v in db.published_values),
+                    "outputs": outputs,
                     "console_disclosures": {"internal": internal}, "sql_executions": db.executions,
                     "unity_resolutions": {role: ctx.resolver.requests for role, ctx in contexts.items()},
                     "runtime": {"python": platform.python_version(), "platform": platform.platform(),
@@ -388,10 +409,11 @@ def run_case(root, mode, rows=1, depth=1, branches=1, model=False, claim=True,
                         "result_record_id": report.result_record_id if report else None,
                         "review": report.review.to_dict() if report and report.review else None,
                     }
-                write_once(root / "run.json", json.dumps(manifest, indent=2).encode())
+                write_once(root / "run.json", json.dumps(manifest).encode())
         stage = "verification"
         from tn_governed.values.verify import verify
         from .verify_frame import verify_frame
+        gc.freeze()
         try:
             with _timed(timings, stage):
                 verification = verify(root)
@@ -416,8 +438,9 @@ def run_case(root, mode, rows=1, depth=1, branches=1, model=False, claim=True,
         summary["error"] = _error(exc, stage)
         summary["completed"] = False
     finally:
+        gc.unfreeze()
         timings["total"] = time.perf_counter() - total_started
-        write_once(root / "case-summary.json", json.dumps(summary, indent=2).encode())
+        write_once(root / "case-summary.json", json.dumps(summary).encode())
     return summary
 
 
@@ -439,6 +462,7 @@ def main():
     parser.add_argument("--binary", type=Path)
     parser.add_argument("--model-path", type=Path)
     parser.add_argument("--port", type=int, default=18325)
+    parser.add_argument("--gpu-layers", type=int)
     parser.add_argument("--sdk-build-record", type=Path,
                         help="Expected native build record (default: repository's pinned build)")
     args = parser.parse_args()
@@ -446,7 +470,7 @@ def main():
         branches=args.branches, model=args.with_model, claim=not args.without_claim,
         unity_url=args.unity_url, binary=args.binary, model_path=args.model_path, port=args.port, numeric_type=args.numeric_type,
         decimal_precision=args.decimal_precision, decimal_scale=args.decimal_scale, storage=args.storage,
-        sdk_build_record=args.sdk_build_record)
+        sdk_build_record=args.sdk_build_record, gpu_layers=args.gpu_layers)
     print(json.dumps(summary, indent=2))
     return 0 if summary["completed"] and summary["verified"] else 1
 

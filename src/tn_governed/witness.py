@@ -105,8 +105,6 @@ def verify_reference_run(run_directory: Path) -> WitnessResult:
     )
     row_verified = kinds.get("row_verified", {})
     row_facts = json.loads(str(row_verified.get("facts_json", "{}")))
-    commitments = kinds.get("commitments_matched", {})
-    commitment_facts = json.loads(str(commitments.get("facts_json", "{}")))
     trace = [row for path in sorted((root / "runtime" / "raw-trace").glob("*.ndjson"))
              for row in _read_ndjson(path)]
     request_digest = "sha256:" + hashlib.sha256(
@@ -125,9 +123,6 @@ def verify_reference_run(run_directory: Path) -> WitnessResult:
     if uses_context:
         binding_evidence = "verified governance bound to each decision request, prompt, and tokens"
         semantic_evidence = ("verified semantic context supplied at every model decision",)
-    elif context_evidence.protocol == "legacy_echo":
-        binding_evidence = "commitments matched"
-        semantic_evidence = ("six governance fields opened", "six commitments interpreted")
     else:
         binding_evidence = "governance binding evidence unavailable"
         semantic_evidence = ("governance interpretation evidence unavailable",)
@@ -191,7 +186,7 @@ def verify_reference_run(run_directory: Path) -> WitnessResult:
             "Can this receiver interpret the rule?",
             "governance_opened_and_verified" in kinds
             and governance_bound
-            and (uses_context or commitment_facts.get("governance_commitment_count") == 6),
+            and uses_context,
             semantic_evidence,
         ),
         (
