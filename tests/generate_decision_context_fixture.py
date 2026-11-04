@@ -8,6 +8,7 @@ import base64
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 
 import pytest
 import tn
@@ -61,7 +62,8 @@ def boundary_fixture(workflow, profile, with_claim=True):
 
 def generate():
     with tempfile.TemporaryDirectory() as directory, pytest.MonkeyPatch.context() as monkeypatch:
-        fixture = report_workflow.__wrapped__(Path(directory), monkeypatch)
+        # The workflow fixture is parametrized; tn-llama's claim fixture is the native case.
+        fixture = report_workflow.__wrapped__(Path(directory), monkeypatch, SimpleNamespace(param="native"))
         workflow = next(fixture)
         try:
             config = json.loads(workflow.endpoint.runtime_config.read_bytes())
