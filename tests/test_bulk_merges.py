@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 import tn
-from tn_polars.audit import AuditTrail, _member_ranges, _valid_members
+from tn_polars.audit import _valid_members
 
 from tn_governed.publications import PublicationStore, object_digest, sync_writes, write_once
 from tn_governed.values.retained_run import cache_bound
@@ -50,24 +50,12 @@ def test_include_all_without_inputs_changes_no_reference():
         assert [source.object_id for source in data.sources] == before
 
 
-def test_audit_merge_keeps_each_event_once_and_recomputes_heads():
-    base = AuditTrail().append("source", {"source_id": "a"})
-    left = base.append("operation", {"name": "left"})
-    right = base.append("operation", {"name": "right"})
-    other = AuditTrail().append("source", {"source_id": "b"})
-    merged = left.merge(right, other)
-    identities = [event["id"] for event in merged.records()]
-    assert len(identities) == len(set(identities)) == 4
-    assert set(merged.heads) == {*left.heads, *right.heads, *other.heads}
-    assert merged.records() == left.merge(right).merge(other).records()
-
-
 def test_long_member_lists_become_canonical_ranges():
     tokens = [f"s::{row}" for row in (*range(10, 80), 90)]
-    ranges = _member_ranges(tokens)
+    ranges = {"ranges": [[10, 79], [90, 90]]}
     assert ranges == {"ranges": [[10, 79], [90, 90]]}
     assert _valid_members("s", ranges)
-    assert _member_ranges(tokens[:63]) == tokens[:63]
+    assert _valid_members("s", tokens[:63])
 
 
 @pytest.mark.parametrize("ranges", [

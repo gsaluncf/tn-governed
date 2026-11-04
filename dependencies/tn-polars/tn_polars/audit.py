@@ -1,18 +1,11 @@
-"""Canonical execution observations carried inside signed TN publications.
-
-Hashes bind the observed plan, evaluator answers, and contributor support to
-released rows. Authentication comes from the enclosing TN publication or signed
-Result record. Verification never deserializes or executes a recorded expression.
-"""
+"""Verify signed frame governance and previously issued v1 execution records."""
 
 import base64
 import hashlib
 import json
-from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
-import polars as pl
 
 
 class AuditError(ValueError):
@@ -85,95 +78,6 @@ def artifact_facts(artifacts):
     }
 
 
-def expression_record(expression):
-    """Retain native AST nodes and dependencies, but hash opaque function bodies.
-
-    Polars serializes Python closures inside AnonymousFunction nodes. Their
-    digest identifies the serialized function without carrying its captured
-    values. Such nodes are observations, not a portable executable definition.
-    """
-    try:
-        payload = json.loads(expression.meta.serialize(format="json"))
-        _json(payload)
-    except Exception as exc:
-        raise AuditError("the expression has no canonical Polars JSON representation") from exc
-    opaque = []
-
-    def sanitized(node):
-        if isinstance(node, dict):
-            if "AnonymousFunction" in node or "PythonUdf" in node:
-                identity = _digest(node)
-                opaque.append(identity)
-                body = node.get("AnonymousFunction", node.get("PythonUdf"))
-                inputs = body.get("input", []) if isinstance(body, dict) else []
-                return {
-                    "OpaqueFunction": {
-                        "serialization_digest": identity,
-                        "inputs": sanitized(inputs),
-                    }
-                }
-            return {key: sanitized(value) for key, value in node.items()}
-        if isinstance(node, list):
-            return [sanitized(value) for value in node]
-        return node
-
-    result = sanitized(payload)
-    return {
-        "format": "tn.polars-expr.v1",
-        "encoding": "polars.expr.json",
-        "polars_version": pl.__version__,
-        "expression": result,
-        "input_columns": sorted(expression.meta.root_names()),
-        "opaque_functions": sorted(set(opaque)),
-    }
-
-
-@dataclass(frozen=True)
-class _Event:
-    id: str
-    parents: tuple
-    text: str
-
-
-@dataclass(frozen=True)
-class AuditTrail:
-    """Persistent event DAG; branches share serialized values, never mutable dicts."""
-
-    _events: tuple = ()
-    heads: tuple = ()
-
-    def records(self):
-        return [json.loads(event.text) for event in self._events]
-
-    def append(self, kind, details):
-        body = {"kind": kind, "details": details, "parents": sorted(self.heads)}
-        event = {"id": _digest(body), **body}
-        stored = _Event(event["id"], tuple(body["parents"]), _json(event))
-        return AuditTrail(self._events + (stored,), (event["id"],))
-
-    def merge(self, *others):
-        events, seen = list(self._events), {event.id for event in self._events}
-        for event in (event for other in others for event in other._events):
-            if event.id not in seen:
-                seen.add(event.id)
-                events.append(event)
-        parents = {parent for event in events for parent in event.parents}
-        return AuditTrail(tuple(events), tuple(sorted(seen - parents)))
-
-
-def _member_ranges(tokens):
-    """Keep short token lists readable and turn long ones into inclusive ordinal ranges."""
-    if len(tokens) < 64:
-        return tokens
-    ranges = []
-    for ordinal in sorted(int(token.rpartition("::")[2]) for token in tokens):
-        if ranges and ordinal == ranges[-1][1] + 1:
-            ranges[-1][1] = ordinal
-        else:
-            ranges.append([ordinal, ordinal])
-    return {"ranges": ranges}
-
-
 def _valid_members(source, members):
     """Accept sorted unique tokens, or the single canonical range form of a long list."""
     if isinstance(members, list):
@@ -188,98 +92,6 @@ def _valid_members(source, members):
         and all(left[1] + 1 < right[0] for left, right in zip(ranges, ranges[1:], strict=False))
         and sum(last - first + 1 for first, last in ranges) >= 64
     )
-
-
-def _support_record(support, materialized):
-    rows = None
-    if support.known:
-        rows = [{source: _member_ranges(tokens) for source, tokens in row.items()}
-                for row in support.row_members(materialized)]
-        if not support.ids:
-            rows = [{} for _ in range(materialized.height)]
-    return {
-        "known": support.known,
-        "shape_known": support.shape_known,
-        "aggregated": support.aggregated,
-        "rows": rows,
-        "policy_sources": {
-            revision: sorted(sources)
-            for revision, sources in sorted(support.policy_sources.items())
-        },
-        "policy_facts": {
-            revision: support.facts(materialized, {revision})
-            for revision in sorted(support.policy_sources)
-        },
-    }
-
-
-def _materialization(frame, materialized):
-    rows = materialized.select(list(frame.sources)).to_dicts()
-    return {
-        "output": {
-            "row_count": len(rows),
-            "rows_digest": rows_digest(rows),
-            "schema": {name: str(materialized.schema[name]) for name in frame.sources},
-            "columns": {name: sorted(roots) for name, roots in frame.sources.items()},
-            "row_selection_sources": sorted(frame.row_sources),
-        },
-        "support": _support_record(frame._support, materialized),
-    }
-
-
-def record_release(policies, frame, materialized, *, use, audience, parameters=None):
-    """Evaluate release and bind those answers to this materialization."""
-    decisions = policies.decide(
-        "release",
-        audience,
-        frame.sources,
-        frame.row_sources,
-        use,
-        support=frame._support,
-        materialized=materialized,
-    )
-    result = _materialization(frame, materialized)
-    policies.record_operation(
-        "release",
-        {
-            **(parameters or {}),
-            "audience": audience,
-            "use": {
-                "application": use.application,
-                "purpose": use.purpose,
-                "operation": use.operation,
-            },
-            "output_digest": _digest(result["output"]),
-            "support_digest": _digest(result["support"]),
-        },
-    )
-    return decisions
-
-
-def build_frame_audit(frame, materialized, *, policies=None, input_references=None):
-    """Capture one materialization without collecting or re-running the plan."""
-    if frame._tn is None:
-        raise AuditError("execution audits require native TN admission")
-    policies = policies or frame._tn.policies
-    rows = materialized.select(list(frame.sources)).to_dicts()
-    events = policies.audit.records()
-    body = {
-        "schema": "tn.polars-audit.v1",
-        "engine": {"name": "polars", "version": pl.__version__},
-        "inputs": sorted(source.object_id for source in frame._tn.data.sources),
-        "input_references": input_references or [],
-        "claims": list(policies.claims),
-        "source_bindings": [event["details"] for event in events if event["kind"] == "source"],
-        "policies": [
-            {**artifact_facts(entry.artifacts), "source_ids": sorted(entry.source_ids)}
-            for _, entry in sorted(policies._entries.items())
-        ],
-        "events": events,
-        "heads": list(policies.audit.heads),
-        **_materialization(frame, materialized),
-    }
-    record = {"id": _digest(body), **body}
-    return verify_audit(record, rows=rows)
 
 
 def _require(condition, message):
@@ -573,6 +385,46 @@ def open_audited_frame(
     )
 
 
+def verify_frame_metadata(data, group, verify_record=None):
+    """Authenticate a v2 frame's policy selection and its portable signed evidence."""
+    from .authority import policy_identity
+
+    descriptor = data.get("tn_polars_governance", group=group)
+    _require(isinstance(descriptor, dict)
+             and set(descriptor) == {"schema", "group", "rows_field", "policies", "claims", "actions"}
+             and descriptor["schema"] == "tn.polars-governance.v2"
+             and all(isinstance(descriptor[key], str) and descriptor[key] for key in ("group", "rows_field"))
+             and descriptor["policies"] == sorted(policy_identity(policy) for policy in data.policies),
+             "frame descriptor differs from native governance")
+    for key in ("claims", "actions"):
+        ids = descriptor[key]
+        _require(isinstance(ids, list) and all(isinstance(item, str) and item for item in ids)
+                 and len(ids) == len(set(ids)), "frame has invalid evidence identities")
+    carried = data.get("tn_polars_claims", group=group)
+    _require(isinstance(carried, list) and all(isinstance(item, dict) for item in carried)
+             and [item.get("id") for item in carried] == descriptor["claims"],
+             "frame claims differ from the policy descriptor")
+    if carried or descriptor["actions"]:
+        _require(callable(verify_record), "frame evidence requires an authority for signed records")
+    for item in carried:
+        record = verify_record(item["id"])
+        _require(record.id == item["id"] and record.writer == item.get("writer")
+                 and record.body == item.get("body") and record.body.get("kind") == "Claim",
+                 "frame claim differs from its signed record")
+    for identity in descriptor["actions"]:
+        record = verify_record(identity)
+        details = record.body["details"]
+        required, discharged = details.get("obligations"), details.get("discharged")
+        _require(record.id == identity and record.body.get("kind") == "Decision"
+                 and details.get("permitted") is True and isinstance(required, list) and bool(required)
+                 and isinstance(discharged, list) and all(isinstance(step, dict)
+                     and step.get("satisfied") is True and isinstance(step.get("evidence"), str)
+                     and step["evidence"].strip() for step in discharged)
+                 and [step.get("obligation") for step in discharged] == required,
+                 "invalid signed required-action decision")
+    return descriptor
+
+
 def verify_native_frame(
     data,
     *,
@@ -585,6 +437,19 @@ def verify_native_frame(
 ):
     """Validate an already authorized native opening against its signed audit."""
     from .authority import policy_identity
+
+    try:
+        descriptor = data.get("tn_polars_governance", group=group)
+    except KeyError:
+        descriptor = None
+    if descriptor is not None:
+        _require(expected_artifacts is None and evaluator_for is None,
+                 "historical evaluator replay requires a v1 audit")
+        descriptor = verify_frame_metadata(data, group, verify_claim)
+        _require(descriptor["group"] == group and descriptor["rows_field"] == rows_field
+                 and isinstance(data.get(rows_field, group=group), list),
+                 "frame descriptor differs from its signed business field")
+        return descriptor
 
     record = verify_audit(
         data.get("tn_polars_audit", group=group),

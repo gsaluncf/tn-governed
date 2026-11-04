@@ -9,7 +9,7 @@ description = "Governed data processing through SQL, Polars, calculations, and l
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "polars==1.39.3",
-  "tn-proto==2026.9.10b2.dev2",
+  "tn-proto==2026.9.13b1+policy.1",
   "tn-llama-client==0.1.0",
   "tn-polars==2026.9.11b1",
   "wasmtime>=25",
@@ -35,11 +35,11 @@ tn-governed = "tn_governed.cli:main"
 [tool.uv.sources]
 tn-polars = { path = "dependencies/tn-polars", editable = true }
 tn-llama-client = { path = "dependencies/tn-llama-client", editable = true }
-tn-proto = { path = "vendor/wheels/648ec96686e59efaa0b82af88cd8b1126568b15ce43718c8089cdaa7811de2f4/tn_proto-2026.9.10b2.dev2-cp39-abi3-win_amd64.whl" }
+tn-proto = { path = "vendor/wheels/799dbb899c5bdd08c6915ab3d3c1d945847b60fec076d6255ca2250d0e8642ed/tn_proto-2026.9.13b1+policy.1-cp39-abi3-win_amd64.whl" }
 
 [tool.uv]
 # All adapters use the same pinned native runtime.
-override-dependencies = ["tn-proto==2026.9.10b2.dev2"]
+override-dependencies = ["tn-proto==2026.9.13b1+policy.1"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/tn_governed"]

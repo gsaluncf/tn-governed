@@ -10,17 +10,18 @@ it does not establish the truth of a computation.
 import argparse
 from collections import Counter
 import hashlib
+import json
 from pathlib import Path
 
 import tn
 
 from .collection import pauses_collection
-from .evidence import require
+from .evidence import EvidenceRecorder, require
 from .holders import holder
 from .manifests import SCHEMAS, signed_manifest
-from .primitives import VALUE_TYPE
-from .retained_run import INSPECT, contracted, open_retained_run
-from .verify_calls import AssignmentTerms, check_calls
+from .primitives import Context, TNNumeric, TNString, VALUE_TYPE, ValueReference
+from .retained_run import INSPECT, POLICY_RUN_SCHEMA, contracted, open_retained_run
+from .verify_calls import AssignmentTerms, check_calls, verify_recorded_permits
 from .verify_graph import IncarnationGraph, SqlSources, ref_key, results_by_field
 from .verify_report import GRAPH_CELL_LIMIT, report_graph, write_reports
 
@@ -36,8 +37,67 @@ _MODEL_SCOPE = (" Model verification additionally admits and opens the signed re
 @pauses_collection
 def verify(root, *, graph_cell_limit=GRAPH_CELL_LIMIT):
     with open_retained_run(root) as retained:
+        if retained.run["schema"] == POLICY_RUN_SCHEMA:
+            summary = _verify_policies(retained)
+            (retained.root / "verification.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+            return summary
         summary, graph = _verify(retained, graph_cell_limit)
     write_reports(retained.root, summary, graph)
+    return summary
+
+
+def _verify_policies(retained):
+    """Open each named output under the observer's accepted rules and inspect its signed field."""
+    run = retained.run
+    assignment = retained.assignment()
+    dag, _ = retained.policy_dag(assignment)
+    policies = retained.select_policies(dag, assignment)
+    application, purpose = (run["request"][key] for key in ("application", "purpose"))
+    catalog, editions = retained.admit_editions(dag, assignment, tn.UseContext(application, purpose, "inspect-claims"))
+    records, by_id = retained.records()
+    rules = {field["revision"]: field["rule"] for field in assignment["columns"].values()}
+    verify_recorded_permits(records, by_id, AssignmentTerms(retained.authority, rules, policies))
+    observer = Context(retained.session, EvidenceRecorder(retained.session, retained.store, retained.audit),
+                       None, application=application, purpose=purpose, actor="observer",
+                       metadata_accept=lambda c: c.writer in retained.writers and c.object_type == VALUE_TYPE
+                       and bool(c.policies) and contracted(c.policies, policies))
+    observer.catalog, observer.policy_dag = catalog, dag
+    observer.editions = {edition.source_object_id: edition for edition in editions}
+    outputs, nodes, bindings = {}, {}, {}
+    for name, handle in run["outputs"].items():
+        ref = ValueReference(**handle["reference"])
+        cls = {"TNString": TNString, "TNNumeric": TNNumeric}[handle["kind"]]
+        value = cls(ref, handle["decision_id"], handle["result_id"], metadata_provider=observer.string_metadata)
+        data, binding, claims = observer._metadata(value)
+        require(all(claim.id in by_id for claim in claims), "claim is absent from the signed evidence")
+        require(all(identity in by_id for identity in binding.get("actions", ())), "action evidence is absent")
+        key = ref_key(handle["reference"])
+        nodes[key] = outputs[name] = {
+            "id": ref.object_id, "reference": ref.to_dict(), "kind": binding["declared"]["kind"],
+            "policy_revisions": sorted(policy.revision_id for policy in data.policies),
+            "policy_names": sorted(policy.policy_ref for policy in data.policies),
+            "claim_statements": sorted(claim.statement for claim in claims),
+            "claims": [claim.id for claim in claims], "actions": binding.get("actions", []),
+        }
+        bindings[key] = binding
+    if run.get("evaluation", {}).get("mode") in {"primitive", "explicit"}:
+        # Known market-report fixture: both assigned columns govern the aggregate and brief.
+        # Compare the published rules directly to the signed assignment.
+        for name in ("dataframe_result", "amount", "model_input"):
+            if name in outputs:
+                require(set(outputs[name]["policy_revisions"]) == set(policies),
+                        f"{name} omitted an assigned policy")
+                if run["evaluation"]["claim"] and "attested_name" in outputs:
+                    original = outputs["attested_name"]["claims"]
+                    require(original and set(original) <= set(outputs[name]["claims"]),
+                            f"{name} omitted an original claim")
+    summary = {"schema": "tn.policy-verification.v2", "outputs": outputs, "observer": retained.session.did,
+               "record_count": len(records), "record_kinds": dict(Counter(record.body["kind"] for record in records)),
+               "source_editions": len(editions), "policy_revisions": len(dag), "failures": _failures(records)}
+    if run.get("model"):
+        from .verify_model import verify_model
+        summary["model"] = verify_model(retained.root, run, records, by_id, rules, nodes, bindings, retained.store,
+                                        catalog, dag, retained.governance, retained.session.governance_hash_key)
     return summary
 
 

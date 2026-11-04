@@ -17,7 +17,7 @@ def test_received_handle_rejects_missing_or_extra_fields(enrolled, count):
         context.hydrate_many([(None,) * count])
 
 
-def test_hydrated_handle_keeps_ancestry_after_the_archive_context_is_gone(enrolled, tmp_path):
+def test_hydrated_handle_keeps_the_signed_claim_after_the_archive_context_is_gone(enrolled, tmp_path):
     sessions, policy, audit = enrolled
     writers = {session.did for session in sessions.values()}
     producer = _context(sessions["producer"], policy, audit, writers)
@@ -33,7 +33,8 @@ def test_hydrated_handle_keeps_ancestry_after_the_archive_context_is_gone(enroll
         supplied.reference, supplied.decision_id, supplied.result_id, kind="int"
     )
     assert received.publication is not None
-    assert unrelated.reference.object_id not in {obj.id for obj in received.publication.objects()}
+    carried = {obj.id for obj in received.publication.objects()}
+    assert carried.isdisjoint({unrelated.reference.object_id, source.reference.object_id, claimed.reference.object_id})
     with receiver:
         result = received + 1
     producer.recorder.store = NativeObjects()

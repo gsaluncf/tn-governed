@@ -27,6 +27,7 @@ from .llama import _LLAMA_SOURCE_REVISION, submit_governed_report
 from .native_objects import NativeObjects
 from .pipeline import run_governed_calculation_path
 from .publications import PublicationStore, write_once
+from .values.holders import holder
 from .unity import (
     CatalogTrust,
     FinanceEditionRequest,
@@ -57,6 +58,18 @@ Contract review.
 ### on_violation_or_error
 Refuse release.
 """
+EVIDENCE_POLICY = """## experiment.evidence
+### instruction
+Keep signed claims and completed actions with the finance value.
+### use_for
+Inspect claims and action receipts for an authorized internal report.
+### do_not_use_for
+Treating a claim about an input as an endorsement of the report.
+### consequences
+Each recipient decides whether to rely on the named issuer.
+### on_violation_or_error
+Refuse a request with missing or invalid evidence.
+"""
 REPORT_PROMPT = (
     "Write a short HTML report of the supplied calculation. "
     "State the function, numerical result, units, and method from the supplied result. "
@@ -81,7 +94,7 @@ def provision_reference_sessions(root: Path) -> dict[str, Path]:
     for namespace, names, roles in [
         (
             "source",
-            ["finance", "policy_revision", "dataset_edition", "tn.agents"],
+            ["finance", "evidence", "policy_revision", "dataset_edition", "tn.agents"],
             [("source", True), ("polars", True), ("calculation", True), ("model-reader", False)],
         ),
         ("report", ["default", "tn.agents"], [("model-writer", True), ("recipient", False)]),
@@ -100,7 +113,7 @@ def provision_reference_sessions(root: Path) -> dict[str, Path]:
             kits.mkdir()
             policy_dir = directory / ".tn" / "config"
             policy_dir.mkdir(parents=True)
-            (policy_dir / "agents.md").write_text(POLICY, encoding="utf-8")
+            (policy_dir / "agents.md").write_text(POLICY + "\n" + EVIDENCE_POLICY, encoding="utf-8")
             device = DeviceKey.generate()
             (keys / "local.private").write_bytes(device.private_bytes)
             (keys / "index_master.key").write_bytes(index)
@@ -147,6 +160,60 @@ class PreparedReference:
 
     def __exit__(self, *_):
         self.close()
+
+
+def _finance_evidence(source, sessions, catalog, dag, store):
+    """Collect only the signed records cited by this calculation's field manifest."""
+    if "evidence" not in source.group_names:
+        return {}
+    model = sessions["model-reader"]
+    trusted_writers = {sessions[role].did for role in ("source", "polars", "calculation")}
+    opened = model.receive(source, use=MODEL_USE, groups=["evidence"],
+        decide=lambda ctx: ctx.writer in trusted_writers and ctx.use_context == MODEL_USE
+        and catalog.accepts(ctx, dag))
+    manifest = opened.get("manifest", group="evidence")
+    if not isinstance(manifest, dict) or manifest.get("schema") != "tn.governed-fields.v1":
+        raise ValueError("finance input requires its signed field manifest")
+    bindings = manifest.get("bindings")
+    committed = holder(source, "finance").envelope["finance"]["field_hashes"]
+    if not isinstance(bindings, dict) or bindings.keys() != committed.keys():
+        raise ValueError("finance evidence must bind each signed result field")
+    claim_ids, action_ids = set(), set()
+    for field in bindings.values():
+        if (not isinstance(field, dict) or field.get("group") != "finance"
+                or not all(isinstance(field.get(name), list) for name in ("claims", "actions"))):
+            raise ValueError("invalid finance evidence field binding")
+        claim_ids.update(field["claims"])
+        action_ids.update(field["actions"])
+    policy = sessions["source"].policy("experiment.evidence")
+
+    def evidence(identity):
+        obj = store.read(identity)
+        if obj.id != identity or obj.object_type != "experiment.evidence":
+            raise ValueError("finance evidence requires its exact signed record")
+        data = model.receive(obj, use=MODEL_USE, groups=["evidence"],
+            decide=lambda ctx: ctx.use_context == MODEL_USE and ctx.writer in trusted_writers
+            and len(ctx.policies) == 1 and ctx.policies[0].governed_by == policy.governed_by
+            and ctx.policies[0].fields == policy.fields)
+        return obj.wire, data.get("record", group="evidence")
+
+    claims, actions = {}, {}
+    for identity in sorted(claim_ids):
+        wire, record = evidence(identity)
+        if record.get("kind") != "Claim":
+            raise ValueError("a finance claim must cite a signed Claim")
+        claims[identity] = wire
+    for identity in sorted(action_ids):
+        wire, record = evidence(identity)
+        details = record.get("details", {})
+        if record.get("kind") != "Decision" or details.get("permitted") is not True:
+            raise ValueError("a finance action must cite a permitted Decision")
+        actions[identity] = wire
+        for step in details["discharged"]:
+            receipt = step["evidence"]
+            if receipt.startswith("sha256:") and receipt not in actions:
+                actions[receipt] = evidence(receipt)[0]
+    return {"claim_records": list(claims.values()), "action_records": list(actions.values())}
 
 
 def prepare_governed_reference(directory: Path, *, unity_url: str, registry=None):
@@ -274,11 +341,8 @@ def prepare_governed_reference(directory: Path, *, unity_url: str, registry=None
         metadata = {
             "policy_revisions": [item.object.wire for item in revisions],
             "dataset_editions": [item.record.object.wire for item in published],
-            "publications": [
-                *(item.source.wire for item in published),
-                calculation.polars_object.wire,
-                calculation.calculation_object.wire,
-            ],
+            "publications": [],
+            **_finance_evidence(calculation.calculation_object, sessions, editions[0].catalog, dag, store),
         }
         metadata_path = directory / "metadata.json"
         write_once(metadata_path, json.dumps(metadata, ensure_ascii=False).encode())
@@ -347,12 +411,15 @@ def write_governed_runtime_config(
         .governance(prepared.calculation.calculation_object)
         .governance.policies
     )
+    annotated = "evidence" in prepared.calculation.calculation_object.group_names
+    evidence_policy = prepared.sessions["source"].policy("experiment.evidence") if annotated else None
     config = {
         "version": "tn.llama.runtime.v2",
         "writer_authority": "group_capability",
         "expected_event_type": "portfolio.calculation.calculated",
-        "allowed_input_groups": ["finance"],
+        "allowed_input_groups": ["finance", "evidence"] if annotated else ["finance"],
         "governed_objects": {
+            "carried_policy": True,
             "native_reader_config_path": path_for_runtime(source_path),
             "metadata_store_path": path_for_runtime(prepared.metadata_path),
             "use_context": _use_dict(MODEL_USE),
@@ -361,6 +428,10 @@ def write_governed_runtime_config(
                 prepared.sessions[role].did for role in ["source", "polars", "calculation"]
             ],
             "authority_writers": [prepared.sessions["source"].did],
+            "evidence_contracts": [{
+                "governed_by": evidence_policy.governed_by, "fields": evidence_policy.fields,
+                "allowed_uses": [_use_dict(MODEL_USE)],
+            }] if annotated else [],
             "contracts": [
                 {
                     "revision_id": policy.revision_id,
@@ -488,18 +559,6 @@ def load_governed_reference(directory: Path, *, registry=None):
 def finish_governed_reference(prepared, *, base_url: str, api_key: str, prompt=REPORT_PROMPT):
     """Submit the exact calculation release and save only a recipient-admitted report."""
     source = prepared.calculation.calculation_object
-    ancestor_reader = prepared.sessions["model-reader"]
-    accepted_writers = {prepared.sessions[role].did for role in ["source", "polars", "calculation"]}
-
-    def resolve(identity):
-        view = ancestor_reader.governance(
-            tn.GovernedObject.read(io.BytesIO(prepared.store.get(identity)))
-        )
-        view.accept(
-            use=RECIPIENT_USE, groups=["finance"], decide=lambda ctx: ctx.writer in accepted_writers
-        )
-        return view
-
     recipient = NativeOutputReader(
         prepared.sessions["recipient"],
         expected_source=source,
@@ -511,7 +570,9 @@ def finish_governed_reference(prepared, *, base_url: str, api_key: str, prompt=R
         expected_tool_sections=("finance",),
         catalog=prepared.catalog,
         policy_dag=prepared.policy_dag,
-        resolve_ancestor=resolve,
+        carried_policy=True,
+        expected_source_view=prepared.sessions["model-reader"].governance(source),
+        resolve_ancestor=None,
         decide=lambda ctx: ctx.use_context == RECIPIENT_USE,
     )
     release, report = submit_governed_report(

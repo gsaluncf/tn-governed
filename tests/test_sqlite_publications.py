@@ -93,7 +93,7 @@ def test_failed_record_commit_does_not_advance_recorder_or_allow_computation(tmp
     with SQLitePublicationStore(tmp_path) as store, tn.Session(POLICY, groups=["values", "evidence"]) as session:
         policy = session.policy("portfolio.feed.data.v1")
         recorder = EvidenceRecorder(session, store, policy)
-        context = Context(session, recorder, lambda r: Assessment(True, "internal"),
+        context = Context(session, recorder, lambda r: Assessment(True, "internal", ("monitor",)),
                           application="test", purpose="analysis", actor="worker",
                           metadata_accept=lambda c: c.writer == session.did)
         request = Request("test", "analysis", "select", (), (), (policy,), ())

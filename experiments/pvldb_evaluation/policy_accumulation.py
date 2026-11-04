@@ -10,16 +10,12 @@ import json
 import sqlite3
 from contextlib import ExitStack, closing
 from pathlib import Path
-from unittest.mock import patch
 
 import tn
-from tn_polars.support import Support
 
 from tn_governed.native_objects import NativeObjects
 from tn_governed.values.catalog import AssignedRules, markdown
 from tn_governed.values.evidence import EvidenceRecorder, verify_tape
-from tn_governed.values.manifests import origin_rows
-from tn_governed.values.references import unpack_references, unpack_source_cells
 from tn_governed.values.provision import provision
 from tn_governed.values.sql import GovernedSQL, source_identity
 from tn_governed.values.string import OperationDenied
@@ -67,7 +63,6 @@ class _AccumulationCase:
         self.source_rows = rows // sources
         self.restricted = sources - 1 if sources > 1 else None
         self.database = self.root / "input.sqlite"
-        self.observations = []
 
     def run(self):
         """Calculate once, check the retained governance, and write the case's evidence."""
@@ -77,12 +72,11 @@ class _AccumulationCase:
         with ExitStack() as stack:
             self._open(stack, paths)
             result = self._calculate()
-            selected = self._check_selection(result)
-            self._check_attribution()
+            self._check_attribution(result)
             disclosures = self._disclose(result)
             repeated = self._check_repeated(result)
             self._retain()
-            summary = self._summary(result, selected, disclosures, repeated)
+            summary = self._summary(result, disclosures, repeated)
             self._write(summary)
             return summary
 
@@ -155,15 +149,13 @@ class _AccumulationCase:
         )
 
     def _calculate(self):
-        """Query every source, attest the last name, and run the dataframe while observing support."""
+        """Query each source, attach the test claim, and run the governed dataframe."""
         context, frame_rows = self.context, []
         for source in range(self.sources):
             frame_rows.extend(self.driver.execute(
                 f"SELECT name, value FROM source_{source} LIMIT ?", (self.source_rows,),
             ).fetchall())
         self.original = frame_rows[-1][0]
-        binding = context._metadata(self.original)[1]
-        self.claimed_member = f"{self.original.reference.object_id}::{binding['origins'][0]['row']}"
         with context:
             annotated = self.original.attest(CLAIM, context)
             self.source_claim = context._metadata(annotated)[2][0]
@@ -172,75 +164,17 @@ class _AccumulationCase:
                 value for row in frame_rows for value in row))
             self.input_revisions = {policy.revision_id for data, _, _ in input_metadata
                                     for policy in data.policies}
-            with patch.object(Support, "facts", self._support_observer()):
-                result = dataframe_calculate(context, frame_rows)
-        self.frame_rows = frame_rows
-        return result
+            return dataframe_calculate(context, frame_rows)
 
-    def _support_observer(self):
-        """Wrap Support.facts so each support computation also records its row members."""
-        support_facts = Support.facts
-
-        def observe_support(support, materialized, policy_ids=None):
-            facts = support_facts(support, materialized, policy_ids)
-            members = {}
-            for row in support.row_members(materialized):
-                for identity, tokens in row.items():
-                    members.setdefault(identity, set()).update(tokens)
-            self.observations.append({
-                "policy_ids": sorted(policy_ids or ()),
-                "members": {identity: sorted(tokens) for identity, tokens in members.items()},
-                "facts": facts,
-            })
-            return facts
-
-        return observe_support
-
-    def _check_selection(self, result):
-        """Every observed support agrees, and exactly the surviving rows reach the release."""
-        self.data, self.binding, self.claims = self.context._metadata(result)
-        self.wire = self.store.get(result.reference.object_id)
+    def _check_attribution(self, result):
+        """Check original claim identity and every contract required by the input assignments."""
+        self.data, _, self.claims = self.context._metadata(result)
+        self.wire = result.publication.object.forward()
         self.facts = self.context.frame_runs[-1]
-        self.release_decisions = [entry for entry in self.facts["opa_decisions"]
-                                  if entry["request"]["operation"] == "release"]
-        self.members = self.observations[0]["members"]
-        assert all(observed["members"] == self.members for observed in self.observations)
-        source_tables = self._check_group_sizes()
-        input_references = unpack_references(self.facts["input_references"])
-        source_cells = unpack_source_cells(self.facts["source_cells"], input_references)
-        selected = [cell for cell in source_cells if cell["column"] == "value"
-                    and f"{cell['source_object_id']}::{cell['source_row']}"
-                    in self.members[cell["source_object_id"]]]
-        assert len(selected) == self.survivors
-        assert {cell["row"] for cell in selected} == set(range(self.survivors))
-        self.restricted_survivors = sum(
-            source_tables[cell["source_object_id"]] == f"source_{self.restricted}"
-            for cell in selected
-        ) if self.restricted is not None else None
-        return selected
-
-    def _check_group_sizes(self):
-        """Each release decision counts the rows that carry its policy; returns each source's table."""
-        policy_sources, source_tables = {}, {}
-        for edition in self.facts["source_editions"]:
-            source_tables[edition["source_object_id"]] = edition["dataset"].rsplit(".", 1)[0]
-            for revision in edition["contracts"]:
-                policy_sources.setdefault(revision, set()).add(edition["source_object_id"])
-        for entry in self.release_decisions:
-            revision = entry["request"]["policy_revision"]
-            policy_members = {member for source in policy_sources[revision]
-                              for member in self.members[source]}
-            assert entry["request"]["aggregate_support"]["group_sizes"] == [len(policy_members)]
-        return source_tables
-
-    def _check_attribution(self):
-        """The result keeps the one claim, every direct input, and both policies of every source."""
         claims = self.claims
         assert len(claims) == 1 and claims[0] == self.source_claim
         assert claims[0].subjects == (self.original.reference,)
         assert claims[0].issuer == self.sessions["worker"].did
-        self.parents = unpack_references(self.binding["parents"])
-        assert self.parents == [value.reference.to_dict() for row in self.frame_rows for value in row]
         assert len(self.data.policies) == 2 * self.sources
         assert {policy.revision_id for policy in self.data.policies} == self.input_revisions
 
@@ -266,25 +200,22 @@ class _AccumulationCase:
                 disclosures[destination]["content_opens"] = len(opened) - before
         finally:
             context._open_values = open_values
-        assert disclosures["review-console"]["value"] == self.survivors * 251
-        if self.restricted is not None:
-            assert disclosures["analysis-console"] == {"outcome": "refused", "content_opens": 0}
+        expected = {"outcome": "permitted", "value": self.survivors * 251, "content_opens": 1}
+        assert disclosures["review-console"] == expected
+        assert disclosures["analysis-console"] == (expected if self.restricted is None else
+                                                  {"outcome": "refused", "content_opens": 0})
         return disclosures
 
     def _check_repeated(self, result):
-        """Adding the result to itself keeps one policy set and one claim, with two direct inputs."""
+        """Adding the result to itself preserves its policies and original claim."""
         with self.context:
             repeated = result + result
-        data, binding, claims = self.context._metadata(repeated)
+        data, _, claims = self.context._metadata(repeated)
         assert {p.revision_id for p in data.policies} == {p.revision_id for p in self.data.policies}
         assert claims == self.claims
-        assert binding["parents"] == [result.reference.to_dict()] * 2
-        assert repeated.reveal(self.context, destination="review-console") == self.survivors * 502
-        return {"policy_count": len(data.policies),
-                "claim_count": len(claims),
-                "direct_input_count": len(binding["parents"]),
-                "distinct_input_count": len({
-                    json.dumps(item, sort_keys=True) for item in binding["parents"]})}
+        value = repeated.reveal(self.context, destination="review-console")
+        assert value == self.survivors * 502
+        return {"policy_count": len(data.policies), "claim_count": len(claims), "value": value}
 
     def _retain(self):
         self.store.export(self.root / "publications")
@@ -296,29 +227,22 @@ class _AccumulationCase:
             )
             ctx.recorder.export(self.root / "records" / role)
 
-    def _summary(self, result, selected, disclosures, repeated):
-        data, binding, claims = self.data, self.binding, self.claims
+    def _summary(self, result, disclosures, repeated):
+        data, claims = self.data, self.claims
         envelope = json.loads(self.wire)
         return {
-            "rows": self.rows, "survivors": len(selected), "sources": self.sources,
+            "rows": self.rows, "survivors": self.survivors, "sources": self.sources,
             "input_policy_revisions": sorted(self.input_revisions),
             "policy_revisions": sorted(p.revision_id for p in data.policies),
-            "policy_count": len(data.policies), "input_reference_count": len(self.parents),
-            "origin_count": origin_rows(binding["origins"]), "claim_count": len(claims),
+            "policy_count": len(data.policies), "claim_count": len(claims),
             "claim_id": claims[0].id, "claim_issuer": claims[0].issuer,
             "claim_subjects": [item.to_dict() for item in claims[0].subjects],
-            "claimed_row_survived": self.claimed_member in self.members[self.original.reference.object_id],
-            "result_reference": result.reference.to_dict(), "result_id": result.result_id,
+            "result_reference": result.reference.to_dict(),
             "output_wire_bytes": len(self.wire),
             "encrypted_governance_bytes": len(
                 base64.b64decode(envelope["tn.agents"]["ciphertext"])),
             "encrypted_evidence_bytes": len(base64.b64decode(envelope["evidence"]["ciphertext"])),
-            "opa_decision_count": len(self.facts["opa_decisions"]),
-            "aggregate_support": [entry["request"]["aggregate_support"]
-                                  for entry in self.release_decisions],
-            "aggregate_membership": self.members,
             "restricted_source": self.restricted,
-            "restricted_source_survivors": self.restricted_survivors,
             "disclosures": disclosures,
             "repeated_input": repeated,
         }
@@ -326,9 +250,6 @@ class _AccumulationCase:
     def _write(self, summary):
         (self.root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
         (self.root / "dataframe.json").write_text(json.dumps(self.facts, indent=2), encoding="utf-8")
-        (self.root / "support-observations.json").write_text(
-            json.dumps(self.observations, indent=2), encoding="utf-8",
-        )
 
 
 def run_case(directory, *, rows, survivors, sources):

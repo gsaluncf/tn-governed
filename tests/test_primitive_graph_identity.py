@@ -14,7 +14,8 @@ from tn_governed.publications import PublicationStore
 from tn_governed.values.catalog import AssignedRules, UnityGovernance, markdown
 from tn_governed.values.evidence import EvidenceError, EvidenceRecorder, Record
 from tn_governed.values.metadata import describe
-from tn_governed.values.primitives import Context, SCHEMA, VALUE_TYPE
+from tn_governed.values.primitives import Context, POLICY_SCHEMA, SCHEMA, VALUE_TYPE
+from tn_governed.values.retained_run import POLICY_RUN_SCHEMA
 from tn_governed.values.provision import provision
 from tn_governed.values.runtime import Request
 from tn_governed.values.sql import source_identity
@@ -116,28 +117,24 @@ def batch_run(tmp_path, monkeypatch, request):
                     level = [level[index] + level[index + 1]
                              if index + 1 < len(level) else level[index]
                              for index in range(0, len(level), 2)]
-                publish = context._publish
-
-                def publish_origins(*args, **kwargs):
-                    origins = kwargs["origins"]
-                    changes = {
-                        "split": [{**origins[0], "rows": [[0, 0], [1, 1]]}, *origins[1:]],
-                        "duplicate": [*origins, origins[0]],
-                        "coordinate": [{**origins[0], "row": row_count}, *origins[1:]],
-                        "mapping": origins[0],
-                        "null": None,
-                    }
-                    if options.get("origins") in changes:
-                        kwargs["origins"] = changes[options["origins"]]
-                    return publish(*args, **kwargs)
-
-                monkeypatch.setattr(context, "_publish", publish_origins)
-                derived = level[0].copy()
+                derived = level[0]
+            if "invalid_binding" in options:
+                data, binding, _ = context._metadata(derived)
+                wrong = values[0].result_id
+                field = options["invalid_binding"]
+                binding = {**binding, field: [wrong]}
+                candidate = data.policy_output(VALUE_TYPE, {"values": {"value": "Ada" * len(values)},
+                    "evidence": {"manifest": {"schema": POLICY_SCHEMA, "bindings": {"value": binding}}}})
+                candidate.bind_manifest("evidence")
+                corrupted = context._release_value(candidate, operation)
+                derived = TNString(ValueReference(corrupted.id, "value", "values"))
             outputs["derived"] = {"reference": derived.reference.to_dict(),
                                   "decision_id": derived.decision_id,
                                   "result_id": derived.result_id}
+            for handle in outputs.values():
+                handle["kind"] = "TNString"
         checkpoint = {**recorder.export(tmp_path / "tapes"), "path": "tapes"}
-        run = {"schema": "tn.primitive-run.v1", "authority": authority, "writers": [session.did],
+        run = {"schema": POLICY_RUN_SCHEMA if options.get("derive") else "tn.primitive-run.v1", "authority": authority, "writers": [session.did],
                "administration_policy": admin.fields, "audit_policy": audit.fields,
                "assignment_id": assignment_id, "source": identity,
                "request": {"actor": "analyst", "application": "test", "purpose": "internal"},
@@ -162,63 +159,23 @@ def test_equal_sibling_values_keep_distinct_nodes_and_evidence(batch_run):
 
 
 @pytest.mark.parametrize("batch_run", [{"rows": 4, "derive": True}], indirect=True)
-def test_derivation_merges_repeated_parent_rows(batch_run):
-    root, run = batch_run
+def test_current_run_checks_governance_without_calculation_replay(batch_run):
+    root, _ = batch_run
     summary = verify(root)
-    assert summary["incarnations"] == 9
-    with (
-        tn.Session.from_config(str(root / run["observer_config"])) as session,
-        PublicationStore(root / "publications") as store,
-    ):
-        output = store.read(run["outputs"]["derived"]["reference"]["object_id"])
-        opened = session.receive(output, use=tn.UseContext("offline-verifier", "inspect-evidence", "read"),
-                                 groups=["evidence"], decide=lambda _: True)
-        binding = opened.get("manifest", group="evidence")["bindings"]["value"]
-    assert [origin["rows"] for origin in binding["origins"]] == [[[0, 3]]]
+    source = summary["outputs"]["0"]
+    result = summary["outputs"]["derived"]
+    assert result["policy_revisions"] == source["policy_revisions"]
+    assert set(source["actions"]) <= set(result["actions"])
+    assert not (root / "dag.json").exists()
 
 
 @pytest.mark.parametrize("batch_run", [
-    {"derive": True, "origins": change}
-    for change in ("split", "duplicate", "coordinate", "mapping", "null")
+    {"derive": True, "invalid_binding": field} for field in ("claims", "actions", "parents")
 ], indirect=True)
-def test_signed_derivation_cannot_change_or_malform_contributor_origins(batch_run):
+def test_substituted_claim_action_or_operand_field_is_rejected(batch_run):
     root, _ = batch_run
-    with pytest.raises(EvidenceError, match="contributing governance or source origins"):
+    with pytest.raises(EvidenceError, match="signed (claim|policy-bearing|required-action)"):
         verify(root)
-
-
-@pytest.mark.parametrize("batch_run", [{"rows": 64, "derive": True}], indirect=True)
-def test_origin_union_avoids_pairwise_comparison_of_contributors(batch_run, monkeypatch):
-    root, _ = batch_run
-    counts = Counter()
-    receive = tn.Session.receive
-
-    class CountedOrigin(dict):
-        def __eq__(self, other):
-            counts["comparisons"] += 1
-            return super().__eq__(other)
-
-    class OpenedEvidence:
-        def __init__(self, opened):
-            self.opened = opened
-
-        def __getattr__(self, name):
-            return getattr(self.opened, name)
-
-        def get(self, key, *, group):
-            value = self.opened.get(key, group=group)
-            if key == "manifest" and group == "evidence":
-                for binding in value["bindings"].values():
-                    binding["origins"] = [CountedOrigin(origin) for origin in binding["origins"]]
-            return value
-
-    def observed_receive(self, *args, **kwargs):
-        opened = receive(self, *args, **kwargs)
-        return OpenedEvidence(opened) if kwargs.get("groups") == ["evidence"] else opened
-
-    monkeypatch.setattr(tn.Session, "receive", observed_receive)
-    assert verify(root)["incarnations"] == 129
-    assert counts["comparisons"] <= 64 * 16
 
 
 @pytest.mark.parametrize("batch_run", [{"sql_read_count": 0}, {"sql_read_count": 2}], indirect=True)

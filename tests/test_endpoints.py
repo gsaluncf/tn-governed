@@ -64,7 +64,7 @@ def endpoints(tmp_path):
         yield result, policies
 
 
-def test_separate_stores_preserve_claims_and_parent_evidence(endpoints):
+def test_separate_stores_preserve_original_claims_without_operands(endpoints):
     peers, policies = endpoints
     source, analyst = peers["source"], peers["analyst"]
     value = source.originate({"amount": 7}, policies=(policies[0],))
@@ -73,12 +73,14 @@ def test_separate_stores_preserve_claims_and_parent_evidence(endpoints):
     result = analyst.execute(
         "multiply", (arrived,), lambda values: values[0]["amount"] * 3, parameters={"factor": 3}
     )
+    copied = analyst.execute("copy", (result,), lambda values: values[0])
+    assert analyst.metadata(copied)["parameters"] == {}
     assert analyst.reveal(result, destination="internal") == 21
     assert analyst.metadata(result)["claims"] == source.metadata(claimed)["claims"]
     claim = analyst.claims(result)[0]
     assert claim.issuer == source.session.did
     assert claim.subjects == (value.reference,)
-    assert analyst.metadata(result)["parents"] == [arrived.to_dict()]
+    assert arrived.reference.object_id not in {obj.id for obj in result.carrier.objects()}
     restored = source.receive(analyst.export(result))
     assert source.reveal(restored, destination="internal") == 21
 
@@ -146,14 +148,15 @@ def test_parallel_endpoints_make_separate_decisions(endpoints):
     with ThreadPoolExecutor(2) as pool:
         futures = [
             pool.submit(
-                peers[role].execute, "double", (inputs[role],), lambda values: values[0] * 2
+                peers[role].execute, "double", (inputs[role],), lambda values: values[0] * 2,
+                record_use=True,
             )
             for role in inputs
         ]
         outputs = [future.result() for future in futures]
     assert outputs[0].reference.object_id != outputs[1].reference.object_id
     assert outputs[0].decision_id != outputs[1].decision_id
-    assert peers["analyst"].metadata(outputs[0])["parents"] == [value.to_dict()]
+    assert value.reference.object_id not in {obj.id for obj in outputs[0].carrier.objects()}
 
 
 def test_full_policy_union_applies_before_business_values_are_stored(endpoints):
@@ -234,7 +237,7 @@ def test_import_native_dataframe_preserves_claim_subject_and_policies(endpoints)
     )
     assert analyst.reveal(result, destination="internal") == [{"n": 7}, {"n": 8}]
     assert analyst.claims(result)[0].subjects == (subject,)
-    assert analyst.metadata(result)["external_inputs"] == [subject.to_dict()]
+    assert publication.id not in {obj.id for obj in result.carrier.objects()}
     restored = source.receive(analyst.export(result))
     assert source.claims(restored)[0].issuer == source.session.did
 
@@ -247,6 +250,54 @@ def test_artifact_import_cannot_discard_existing_claims(endpoints):
         endpoint.import_publication(
             endpoint.store.read(artifact.reference.object_id), group="values", field="value"
         )
+
+
+@pytest.mark.parametrize("schema, group", [
+    ("tn.primitive-policy.v1", "values"), ("tn.governed-fields.v1", "finance")
+])
+def test_calculated_field_import_keeps_original_claim_without_original_value(endpoints, schema, group):
+    peers, policies = endpoints
+    source, analyst = peers["source"], peers["analyst"]
+    original = source.originate(4, policies=(policies[0],))
+    claim = source.claims(source.attest(original, "estimated amount"))[0]
+    binding = {"claims": [claim.id], "actions": []}
+    if group == "values":
+        binding["declared"] = {"kind": "int"}
+    else:
+        binding["group"] = group
+    data = source.session.create({"total": 12}, policies[0], object_type="total", group=group)
+    data.set(None, {"manifest": {"schema": schema, "bindings": {"total": binding}}}, group="evidence")
+    data.bind_manifest("evidence")
+    publication = data.release(use=tn.UseContext("source", "analysis", "publish"),
+                               to="analyst", decide=lambda _: True)
+    total = analyst.import_publication(publication, group=group, field="total",
+                                       publications=(source.store.get(claim.id),))
+    assert analyst.reveal(total, destination="internal") == 12
+    assert analyst.claims(total) == (claim,)
+    assert original.reference.object_id not in analyst.store.publication_sizes()
+
+
+def test_import_refuses_a_monitor_receipt_for_another_value(endpoints):
+    from tn_governed.values.evidence import EvidenceError
+
+    peers, policies = endpoints
+    source, analyst = peers["source"], peers["analyst"]
+    first, second = (source.originate(n, policies=(policies[0],)) for n in (4, 9))
+    use = dict(application="source", purpose="analysis", operation="add")
+    receipt = source.recorder.append("Monitor", inputs=(first.reference,), call_id="observed",
+                                     details={"actor": "analyst"}, **use)
+    decision = source.recorder.append("Decision", inputs=(second.reference,), call_id="permitted", **use,
+        details={"actor": "analyst", "permitted": True, "obligations": ["monitor"], "discharged": [
+            {"obligation": "monitor", "satisfied": True, "evidence": receipt}]})
+    data = source.session.create({"total": 12}, policies[0], object_type="result", group="finance")
+    data.set(None, {"manifest": {"schema": "tn.governed-fields.v1", "bindings": {
+        "total": {"group": "finance", "claims": [], "actions": [decision]}}}}, group="evidence")
+    data.bind_manifest("evidence")
+    publication = data.release(use=tn.UseContext("source", "analysis", "publish"),
+                               to="analyst", decide=lambda _: True)
+    with pytest.raises(EvidenceError, match="monitoring did not precede this permit"):
+        analyst.import_publication(publication, group="finance", field="total",
+                                   publications=tuple(source.store.get(i) for i in (receipt, decision)))
 
 
 @pytest.mark.parametrize("content", [{1: "a", "1": "b"}, {"n": float("nan")}])
@@ -362,13 +413,13 @@ def test_endpoint_artifacts_designate_their_evidence_manifest(endpoints):
 
 
 @pytest.mark.parametrize("count", [63, 64, 65])
-def test_an_artifact_with_many_inputs_verifies_against_its_packed_decision(endpoints, count):
+def test_sum_of_many_inputs_transfers_as_one_publication(endpoints, count):
     peers, policies = endpoints
     source = peers["source"]
     values = [source.originate(index, policies=(policies[0],)) for index in range(count)]
     total = source.execute("sum", values, lambda opened: sum(opened))
     assert source.reveal(total, destination="internal") == sum(range(count))
-    assert len(source.metadata(total)["parents"]) == count
+    assert len(source.export(total).publications) == 1
 
 
 def test_import_accepts_a_claim_on_a_field_its_carried_holder_signs(endpoints):

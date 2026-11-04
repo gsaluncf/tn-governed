@@ -39,6 +39,16 @@ class Record:
     body: dict
 
 
+def check_monitor(decision, receipt):
+    fields = ("context_id", "application", "purpose", "operation", "inputs", "destination")
+    observed, permitted = receipt.body, decision.body
+    require(receipt.writer == decision.writer and observed["kind"] == "Monitor"
+            and observed["sequence"] < permitted["sequence"]
+            and all(observed[key] == permitted[key] for key in fields)
+            and observed["details"]["actor"] == permitted["details"]["actor"],
+            "monitoring did not precede this permit")
+
+
 def referenced_publications(value, lookup):
     """Resolve native identities embedded in application evidence, excluding external receipts."""
     pending, visited = [value], set()
@@ -182,8 +192,10 @@ class EvidenceRecorder:
             self.store.put_record(snapshot, publication, context_id=self.context_id,
                                   sequence=body["sequence"])
             if isinstance(self.store, NativeObjects):
-                dependencies = referenced_publications(
-                    (body["inputs"], body["details"]), self.store.read)
+                # Claim subjects identify what the issuer described. Inspecting the
+                # signed claim requires no copy of that subject's business data.
+                material = () if kind == "Claim" else (body["inputs"], body["details"])
+                dependencies = referenced_publications(material, self.store.read)
                 self.store.link(publication.id, (snapshot.id, *(obj.id for obj in dependencies)))
             self._ids.append(publication.id)
             return publication.id

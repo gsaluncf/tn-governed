@@ -6,7 +6,6 @@ import argparse
 from collections import defaultdict
 from contextlib import redirect_stdout
 from datetime import datetime, timezone
-import hashlib
 import json
 from pathlib import Path
 import statistics
@@ -25,41 +24,25 @@ WORKLOADS = [
 ]
 
 
-def graph_signature(root):
-    """Normalize random identities while retaining operation and source structure."""
-    path = root / "dag.json"
+def governance_signature(root):
+    """Compare each named result across independently provisioned test runs."""
+    path = root / "verification.json"
     if not path.is_file():
         return None
-    graph = json.loads(path.read_text())
-    by_id = {n["id"]: n for n in graph["nodes"]}
-    parents = defaultdict(list)
-    for edge in graph["edges"]:
-        parents[edge["child"]].append(edge["parent"])
-    cache = {}
-
-    def signature(identity):
-        if identity not in cache:
-            n = by_id[identity]
-            source = n["source"]
-            semantic = {
-                "kind": n["kind"], "operation": n["operation"],
-                "source": ({k: source[k] for k in ("table", "column", "row")}
-                           if source else None),
-                "policies": len(n["policy_revisions"]), "claims": len(n["claims"]),
-                "parents": [signature(p) for p in parents[identity]],
-            }
-            cache[identity] = hashlib.sha256(json.dumps(semantic, sort_keys=True).encode()).hexdigest()
-        return cache[identity]
-
-    return sorted(signature(identity) for identity in by_id)
+    outputs = json.loads(path.read_text()).get("outputs")
+    if outputs is None:
+        return None
+    return {name: (value["kind"], value["policy_names"], value["claim_statements"])
+            for name, value in outputs.items()}
 
 
 def storage(root):
     from tn_governed.publications import open_publication_store
     with open_publication_store(root / "publications", read_only=True) as store:
         objects = store.publication_sizes()
-    graph = json.loads((root / "dag.json").read_text()) if (root / "dag.json").exists() else {"nodes": []}
-    values = {n["id"] for n in graph["nodes"]}
+    verified = root / "verification.json"
+    outputs = json.loads(verified.read_text()).get("outputs", {}) if verified.exists() else {}
+    values = {item["reference"]["object_id"] for item in outputs.values()}
     record_files = list((root / "tapes").glob("*/*.tn"))
     return {
         "retained_native_objects": len(objects),
@@ -77,7 +60,7 @@ def summarize(root):
         case = json.loads(path.read_text())
         case["directory"] = path.parent.name
         case["storage"] = storage(path.parent)
-        case["graph_signature"] = graph_signature(path.parent)
+        case["governance_signature"] = governance_signature(path.parent)
         cases.append(case)
     groups = defaultdict(list)
     pairs = defaultdict(dict)
@@ -97,8 +80,8 @@ def summarize(root):
             "both_verified": a["verified"] and b["verified"],
             "both_completed": a["completed"] and b["completed"],
             "same_expected_content": a["expected_content"] == b["expected_content"],
-            "same_operation_source_structure": (a["graph_signature"] is not None
-                                                and a["graph_signature"] == b["graph_signature"]),
+            "same_output_governance": (a["governance_signature"] is not None
+                                                and a["governance_signature"] == b["governance_signature"]),
             "same_record_counts": a.get("verification", {}).get("record_kinds") == b.get("verification", {}).get("record_kinds"),
         })
     aggregates = []
@@ -126,7 +109,7 @@ def summarize(root):
     result = {"schema": "tn.pvldb-measurements.v1", "cases": cases,
               "paired_comparisons": comparisons, "aggregates": aggregates,
               "scope": "paired scalar APIs sharing SQL/Unity, governed Polars/OPA, native TN and model controls; local wall-time observations",
-              "graph_comparison_scope": "operation/source topology plus policy and claim counts; each case separately verifies actual policies, claims and business content"}
+              "comparison_scope": "Output types, policy names and claim statements for paired workloads."}
     (root / "measurements.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     return result
 

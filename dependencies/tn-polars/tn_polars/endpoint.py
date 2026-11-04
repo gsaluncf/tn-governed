@@ -2,7 +2,7 @@
 
 import tn
 
-from .audit import AuditError, verify_audit, verify_native_frame
+from .audit import AuditError, verify_audit, verify_frame_metadata, verify_native_frame
 
 
 def import_frame(
@@ -43,24 +43,35 @@ def _import_frame(endpoint, publication, *, publications, decide, metadata_group
     metadata = endpoint.session.receive(
         publication, use=use, groups=[metadata_group], decide=accept
     )
-    audit = verify_audit(
-        metadata.get("tn_polars_audit", group=metadata_group),
-        expected_sources=[source.object_id for source in governance.sources],
-    )
-    claims = metadata.get("tn_polars_claims", group=metadata_group)
-    if claims != audit.get("claims", []):
-        raise AuditError("frame metadata claims differ from its audit")
-    for item in claims:
-        record = endpoint.read_record(item["id"])
-        if (
-            record.writer != item["writer"]
-            or record.body != item["body"]
-            or record.body["kind"] != "Claim"
-        ):
-            raise AuditError("frame metadata claim differs from its signed record")
-    terminal = next(event for event in audit["events"] if event["id"] == audit["heads"][0])
-    group = terminal["details"]["parameters"]["group"]
-    rows_field = terminal["details"]["parameters"]["rows_field"]
+    try:
+        descriptor = metadata.get("tn_polars_governance", group=metadata_group)
+    except KeyError:
+        descriptor = None
+    if descriptor is not None:
+        expected = verify_frame_metadata(metadata, metadata_group, endpoint.read_record)
+        group, rows_field = expected["group"], expected["rows_field"]
+        claim_ids = tuple(expected["claims"])
+    else:
+        audit = verify_audit(
+            metadata.get("tn_polars_audit", group=metadata_group),
+            expected_sources=[source.object_id for source in governance.sources],
+        )
+        claims = metadata.get("tn_polars_claims", group=metadata_group)
+        if claims != audit.get("claims", []):
+            raise AuditError("frame metadata claims differ from its audit")
+        for item in claims:
+            record = endpoint.read_record(item["id"])
+            if (
+                record.writer != item["writer"]
+                or record.body != item["body"]
+                or record.body["kind"] != "Claim"
+            ):
+                raise AuditError("frame metadata claim differs from its signed record")
+        terminal = next(event for event in audit["events"] if event["id"] == audit["heads"][0])
+        group = terminal["details"]["parameters"]["group"]
+        rows_field = terminal["details"]["parameters"]["rows_field"]
+        expected = audit
+        claim_ids = tuple(item["id"] for item in claims)
     if group == metadata_group:
         raise AuditError("frame business rows require a separate metadata group")
 
@@ -72,7 +83,7 @@ def _import_frame(endpoint, publication, *, publications, decide, metadata_group
             rows_field=rows_field,
             verify_claim=endpoint.read_record,
         )
-        if observed != audit:
+        if observed != expected:
             raise AuditError("frame business audit differs from its admitted metadata")
         return True
 
@@ -81,8 +92,8 @@ def _import_frame(endpoint, publication, *, publications, decide, metadata_group
         group=group,
         field=rows_field,
         operation=operation,
-        parameters={"frame_audit": audit},
-        claims=tuple(item["id"] for item in claims),
+        claims=claim_ids,
+        actions=tuple(expected.get("actions", ())),
         decide=decide,
         validate=validate,
     )

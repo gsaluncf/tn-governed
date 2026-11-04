@@ -6,9 +6,12 @@ use serde_json::{json, Value};
 use tn_runtime::GovernedRuntime;
 
 fn fixture() -> (governed_support::Fixture, Value) {
+    fixture_from(include_str!("fixtures/decision-context.json"))
+}
+
+fn fixture_from(wire: &str) -> (governed_support::Fixture, Value) {
     let mut fixture = governed_support::Fixture::new();
-    let mut claim: Value =
-        serde_json::from_str(include_str!("fixtures/decision-context.json")).unwrap();
+    let mut claim: Value = serde_json::from_str(wire).unwrap();
     let root = fixture.legacy.temp.path().join("claims");
     let keys = root.join("input/keys");
     std::fs::create_dir_all(&keys).unwrap();
@@ -278,6 +281,115 @@ fn claim_subject_before_selected_catalog_origin_requires_its_exact_ancestry() {
                     .expect("catalog selection must not erase original claim subject evidence");
                 assert_eq!(error.code(), "tn_claim_subject_missing");
             }
+        }
+    }
+}
+
+#[test]
+fn current_signed_value_admits_claim_without_calculation_inputs() {
+    let (fixture, claim) = fixture_from(include_str!("fixtures/carried-decision.json"));
+    assert_eq!(claim["metadata"]["publications"], json!([]));
+    assert!(!claim["metadata"]["action_records"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let context = first_context(fixture, &claim);
+    assert_eq!(
+        context["claims"][0]["original_subjects"],
+        claim["expected_claim"]["original_subjects"]
+    );
+    assert_eq!(
+        context["claims"][0]["statement"],
+        claim["expected_claim"]["statement"]
+    );
+    assert!(context["sources"][0]["governance"]
+        .get("source_lineage")
+        .is_none());
+    assert!(context["sources"][0]["governance"]
+        .get("dataset_bindings")
+        .is_none());
+}
+
+#[test]
+fn missing_claim_action_or_evidence_permission_refuses_current_value() {
+    for target in ["claim_records", "action_records", "evidence_contracts"] {
+        let (mut fixture, mut claim) = fixture_from(include_str!("fixtures/carried-decision.json"));
+        if target == "evidence_contracts" {
+            fixture
+                .config
+                .governed_objects
+                .as_mut()
+                .unwrap()
+                .evidence_contracts
+                .clear();
+        } else {
+            claim["metadata"][target] = json!([]);
+            std::fs::write(
+                &fixture
+                    .config
+                    .governed_objects
+                    .as_ref()
+                    .unwrap()
+                    .metadata_store_path,
+                claim["metadata"].to_string(),
+            )
+            .unwrap();
+        }
+        let runtime = GovernedRuntime::from_config(fixture.config).unwrap();
+        let error = runtime
+            .start_session(&serde_json::to_vec(&claim["request"]).unwrap())
+            .err()
+            .unwrap();
+        assert_eq!(
+            error.code(),
+            match target {
+                "claim_records" => "tn_claim_record_missing",
+                "action_records" => "tn_action_record_missing",
+                _ => "tn_claim_access_denied",
+            }
+        );
+    }
+}
+
+#[test]
+fn structured_value_carries_field_claim_and_action_receipts() {
+    let (mut fixture, mut claim) = fixture_from(include_str!("fixtures/carried-decision.json"));
+    fixture.config.expected_event_type = "finance.calculation".into();
+    claim["request"]["tn_object"] = claim["generic"].clone();
+    let context = first_context(fixture, &claim);
+    assert_eq!(
+        context["claims"][0]["record_id"],
+        claim["expected_claim"]["record_id"]
+    );
+    assert_eq!(
+        context["claims"][0]["original_subjects"],
+        claim["expected_claim"]["original_subjects"]
+    );
+}
+
+#[test]
+fn singleton_source_requires_its_exact_signed_edition() {
+    for select_edition in [true, false] {
+        let (mut fixture, mut claim) = fixture_from(include_str!("fixtures/carried-decision.json"));
+        claim["request"]["tn_object"] = claim["direct"].clone();
+        fixture
+            .config
+            .governed_objects
+            .as_mut()
+            .unwrap()
+            .source_edition_id =
+            select_edition.then(|| claim["direct_edition_id"].as_str().unwrap().to_string());
+        if select_edition {
+            let context = first_context(fixture, &claim);
+            assert_eq!(context["claims"], json!([]));
+            assert!(!context["sources"][0]["governance"]["instruction"].is_null());
+        } else {
+            let runtime = GovernedRuntime::from_config(fixture.config).unwrap();
+            let error = runtime
+                .start_session(&serde_json::to_vec(&claim["request"]).unwrap())
+                .err()
+                .unwrap();
+            assert_eq!(error.code(), "tn_governed_use_denied");
         }
     }
 }

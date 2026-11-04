@@ -1,4 +1,4 @@
-from .audit import AuditError, AuditTrail, build_frame_audit, open_audited_frame, verify_audit
+from .audit import AuditError, open_audited_frame, verify_audit
 from .authority import EndpointEvaluator
 from .endpoint import import_frame
 from .plans import PlanTransform
@@ -13,7 +13,7 @@ from .release import Decision, PolicyDenied
 
 __all__ = [
     "EndpointEvaluator", "PlanTransform", "from_admitted_query", "load_relation", "import_frame",
-    "AuditError", "AuditTrail", "build_frame_audit", "open_audited_frame", "verify_audit",
+    "AuditError", "open_audited_frame", "verify_audit",
     "GovernedPolars", "PreparedPolicy", "OpaWasmEvaluator", "build_opa_wasm",
     "EvaluatorArtifactPaths", "RegistryEntry", "verified_edition_entry",
     "CompiledPolicy", "Decision", "GovernedLazyFrame", "PolicyDenied", "policy_sha256",

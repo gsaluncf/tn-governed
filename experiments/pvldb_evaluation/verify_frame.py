@@ -23,12 +23,12 @@ from tn_governed.publications import write_once
 from tn_governed.values.collection import pauses_collection
 from tn_governed.values.evidence import require
 from tn_governed.values.holders import holder
-from tn_governed.values.manifests import SCHEMAS, signed_manifest
+from tn_governed.values.manifests import POLICY_SCHEMA, SCHEMAS, signed_manifest
 from tn_governed.values.metadata import describe
 from tn_governed.values.numeric_codec import decode, encode, record_value
 from tn_governed.values.primitives import VALUE_TYPE
 from tn_governed.values.references import unpack_references, unpack_source_cells
-from tn_governed.values.retained_run import contracted, open_retained_run
+from tn_governed.values.retained_run import POLICY_RUN_SCHEMA, contracted, open_retained_run
 from tn_governed.values.verify_report import GRAPH_CELL_LIMIT
 
 
@@ -85,10 +85,51 @@ def _bundle_members(marker, names):
 def verify_frame(root, *, graph_cell_limit=GRAPH_CELL_LIMIT):
     """Verify a completed fixed-plan dataframe result without accessing Unity."""
     with open_retained_run(root) as retained:
-        summary = _verify_frame(retained, graph_cell_limit)
+        if retained.run["schema"] == POLICY_RUN_SCHEMA:
+            summary = _verify_policy_frame(retained)
+        else:
+            summary = _verify_frame(retained, graph_cell_limit)
     document = record_value(summary)
     write_once(retained.root / "frame-verification.json", json.dumps(document).encode())
     return document
+
+
+def _verify_policy_frame(retained):
+    run = retained.run
+    assignment = retained.assignment()
+    numeric = numeric_profile(assignment)
+    entries = run["evaluation"]["dataframe"]
+    require(isinstance(entries, list) and len(entries) == 1, "expected one dataframe publication")
+    facts = entries[0]
+    handle = run["outputs"]["dataframe_result"]["reference"]
+    require(facts.get("schema") == "tn.pvldb-dataframe.v2" and facts.get("output_reference") == handle
+            and handle["group"] == "values" and handle["field"] == "value",
+            "evaluation output differs from the dataframe publication")
+    dag, _ = retained.policy_dag(assignment)
+    policies, _ = _frame_policies(retained, dag, assignment)
+    require(facts.get("policies") == sorted(policies) and facts.get("numeric_profile") == numeric.profile
+            and facts.get("output_schema") == {"amount": numeric.profile["dtype"]},
+            "dataframe policy or type differs from its source assignment")
+    use = tn.UseContext(run["request"]["application"], run["request"]["purpose"], "verify")
+    catalog, editions = retained.admit_editions(dag, assignment, use)
+    expected_editions = {edition.id for edition in editions}
+    def accept(ctx):
+        return (ctx.writer in retained.writers and ctx.object_type == VALUE_TYPE and ctx.use_context == use
+                and {p.revision_id for p in ctx.policies} == set(policies) and contracted(ctx.policies, policies)
+                and {binding.edition_record_id for binding in ctx.governance.dataset_bindings} == expected_editions
+                and catalog.accepts(ctx, dag))
+    obj = retained.object(handle["object_id"])
+    data = retained.session.receive(obj, use=use, groups=["values", "evidence"], decide=accept)
+    manifest = signed_manifest(data)
+    require(manifest["schema"] == POLICY_SCHEMA, "missing signed dataframe policy binding")
+    value = decode(data.get(handle["field"], group=handle["group"]), numeric.kind)
+    rows = ReferenceRows.load(retained.root, assignment, facts, run)
+    require(value == rows.expected_amount(numeric)
+            and manifest["bindings"][handle["field"]]["declared"] == describe(value),
+            "published dataframe amount differs from the reference calculation")
+    return {"schema": "tn.pvldb-frame-verification.v2", "source_rows": rows.count,
+            "policy_revisions": sorted(policies), "output_reference": handle,
+            "value_matches_reference": True}
 
 
 def _verify_frame(retained, graph_cell_limit):

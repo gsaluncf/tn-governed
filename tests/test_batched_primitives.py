@@ -70,16 +70,17 @@ def publish(context, contents):
     ["Ada", "Grace", "Ada"], [7, 8, 7], [0.125, -0.0, 1.25],
     [Decimal("1.2500"), Decimal("-0.00"), Decimal("2.3750")],
 ])
-def test_cells_share_publication_and_result_but_retain_exact_identity_and_type(context, contents):
+def test_cells_share_a_signed_policy_manifest_and_retain_exact_identity_and_type(context, contents):
     values = publish(context, contents)
     assert len({value.reference.object_id for value in values}) == 1
     assert len({value.reference for value in values}) == len(contents)
-    assert len({value.result_id for value in values}) == 1
+    assert all(value.decision_id is None and value.result_id is None for value in values)
     for index, (value, expected) in enumerate(zip(values, contents, strict=True)):
         assert isinstance(value, TNString if type(expected) is str else TNNumeric)
         _, binding, _ = context._metadata(value)
-        assert binding["source"] == source(index)
-        assert binding["origins"] == [source(index)]
+        assert value.reference.field == f"value_{index}"
+        assert set(binding) == {"declared", "claims", "actions"}
+        assert context.recorder.read(binding["actions"][0]).body["operation"] == "select"
         actual = value.reveal(context, destination="console")
         assert type(actual) is type(expected) and actual == expected
         if isinstance(expected, Decimal):
@@ -90,12 +91,12 @@ def test_cells_share_publication_and_result_but_retain_exact_identity_and_type(c
     assert b'"Ada"' not in wire
 
 
-def test_field_cannot_cite_the_result_of_another_publication(context):
+def test_current_source_rejects_an_unrelated_operation_citation(context):
     first = publish(context, ["Ada"])[0]
     second = publish(context, ["Grace"])[0]
-    forged = TNString(second.reference, second.decision_id, first.result_id,
+    forged = TNString(second.reference, second.decision_id, first.reference.object_id,
                       metadata_provider=context.string_metadata)
-    with pytest.raises(EvidenceError, match="authorized result"):
+    with pytest.raises(EvidenceError, match="signed policy-bearing value"):
         context._metadata(forged)
 
 
@@ -122,8 +123,7 @@ def test_copy_and_attest_preserve_selected_field_without_opening_values(context,
     assert claimed.reference.field == first.reference.field
     _, copied_binding, _ = context._metadata(copied)
     _, claimed_binding, claims = context._metadata(claimed)
-    assert copied_binding["parents"] == [second.reference.to_dict()]
-    assert claimed_binding["parents"] == [first.reference.to_dict()]
+    assert "parents" not in copied_binding and "parents" not in claimed_binding
     assert claims[0].subjects == (first.reference,)
     assert claims[0].issuer == context.session.did
     monkeypatch.setattr(context, "_open_values", original)
@@ -233,7 +233,7 @@ def test_metadata_reader_needs_real_values_key_for_compute_and_reveal(enrolled_b
     first = values[0]
     # Reading signed declared facts does not need the separate values reader kit.
     _, binding, _ = receiver._metadata(first)
-    assert binding["source"] == source(0)
+    assert first.reference.field == "value_0" and "source" not in binding
     assert first == contents[0]
     if isinstance(first, TNString):
         assert len(first) == 3
@@ -245,7 +245,7 @@ def test_metadata_reader_needs_real_values_key_for_compute_and_reveal(enrolled_b
         first.reveal(receiver, destination="console")
     records = [read_record(wire, session=receiver.session, policy=receiver.recorder.policy)
                for wire in receiver.recorder.records()]
-    assert [record.body["kind"] for record in records] == ["Decision", "Failure", "Decision", "Failure"]
+    assert [record.body["kind"] for record in records] == ["Failure", "Decision", "Failure"]
     assert all(record.body["details"]["permitted"] is True
                for record in records if record.body["kind"] == "Decision")
     assert all(record.body["details"]["error_type"] == "NotEntitled"
@@ -292,7 +292,9 @@ def test_metadata_batch_reuses_reads_only_within_current_call(context, monkeypat
         return original_record(identity)
     monkeypatch.setattr(context, "_read", track_read)
     monkeypatch.setattr(context.recorder, "read", track_record)
-    expected = Counter({first.decision_id: 1, first.result_id: 1})
+    decision = original_record(context.recorder.head)
+    expected = Counter({decision.id: 1,
+                        **{step["evidence"]: 1 for step in decision.body["details"]["discharged"]}})
     for repetition in range(1, 3):
         items = context._metadata_many(values)
         assert len(items) == 4
@@ -304,7 +306,7 @@ def test_metadata_batch_reuses_reads_only_within_current_call(context, monkeypat
     with pytest.raises(UseDenied):
         context._metadata_many(values)
     assert len(reads) == 3
-    assert len(records) == 4
+    assert len(records) == 2 * expected.total()
 
 
 def test_open_batch_reuses_one_receive_then_readmits_on_next_call(context, monkeypatch):
@@ -331,30 +333,20 @@ def test_open_batch_reuses_one_receive_then_readmits_on_next_call(context, monke
     assert len(reads) == 3
 
 
-def test_shared_publication_is_copied_and_merged_once(context, monkeypatch):
+def test_shared_publication_is_opened_once_without_copying_or_including_it(context, monkeypatch):
     values = publish(context, [7, 8, 9])
     request = Request(context.application, context.purpose, "add",
         tuple(value.reference for value in values), (), (context.session.policy(VALUE_TYPE),), ())
-    copies, includes = [], []
-    native_copy, native_include = tn.DataObject.copy, tn.DataObject.include
-
-    def track_copy(data):
-        copies.append(data)
-        return native_copy(data)
-
-    def track_include(data, other):
-        includes.append((data, other))
-        return native_include(data, other)
-
-    monkeypatch.setattr(tn.DataObject, "copy", track_copy)
-    monkeypatch.setattr(tn.DataObject, "include", track_include)
+    def fail(*args):
+        pytest.fail("arithmetic must not copy or include an operand publication")
+    monkeypatch.setattr(tn.DataObject, "copy", fail)
+    monkeypatch.setattr(tn.DataObject, "include", fail)
+    monkeypatch.setattr(tn.DataObject, "include_all", fail)
     opened = context._open_values(request, values)
-    assert len(copies) == 1
     assert len({id(data) for data, _content in opened}) == 1
-
-    merged = context._merge_opened(values, opened)
-    assert merged is opened[0][0]
-    assert includes == []
+    with context:
+        result = values[0] + values[2]
+    assert result.reveal(context, destination="console") == 16
 
 
 @pytest.mark.parametrize("contents", [["Ada", "DO-NOT-INCLUDE-SIBLING"], [7, 818181]])
@@ -370,6 +362,13 @@ def test_computed_singleton_does_not_contain_other_batch_values(context, content
     assert opened.get(None, group="values") == {"value": "ADA" if isinstance(first, TNString) else "8"}
     manifest = opened.get("manifest", group="evidence")
     assert set(manifest["bindings"]) == {"value"}
-    assert manifest["bindings"]["value"]["parents"] == [first.reference.to_dict()]
-    assert manifest["bindings"]["value"]["origins"] == [source(0)]
-    assert sibling.reference.to_dict() not in manifest["bindings"]["value"]["parents"]
+    assert set(manifest["bindings"]["value"]) == {"declared", "actions", "claims"}
+    assert not context.session.governance(publication).governance.sources
+    assert sibling.reference.object_id not in {obj.id for obj in derived.publication.objects()}
+
+def test_source_fields_require_their_actual_query_permit(context):
+    policy = context.session.policy(VALUE_TYPE)
+    request = Request(context.application, context.purpose, "select", (), (), (policy,), ())
+    other = context._decision(request, "other-query")
+    with pytest.raises(EvidenceError, match="this query's signed permit"):
+        context.originate(10, policy, request=request, decision_id=other, call_id="query", source=source(0))

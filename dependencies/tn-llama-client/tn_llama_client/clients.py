@@ -264,7 +264,8 @@ class NativeOutputReader:
 
     def __init__(
         self, session, *, expected_source, expected_writer, use, destination,
-        catalog, policy_dag, resolve_ancestor, decide, release_use=None,
+        catalog, policy_dag, decide, resolve_ancestor=None, release_use=None, carried_policy=False,
+        expected_source_view=None, source_edition_id=None,
         expected_object_type="report.generated",
         expected_tool_object_type="compliance.creation.logged",
         expected_tool_name=None,
@@ -292,6 +293,22 @@ class NativeOutputReader:
         self.destination = destination
         self.catalog = catalog
         self.policy_dag = policy_dag
+        if carried_policy:
+            from tn.governed import GovernanceView
+            if not isinstance(expected_source_view, GovernanceView) or expected_source_view.object.id != expected_source.id:
+                raise ValueError("carried-policy recipient requires the verified view of its exact model input")
+        self.source_binding = None
+        if source_edition_id is not None:
+            if not carried_policy:
+                raise ValueError("a source edition requires a current policy carrier")
+            edition = catalog.get(source_edition_id)
+            if edition is None:
+                raise ValueError("source edition was not admitted by this recipient")
+            selection = catalog.select(edition.dataset, edition.edition, source_edition_id, use)
+            selection.verify_source(expected_source_view, use, edition.source_groups)
+            self.source_binding = selection.binding
+        self.expected_source_view = expected_source_view
+        self.carried_policy = carried_policy
         self.resolve_ancestor = resolve_ancestor
         self.decide = decide
         self.release_use = release_use
@@ -344,7 +361,15 @@ class NativeOutputReader:
         )
 
     @staticmethod
-    def _has_same_contracts(actual, expected) -> bool:
+    def _matches_references(actual, expected):
+        return len(actual) == len(expected) and all(
+            any(ref.references_with_policy(view.object, view.governance)
+                and set(ref.groups).issubset(view.object.group_names) for ref in actual)
+            for view in expected
+        )
+
+    @staticmethod
+    def _has_same_contracts(actual, expected, source_binding=None) -> bool:
         actual_contracts = actual.governance.policies
         expected_contracts = expected.governance.policies
         return (
@@ -359,7 +384,7 @@ class NativeOutputReader:
                 for source in expected_contracts
             )
             and actual.governance.dataset_bindings
-            == expected.governance.dataset_bindings
+            == ([source_binding] if source_binding is not None else expected.governance.dataset_bindings)
         )
 
     def _has_expected_release_context(self, view) -> bool:
@@ -462,7 +487,8 @@ class NativeOutputReader:
                 "native report does not reference the exact input and tool publications"
             )
 
-        source_view = self.resolve_ancestor(self.expected_source.id)
+        source_view = (self.expected_source_view if self.carried_policy
+                       else self.resolve_ancestor(self.expected_source.id))
         if source_view.object.id != self.expected_source.id:
             raise PermissionError("ancestor resolver substituted the expected model input")
         tool_views = {}
@@ -481,19 +507,36 @@ class NativeOutputReader:
                 tool_view.governance.sources, (self.expected_source,)
             ):
                 raise PermissionError("native tool does not reference the exact model input")
-            if not self._has_same_contracts(tool_view, source_view):
+            if self.carried_policy and not self._matches_references(tool_view.governance.sources, (source_view,)):
+                raise PermissionError("native tool input does not match its signed source policy")
+            if not self._has_same_contracts(tool_view, source_view, self.source_binding):
                 raise PermissionError("native tool did not preserve source contracts and bindings")
-            self.lineage_verifier.verify(
-                tool_view, self.catalog, self.policy_dag, self.resolve_ancestor,
-            )
+            if not self.carried_policy:
+                self.lineage_verifier.verify(
+                    tool_view, self.catalog, self.policy_dag, self.resolve_ancestor,
+                )
             tool_views[tool.id] = tool_view
 
-        def resolve(identity):
-            if identity in tool_views:
-                return tool_views[identity]
-            return self.resolve_ancestor(identity)
+        if self.carried_policy:
+            if not self._matches_references(sources, (source_view, *tool_views.values())):
+                raise PermissionError("native report inputs do not match their signed source policies")
+            # The catalog validates the complete content of each signed revision on
+            # admission. The report must still carry every revision and edition of
+            # the exact input whose authorized use it records.
+            required = {policy.revision_id for policy in source_view.governance.policies}
+            actual = {policy.revision_id for policy in view.governance.policies}
+            if not required.issubset(actual) or any(
+                binding not in view.governance.dataset_bindings
+                for binding in ([self.source_binding] if self.source_binding is not None else source_view.governance.dataset_bindings)
+            ):
+                raise PermissionError("native report did not preserve source contracts and bindings")
+        else:
+            def resolve(identity):
+                if identity in tool_views:
+                    return tool_views[identity]
+                return self.resolve_ancestor(identity)
 
-        self.lineage_verifier.verify(view, self.catalog, self.policy_dag, resolve)
+            self.lineage_verifier.verify(view, self.catalog, self.policy_dag, resolve)
         completed, call_ids, request_digests = set(), set(), set()
         for tool in tool_objects:
             admitted = self.session.receive(

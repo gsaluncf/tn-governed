@@ -37,7 +37,7 @@ def test_preparation_pins_real_calculation_and_all_native_service_identities(pre
     assert (prepared.directory / "model-input.tn").read_bytes() == source.forward()
     metadata = json.loads(prepared.metadata_path.read_bytes())
     assert len(metadata["policy_revisions"]) == len(metadata["dataset_editions"]) == 2
-    assert source.wire in metadata["publications"]
+    assert not metadata["publications"]
     view = prepared.sessions["model-reader"].governance(source)
     assert len(view.governance.dataset_bindings) == len(view.governance.policies) == 2
 
@@ -222,3 +222,66 @@ def test_complete_recipient_path_accepts_a_separate_native_publisher(
     assert prepared.store.get(output.id) == output.forward()
     for tool in tools:
         assert prepared.store.get(tool.id) == tool.forward()
+
+def test_annotated_finance_input_supplies_only_its_signed_evidence(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    import tn
+    from tn_governed import native_reference as reference
+    from tn_governed.values.evidence import EvidenceRecorder
+    from tn_governed.values.string import ValueReference
+
+    directory = tmp_path / "run"
+    run = reference.run_governed_calculation_path
+    expected = {}
+
+    def with_evidence(**options):
+        result = run(**options)
+        calc, store = options["calculation_session"], options["publication_store"]
+        source = result.calculation_object
+        subject = ValueReference(source.id, "calculation", "finance")
+        with tn.Session.from_config(directory / "sessions/source/tn.yaml") as issuer:
+            policy = issuer.policy("experiment.evidence")
+            recorder = EvidenceRecorder(issuer, store, policy)
+            common = dict(application="analytics", purpose="portfolio_analysis", inputs=[subject])
+            claim = recorder.append("Claim", operation="attest", call_id="attest", **common,
+                                    details={"statement": "Quarter-end figures were reconciled."})
+            recorder.append("Claim", operation="attest", call_id="unrelated", **common,
+                            details={"statement": "This statement belongs to another request."})
+            receipt = recorder.append("Monitor", operation="record-use", call_id="audit", **common)
+            action = recorder.append("Decision", operation="publish", call_id="publish", **common,
+                details={"permitted": True, "obligations": ["record-use"], "discharged": [{
+                    "obligation": "record-use", "satisfied": True, "evidence": receipt}]})
+        admitted = calc.receive(source, use=MODEL_USE, groups=["finance"], decide=lambda _: True)
+        current = admitted.policy_output(source.object_type, {
+            "finance": admitted.get(group="finance"),
+            "evidence": {"manifest": {"schema": "tn.governed-fields.v1", "bindings": {
+                "calculation": {"group": "finance", "claims": [claim], "actions": [action]},
+            }}},
+        }, primary_group="finance")
+        current.bind_manifest("evidence")
+        output = calc.release(current, use=reference.CALCULATION_RELEASE, to="tn-llama",
+                              object_type=source.object_type, decide=lambda _: True)
+        store.put(output)
+        expected.update(claim=claim, action=action, receipt=receipt, policy=policy)
+        return replace(result, calculation_object=output)
+
+    monkeypatch.setattr(reference, "run_governed_calculation_path", with_evidence)
+    with prepare_governed_reference(directory, unity_url="local-registry",
+                                    registry=LocalRegistry(tmp_path / "registry")) as prepared:
+        model = tmp_path / "model.gguf"
+        binary = tmp_path / "server"
+        model.write_bytes(b"model identity")
+        binary.write_bytes(b"binary identity")
+        config = json.loads(write_governed_runtime_config(prepared, model=model, binary=binary).read_bytes())
+        assert config["allowed_input_groups"] == ["finance", "evidence"]
+        assert config["report_contract"]["allowed_input_sections"] == ["finance"]
+        assert config["governed_objects"]["evidence_contracts"] == [{
+            "governed_by": expected["policy"].governed_by, "fields": expected["policy"].fields,
+            "allowed_uses": [reference._use_dict(MODEL_USE)],
+        }]
+        metadata = json.loads(prepared.metadata_path.read_bytes())
+        assert metadata["publications"] == []
+        assert {tn.GovernedObject.parse(w).id for w in metadata["claim_records"]} == {expected["claim"]}
+        assert {tn.GovernedObject.parse(w).id for w in metadata["action_records"]} == {
+            expected["action"], expected["receipt"]}

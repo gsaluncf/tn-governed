@@ -217,7 +217,7 @@ class ToolWorkflow:
         }
         invocation = _Invocation(self.run_id, call, tool, state, selected, scope, binding, self._events)
         artifact = self.endpoint.execute(
-            tool.operation, scope, invocation, parameters=parameters, destination="tool:" + call.name
+            tool.operation, scope, invocation, parameters=parameters, destination="tool:" + call.name, record_use=True
         )
         if tool.result_mode == "governed":
             artifact = self._admit_remote(tool, invocation, (*scope, artifact), parameters)
@@ -270,6 +270,7 @@ class ToolWorkflow:
             lambda values: tool.validate_output(values[result_position], invocation.invocations[0]),
             parameters=parameters,
             destination="workflow:" + self.run_id,
+            record_use=True,
         )
 
     def execute_many(self, calls, *, control=None):
@@ -338,6 +339,7 @@ class ToolWorkflow:
                 lambda _: json_value(value),
                 parameters=parameters,
                 destination=destination,
+                record_use=True,
             )
             self._finished, self._finish_request = result, requested
             self._events.append({"kind": "workflow_released", "artifact": result.to_dict()})

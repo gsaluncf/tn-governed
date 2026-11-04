@@ -63,11 +63,8 @@ def prepared(sql_endpoint, tmp_path):
     audit = open_audited_frame(
         publication, session=session, use=USE, group="values", decide=lambda _: True
     )
-    assert audit["support"]["known"] is False
-    assert any(
-        event["kind"] == "operation" and "upstream" in event["details"]["parameters"]
-        for event in audit["events"]
-    )
+    assert audit["policies"] == sorted(policy_identity(policy) for policy in policies)
+    assert not session.governance(publication).governance.sources
     writers = {context.session.did for context in sql_endpoint.contexts.values()}
     writers.add(sql_endpoint.resolvers["catalog"].session.did)
     evidence = tuple(
@@ -115,7 +112,9 @@ def prepared(sql_endpoint, tmp_path):
         verify_claim=endpoint.read_record,
     )
     frame = frame.with_columns((pl.col("total") + 2).alias("total"))
-    publication = frame.release_tn(use=USE, to="support-console", decide=lambda _: True)
+    # Reuse a provisioned group to exercise a separately named metadata group.
+    publication = frame.release_tn(use=USE, to="support-console", decide=lambda _: True,
+                                   metadata_group="catalog_cfg")
     audit = open_audited_frame(
         publication,
         session=session,
@@ -125,10 +124,10 @@ def prepared(sql_endpoint, tmp_path):
         decide=accepted,
         verify_claim=endpoint.read_record,
     )
-    assert audit["claims"][0]["id"] == attributed.id
-    artifact = import_frame(endpoint, publication)
+    assert audit["claims"] == [attributed.id]
+    artifact = import_frame(endpoint, publication, metadata_group="catalog_cfg")
     assert endpoint.metadata(artifact)["claims"] == [attributed.id]
-    return endpoints, artifact, attributed, policies
+    return endpoints, artifact, publication
 
 
 def tools():
@@ -156,7 +155,7 @@ def tools():
 
 
 def test_release_action_failure_blocks_pipeline_result(sql_endpoint, tmp_path):
-    peers, artifact, _, _ = prepared(sql_endpoint, tmp_path)
+    peers, artifact, _ = prepared(sql_endpoint, tmp_path)
     endpoint = peers["consumer"]
     workflow = ToolWorkflow(endpoint, tools(), {"source": artifact}, required_tools=("sum_rows",))
     workflow.execute(Call("sum", "sum_rows", {}, ("source",)))
@@ -172,13 +171,11 @@ def test_release_action_failure_blocks_pipeline_result(sql_endpoint, tmp_path):
 def test_frame_import_refusal_precedes_business_validation(sql_endpoint, tmp_path, monkeypatch):
     import tn_polars.endpoint as bridge
 
-    peers, artifact, _, _ = prepared(sql_endpoint, tmp_path)
+    peers, _, publication = prepared(sql_endpoint, tmp_path)
     endpoint = peers["consumer"]
-    source_id = endpoint.metadata(artifact)["external_inputs"][0]["object_id"]
-    publication = endpoint.store.read(source_id)
     calls = []
     monkeypatch.setattr(bridge, "verify_native_frame", lambda *args, **kwargs: calls.append(True))
     endpoint.evaluator = lambda _: Assessment(False, "destination refused")
     with pytest.raises(OperationDenied):
-        import_frame(endpoint, publication)
+        import_frame(endpoint, publication, metadata_group="catalog_cfg")
     assert calls == []

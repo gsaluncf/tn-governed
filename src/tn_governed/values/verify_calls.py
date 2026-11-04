@@ -3,13 +3,12 @@
 from collections import defaultdict
 from dataclasses import dataclass
 
-from .evidence import require
+from .evidence import check_monitor, require
 
 _TERMINAL = ("Result", "Refusal", "Disclosure", "Observation", "Failure", "ModelResult")
 _COMPLETION = {"reveal": "Disclosure", "compare": "Observation", "truth": "Observation",
                "is_integer": "Observation", "model_handoff": "ModelResult"}
 _CALL_FIELDS = ("inputs", "operation", "application", "purpose", "destination")
-_MONITOR_FIELDS = ("context_id", "application", "purpose", "operation", "inputs", "destination")
 
 
 @dataclass(frozen=True)
@@ -25,6 +24,13 @@ class AssignmentTerms:
 class CheckedCalls:
     refusals: list
     sql_reads: dict
+
+
+def verify_recorded_permits(records, by_id, terms):
+    """Check the uses for which the endpoint signed a permit under the assignment."""
+    for record in records:
+        if record.body["kind"] == "Decision" and record.body["details"].get("permitted") is True:
+            _check_discharged(record, _permitted_obligations(record, terms), by_id)
 
 
 def check_calls(records, by_id, terms):
@@ -104,16 +110,13 @@ def _permitted_obligations(decision, terms):
 
 def _check_discharged(decision, obligations, by_id):
     """Every required obligation is discharged by monitoring that preceded this permit."""
-    db, dd = decision.body, decision.body["details"]
+    dd = decision.body["details"]
     require(set(dd["obligations"]) == obligations, "required source obligation omitted")
     require({d["obligation"] for d in dd["discharged"]} == obligations, "obligation was not discharged")
     for discharge in dd["discharged"]:
         monitor = by_id.get(discharge["evidence"])
         require(discharge["satisfied"] is True and monitor is not None, "missing obligation evidence")
-        mb = monitor.body
-        require(monitor.writer == decision.writer and mb["kind"] == "Monitor"
-                and mb["sequence"] < db["sequence"] and all(mb[k] == db[k] for k in _MONITOR_FIELDS)
-                and mb["details"]["actor"] == dd["actor"], "monitoring did not precede this permit")
+        check_monitor(decision, monitor)
 
 
 def _check_completion(decision, terminal):

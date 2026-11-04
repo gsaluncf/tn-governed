@@ -17,14 +17,9 @@ from tn_governed.values.evidence import EvidenceError, EvidenceRecorder
 from tn_governed.values.primitives import VALUE_TYPE, Context
 from tn_governed.values.provision import provision
 from tn_governed.values.query import (
-    CellLineage,
-    Contributor,
-    LineageProvider,
-    QueryLineage,
     SQLFunction,
     SQLiteQuery,
     decode_sql,
-    digest,
     encode_sql,
 )
 from tn_governed.values.sql import GovernedSQL, source_identity
@@ -217,9 +212,9 @@ def test_join_result_preserves_duplicate_rows_and_unprojected_policy(sql_endpoin
     result = sql_endpoint.driver.execute(JOIN, {"factor": 3, "enabled": 1})
     assert result.reveal("support-console") == [(12, "same")] * 4
     manifest = result.metadata()
-    assert manifest["lineage"]["precision"] == "conservative"
-    assert manifest["lineage"]["row_support"] == "known"
-    assert manifest["lineage"]["control_scope"] == "source-snapshot"
+    assert set(manifest) == {"schema", "binding", "binding_id", "decision_id", "row_count", "actions"}
+    assert set(manifest["binding"]) == {"schema", "snapshot", "sources", "output_schema", "query_id"}
+    assert not sql_endpoint.contexts["consumer"].session.governance(result.publication.object).governance.sources
     sources = {(item["table"], item["column"]) for item in manifest["binding"]["sources"]}
     assert ("customers", "enabled") in sources
     assert ("orders", "customer_id") in sources
@@ -303,7 +298,7 @@ def test_native_relation_represents_sql_shapes(sql_endpoint, query, expected):
     assert result.edition["source_object_id"] == result.object_id
 
 
-def test_unknown_row_support_requires_every_signed_source_permission(sql_endpoint, monkeypatch):
+def test_selection_uses_the_policy_on_an_unprojected_column(sql_endpoint, monkeypatch):
     resolver = sql_endpoint.resolvers["gateway"]
     resolve = resolver.resolve_query
 
@@ -314,7 +309,7 @@ def test_unknown_row_support_requires_every_signed_source_permission(sql_endpoin
             for source in resolution.sources
             if source["table"] == "customers" and source["column"] == "enabled"
         )
-        resolver.rules[control["revision_id"]].pop("sql_lineage", None)
+        resolver.rules[control["revision_id"]]["operations"] = []
         return resolution
 
     monkeypatch.setattr(resolver, "resolve_query", disallow)
@@ -350,17 +345,10 @@ def test_changed_bound_parameters_and_schema_change_signed_binding(sql_endpoint)
         "SELECT amount AS second FROM orders WHERE id=?", (1,)
     )
     bindings = [result.metadata()["binding"] for result in (first, second, third)]
-    assert bindings[0]["parameters"] != bindings[1]["parameters"]
+    assert "parameters" not in bindings[0] and "sql" not in bindings[0]
+    assert bindings[0]["sources"] == bindings[1]["sources"]
     assert bindings[0]["output_schema"] != bindings[2]["output_schema"]
-    assert (
-        len(
-            {
-                digest({key: value for key, value in binding.items() if key != "query_id"})
-                for binding in bindings
-            }
-        )
-        == 3
-    )
+    assert first.object_id != second.object_id
 
 
 def test_cell_selection_is_authorized_before_values_are_opened(sql_endpoint, monkeypatch):
@@ -391,14 +379,14 @@ def test_disclosure_rejects_signed_output_type_mismatch(sql_endpoint, monkeypatc
 
     publish = query_result.publish_result
 
-    def mismatched(context, rows, binding, lineage, **kwargs):
+    def mismatched(context, rows, binding, **kwargs):
         binding = {
             **binding,
             "output_schema": [
                 {**column, "storage_types": ["str"]} for column in binding["output_schema"]
             ],
         }
-        return publish(context, rows, binding, lineage, **kwargs)
+        return publish(context, rows, binding, **kwargs)
 
     monkeypatch.setattr(query_result, "publish_result", mismatched)
     result = sql_endpoint.driver.execute_query("SELECT amount FROM orders WHERE id=1")
@@ -431,57 +419,6 @@ def test_cell_reveal_validates_every_opened_encoding(sql_endpoint, monkeypatch, 
         cell.reveal("support-console")
 
 
-def test_exact_mapping_requires_configured_validator_and_position_keys(sql_endpoint):
-    seen = []
-
-    def mapping(binding, result):
-        return QueryLineage(
-            "exact",
-            tuple(
-                CellLineage(row, 0, (Contributor("orders", "amount", (row + 1,)),))
-                for row in range(len(result.rows))
-            ),
-        )
-
-    def validate(binding, result, lineage):
-        seen.append(binding["sql"])
-        return len(lineage.cells) == len(result.rows)
-
-    sql_endpoint.driver.lineage_provider = LineageProvider("catalog:rowids", mapping, validate)
-    result = sql_endpoint.driver.execute_query("SELECT amount FROM orders ORDER BY id")
-    assert result.reveal("support-console") == [(4,), (4,), (9,), (2,)]
-    assert result.metadata()["lineage"]["precision"] == "exact"
-    assert seen == ["SELECT amount FROM orders ORDER BY id"]
-    assert (
-        result.metadata()["lineage"]["cells"][0]["contributors"][0]["row_key"]
-        != (result.metadata()["lineage"]["cells"][1]["contributors"][0]["row_key"])
-    )
-
-
-def test_provider_cannot_omit_positions_or_claim_unassigned_sources(sql_endpoint):
-    def invalid(binding, result):
-        return QueryLineage(
-            "exact", (CellLineage(0, 0, (Contributor("elsewhere", "secret", (1,)),)),)
-        )
-
-    sql_endpoint.driver.lineage_provider = LineageProvider(
-        "catalog:rowids", invalid, lambda *_: True
-    )
-    with pytest.raises(OperationDenied, match="lineage"):
-        sql_endpoint.driver.execute_query("SELECT amount FROM orders ORDER BY id")
-    assert not sql_endpoint.driver.editions
-
-
-def test_failed_provider_validation_cannot_publish(sql_endpoint):
-    provider = LineageProvider(
-        "catalog:rowids", lambda *_: QueryLineage("exact", ()), lambda *_: False
-    )
-    sql_endpoint.driver.lineage_provider = provider
-    with pytest.raises(OperationDenied, match="lineage"):
-        sql_endpoint.driver.execute_query("SELECT amount FROM orders WHERE id < 0")
-    assert not sql_endpoint.driver.editions
-
-
 def test_snapshot_with_wal_content_is_not_a_database_file_assignment(database):
     with sqlite3.connect(database) as writer:
         writer.execute("PRAGMA journal_mode=WAL")
@@ -502,7 +439,7 @@ def test_consumer_rechecks_authority_before_result_disclosure(sql_endpoint):
         result.reveal("support-console")
 
 
-def test_processing_boundary_preserves_native_policy_and_query_lineage(sql_endpoint, monkeypatch):
+def test_processing_boundary_preserves_native_policy_and_current_decision(sql_endpoint, monkeypatch):
     result = sql_endpoint.driver.execute_query(JOIN, {"factor": 3, "enabled": 1})
     context = sql_endpoint.contexts["consumer"]
     evaluator = context.evaluator
@@ -636,28 +573,14 @@ def test_portable_query_rejects_changed_contributor_source_list(sql_endpoint):
         GovernedQueryResult.receive(sql_endpoint.contexts["consumer"], changed)
 
 
-@pytest.mark.parametrize("damage", ["missing", "duplicate", "source", "key"])
-def test_recipient_rejects_invalid_signed_contributor_mappings(sql_endpoint, monkeypatch, damage):
-    from copy import deepcopy
-
+def test_recipient_rejects_unexpected_signed_calculation_metadata(sql_endpoint, monkeypatch):
     from tn_governed.values import query_result
 
     publish = query_result.publish_result
-
-    def malformed(context, rows, binding, lineage, **kwargs):
-        lineage = deepcopy(lineage)
-        if damage == "missing":
-            lineage["contributor_rows"].pop()
-        elif damage == "duplicate":
-            lineage["contributor_rows"].append(lineage["contributor_rows"][0])
-        elif damage == "source":
-            lineage["contributor_columns"][0][0]["table"] = "unassigned"
-        else:
-            lineage["contributor_rows"][0][0][0] = '[{"kind":"int","value":"01"}]'
-        return publish(context, rows, binding, lineage, **kwargs)
-
-    monkeypatch.setattr(query_result, "publish_result", malformed)
-    with pytest.raises(EvidenceError, match="lineage"):
+    def with_history(context, rows, binding, **kwargs):
+        return publish(context, rows, {**binding, "sql": "SELECT discarded"}, **kwargs)
+    monkeypatch.setattr(query_result, "publish_result", with_history)
+    with pytest.raises(EvidenceError, match="binding"):
         sql_endpoint.driver.execute_query(JOIN, {"factor": 3, "enabled": 1})
 
 

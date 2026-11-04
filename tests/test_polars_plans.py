@@ -77,18 +77,9 @@ def test_arbitrary_lazy_plan_keeps_control_dependencies_and_governance(relation)
     publication = transformed.release_tn(use=USE, to="internal", decide=lambda _: True)
     rows, audit = opened(relation[0], publication)
     assert [row["group"] for row in rows] == ["a", "b"]
-    assert audit["support"]["known"] is False
-    assert audit["output"]["row_selection_sources"]
-    assert {item["policy_revision"] for item in audit["policies"]} == set(
-        frame._tn.policies.revision_ids
-    )
-    operation = next(
-        event
-        for event in audit["events"]
-        if event["kind"] == "operation" and event["details"]["name"] == "transform"
-    )
-    assert operation["details"]["parameters"]["identifier"] == "deduplicate-normalize"
-    assert operation["details"]["parameters"]["plan_digest"].startswith("sha256:")
+    assert set(audit) == {"schema", "group", "rows_field", "policies", "claims", "actions"}
+    assert audit["policies"] == list(frame._tn.policies.revision_ids)
+    assert not relation[0].governance(publication).governance.sources
 
 
 def test_transform_authorization_precedes_callback_and_unknown_support_can_be_refused(relation):
@@ -123,12 +114,8 @@ def test_expression_selectors_and_window_plans_preserve_source_columns(relation)
         relation[0], selected.release_tn(use=USE, to="internal", decide=lambda _: True)
     )
     assert [row["mean"] for row in rows] == [3.0, 3.0, 7.0]
-    assert set(audit["output"]["columns"]) == {"id", "group", "amount", "mean"}
-    assert audit["output"]["columns"]["mean"]
-    assert audit["support"]["known"] is True
-    source_id = relation[2].id
-    assert audit["support"]["rows"][0][source_id] == [source_id + "::0", source_id + "::1"]
-    assert audit["support"]["rows"][2][source_id] == [source_id + "::2"]
+    assert set(rows[0]) == {"id", "group", "amount", "mean"}
+    assert audit["policies"] == list(frame._tn.policies.revision_ids)
 
 
 def test_two_input_transform_keeps_both_source_policies():
@@ -154,10 +141,7 @@ def test_two_input_transform_keeps_both_source_policies():
         )
         assert [row["amount"] for row in rows] == [3, 7]
         assert len(audit["policies"]) == 2
-        assert len(audit["inputs"]) == 2
-        assert len(frames[0]._tn.policies.audit.records()) < len(
-            result._tn.policies.audit.records()
-        )
+        assert len(frames[0]._tn.policies.revision_ids) == 1
 
 
 def test_same_contract_can_cover_different_source_schemas(relation):
@@ -173,8 +157,7 @@ def test_same_contract_can_cover_different_source_schemas(relation):
     rows, audit = opened(session, result.release_tn(use=USE, to="internal", decide=lambda _: True))
     assert [row["label"] for row in rows] == ["a", "b"]
     assert len(audit["policies"]) == 1
-    assert len(audit["inputs"]) == 2
-    assert all(len(row) == 2 for row in audit["support"]["rows"])
+    assert len(result._tn.policies.revision_ids) == 1
 
 
 def test_native_frame_rejects_plain_collection_and_plain_transform_result(relation):
@@ -187,7 +170,7 @@ def test_native_frame_rejects_plain_collection_and_plain_transform_result(relati
         frame.transform(PlanTransform("invalid", "1", lambda _: pl.DataFrame({"x": [1]})))
 
 
-def test_struct_unnest_explode_and_unique_retain_contributor_rows(relation):
+def test_struct_unnest_explode_and_unique_retain_policies(relation):
     session, policy, _ = relation
     data = session.create(
         {
@@ -205,15 +188,11 @@ def test_struct_unnest_explode_and_unique_retain_contributor_rows(relation):
     frame = admit((session, policy, source)).unnest("details").explode("values")
     rows, audit = opened(session, frame.release_tn(use=USE, to="internal", decide=lambda _: True))
     assert [row["values"] for row in rows] == [2, 4, 4, 8]
-    assert audit["output"]["columns"]["weight"] == [source.id + "::details"]
-    assert audit["output"]["row_selection_sources"] == [source.id + "::values"]
-    assert audit["support"]["rows"][1] == {source.id: [source.id + "::0"]}
+    assert audit["policies"] == list(frame._tn.policies.revision_ids)
     unique = frame.unique(subset=["key", "values"], keep="first", maintain_order=True)
     rows, audit = opened(session, unique.release_tn(use=USE, to="internal", decide=lambda _: True))
     assert [row["values"] for row in rows] == [2, 4, 8]
-    assert audit["support"]["known"] is True
-    assert audit["support"]["rows"][1] == {source.id: [source.id + "::0", source.id + "::1"]}
-    assert audit["output"]["row_selection_sources"] == [source.id + "::key", source.id + "::values"]
+    assert audit["policies"] == list(frame._tn.policies.revision_ids)
 
 
 def test_selector_reductions_and_partition_windows_keep_hidden_columns_private(relation):
@@ -225,7 +204,7 @@ def test_selector_reductions_and_partition_windows_keep_hidden_columns_private(r
         ),
     )
     assert rows == [{"id": 6, "amount": 13.0}]
-    assert audit["support"]["known"] is True
+    assert audit["policies"] == list(frame._tn.policies.revision_ids)
     window = frame.with_columns(
         pl.col("amount").mean().over("group").alias("group_mean"),
         pl.col("amount").max().over("id").alias("individual_max"),
@@ -235,10 +214,10 @@ def test_selector_reductions_and_partition_windows_keep_hidden_columns_private(r
     )
     assert [row["group_mean"] for row in rows] == [3, 3, 7]
     assert [row["individual_max"] for row in rows] == [2, 4, 7]
-    assert audit["support"]["known"] is True
+    assert audit["policies"] == list(frame._tn.policies.revision_ids)
 
 
-def test_readmission_retains_prior_audit_and_does_not_count_derived_rows_as_sources(relation):
+def test_readmission_preserves_rules_without_asserting_distinct_source_counts(relation):
     from tn_polars import PlanTransform, PolicyDenied
 
     frame = admit(relation)
@@ -255,13 +234,7 @@ def test_readmission_retains_prior_audit_and_does_not_count_derived_rows_as_sour
             "d",
         ),
     )
-    assert received._support.known is False
-    load = next(
-        event
-        for event in received._tn.policies.audit.records()
-        if event["kind"] == "operation" and event["details"]["name"] == "load"
-    )
-    assert load["details"]["parameters"]["upstream"]["audit_id"] == prior["id"]
+    assert list(received._tn.policies.revision_ids) == prior["policies"]
     with pytest.raises(PolicyDenied):
         received.group_by("group").agg(pl.col("amount").sum()).release_tn(
             use=USE, to="internal", decide=lambda _: True
@@ -296,7 +269,7 @@ def test_signed_claim_identity_and_subject_survive_general_plan_and_recipient_ve
         + "\n"
         + POLICY[POLICY.index("## ") :].replace("portfolio.feed.data.v1", "experiment.evidence")
     )
-    with tn.Session(text, groups=["finance", "evidence"]) as session:
+    with tn.Session(text, groups=["finance", "evidence", "checks"]) as session:
         policy = session.policy("portfolio.feed.data.v1")
         recorder = EvidenceRecorder(
             session, PublicationStore(tmp_path / "records"), session.policy("experiment.evidence")
@@ -346,16 +319,20 @@ def test_signed_claim_identity_and_subject_survive_general_plan_and_recipient_ve
                 lambda source: source.with_columns((pl.col("amount") + 7).alias("amount")),
             )
         )
-        publication = transformed.release_tn(use=USE, to="internal", decide=lambda _: True)
+        publication = transformed.release_tn(use=USE, to="internal", decide=lambda _: True,
+                                             metadata_group="checks")
+        assert publication.manifest_group == "checks"
+        received = load_relation(publication, session=session, use=USE,
+                                 evaluators={policy_identity(policy): evaluator},
+                                 decide=lambda _: True, verify_claim=recorder.read)
+        assert [claim["id"] for claim in received._tn.policies.claims] == [claim_id]
         audit = open_audited_frame(
             publication, session=session, use=USE, decide=lambda _: True, verify_claim=recorder.read
         )
         original_claim = recorder.read(claim_id)
-        assert audit["claims"] == [
-            {"id": claim_id, "writer": original_claim.writer, "body": original_claim.body}
-        ]
+        assert audit["claims"] == [claim_id]
         assert all(request["claims"][0]["id"] == claim_id for request in observed)
         assert original_claim.body["inputs"] == [subject.to_dict()]
         assert original.id != publication.id
-        with pytest.raises(Exception, match="verifier"):
+        with pytest.raises(Exception, match="authority|verifier"):
             open_audited_frame(publication, session=session, use=USE, decide=lambda _: True)

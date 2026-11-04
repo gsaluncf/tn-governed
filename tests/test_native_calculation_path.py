@@ -185,7 +185,6 @@ def test_real_calculation_keeps_two_contracts_exact_parents_and_fetches(setup, m
     assert result.execution.result.value == -0.25
     assert port.requests[0].arguments == {"wealth_path": [100.0, 120.0, 90.0, 110.0]}
     assert len(port.requests) == 1
-    assert result.execution.source_object_id == result.polars_object.id
     assert not hasattr(result, "model_row")
     assert setup.source.did != setup.polars.did != setup.calculation.did
     assert result.polars_object.writer == setup.polars.did
@@ -194,15 +193,12 @@ def test_real_calculation_keeps_two_contracts_exact_parents_and_fetches(setup, m
         assert setup.store.get(publication.id) == publication.forward()
     view = setup.calculation.governance(result.calculation_object)
     assert len(view.governance.policies) == len(view.governance.dataset_bindings) == 2
-    assert [parent.object_id for parent in view.governance.sources] == [result.polars_object.id]
+    assert not view.governance.sources
     frame = setup.polars.receive(result.polars_object, use=POLARS_USE, groups=["finance"],
                                   decide=lambda _: True)
-    assert {parent.object_id for parent in frame.governance.sources} == {
-        item.selection.source_object_id for item in editions}
+    assert not frame.governance.sources
     assert frame.data["rows"][0] == {"observed_at": "2026-09-01T16:00:00+00:00", "wealth": 100.0}
-    lineage = frame.data["tn_polars_lineage"]
-    assert {item.selection.source_object_id + "::observation_id" for item in editions} <= set(
-        lineage["row_selection_sources"])
+    assert "tn_polars_lineage" not in frame.data
     assert [fact.request_path for fact in result.feed_fetch_facts] == [
         "/v1/publications/" + item.selection.source_object_id.removeprefix("sha256:")
         for item in editions]
@@ -243,11 +239,11 @@ def test_exact_source_route_substitution_refuses_before_engine(setup):
     assert port.requests == []
 
 
-def test_ancestor_application_refusal_stops_before_engine(setup):
+def test_recipient_can_refuse_the_current_value_before_engine(setup):
     editions = setup.editions()
     port = CountingPort()
-    with pytest.raises(ValueError, match="ancestor"):
-        setup.run(editions, calculation=port, decide_ancestor=lambda _: False)
+    with pytest.raises(tn.governed.UseDenied):
+        setup.run(editions, calculation=port, decide_calculation_receive=lambda _: False)
     assert port.requests == []
 
 
@@ -263,7 +259,7 @@ def test_direct_stage_cannot_substitute_source_bytes(setup, monkeypatch):
         )
 
 
-def test_missing_retained_ancestor_stops_before_engine(setup):
+def test_calculation_accepts_current_rules_without_reading_stored_operands(setup):
     editions = setup.editions()
     port = CountingPort()
 
@@ -274,6 +270,6 @@ def test_missing_retained_ancestor_stops_before_engine(setup):
         def get(self, _identity):
             raise LookupError("retained ancestor unavailable")
 
-    with pytest.raises(ValueError, match="ancestor unavailable"):
-        setup.run(editions, calculation=port, publication_store=UnavailableAncestorStore())
-    assert port.requests == []
+    result, _ = setup.run(editions, calculation=port, publication_store=UnavailableAncestorStore())
+    assert result.execution.result.value == -0.25
+    assert len(port.requests) == 1

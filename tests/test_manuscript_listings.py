@@ -65,6 +65,5 @@ def test_join_and_regional_share_listings_retain_sources_and_match_polars(tmp_pa
                    for item in result.metadata()["binding"]["sources"]}
     assert released == regional_shares(plain.lazy()).collect().to_dicts()
     assert {("companies", "active"), ("market", "company_id"), ("market", "amount")} <= sources
-    assert audit["output"]["row_selection_sources"]
-    assert {item["policy_revision"] for item in audit["policies"]} == set(
-        frame._tn.policies.revision_ids)
+    assert set(audit["policies"]) == set(frame._tn.policies.revision_ids)
+    assert "inputs" not in audit and "events" not in audit

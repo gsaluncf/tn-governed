@@ -30,11 +30,11 @@ def markdown(column):
 ### instruction
 The {column} field of customer_data for the configured local SQL demonstration.
 ### use_for
-Customer support computations by the assigned application and actor, with monitoring.
+Customer support computations by the assigned application and actor.
 ### do_not_use_for
-Marketing, public disclosure, or removal of contributing claims and source lineage.
+Marketing, public disclosure, or removal of applicable rules or attributed claims.
 ### consequences
-Retain the writer, exact incarnation, assigned rules, and operation evidence.
+Carry the assigned rules, original claims, and receipts for required actions.
 ### on_violation_or_error
 Record refusal or failure before releasing any unapproved result.
 """
@@ -226,7 +226,7 @@ class UnityGovernance:
                 self.policy_dag.admit(revision, self.trust.policy_revision)
                 revisions.append(revision)
             rule = {"actors": actors, "application": application, "purposes": purposes,
-                    "operations": sorted(OPERATIONS), "destinations": ["support-console"], "obligations": ["monitor"]}
+                    "operations": sorted(OPERATIONS), "destinations": ["support-console"], "obligations": []}
             rule.update(definition.get("rule", {}))
             fields[column] = {"kind": kind, "revision": revision.id, "scope": scope, "rule": rule}
         body = {"schema": "tn.sql-assignment.v1", "table": table, "source": source_identity,

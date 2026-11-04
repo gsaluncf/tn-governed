@@ -25,7 +25,7 @@ Claiming a pending report was reviewed or these synthetic values are market quot
 ### consequences
 Carry these conditions through derivatives. Send the exact report to internal-reviewer.
 ### on_violation_or_error
-Record outstanding actions and retain the report's source lineage.
+Record outstanding actions and retain the applicable rules with the report.
 """
 
 

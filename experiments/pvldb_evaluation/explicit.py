@@ -36,7 +36,6 @@ from uuid import uuid4
 
 from tn_governed.values.numeric import TNNumeric
 from tn_governed.values.numeric_codec import NUMERIC_TYPES
-from tn_governed.values.manifests import unique_origins
 from tn_governed.values.string import OperationDenied, TNString, _active
 
 
@@ -73,14 +72,8 @@ class ExplicitOperations:
             raise TypeError("contributors must be governed primitive handles")
         if not callable(compute):
             raise TypeError("compute must be a pure scalar callback")
-        literal_inputs = [dict(item) for item in literals]
-        if any(item.get("claims") != [] for item in literal_inputs):
+        if any(item.get("claims") != [] for item in literals):
             raise ValueError("ordinary literals have no source claims")
-        if parameters and not literal_inputs:
-            literal_inputs = [
-                {"parameter_index": index, "role": "operation-parameter", "claims": []}
-                for index in range(len(parameters))
-            ]
 
         context = self.context
         call_id = uuid4().hex
@@ -88,20 +81,11 @@ class ExplicitOperations:
             operation, values, None, parameters, call_id,
         )
         try:
-            claims = list(dict.fromkeys(claim.id for claim in request.claims))
-            origins = unique_origins(origin for _, binding, _ in metadata
-                                     for origin in binding["origins"])
-
             opened = context._open_values(request, values)
-            data = context._merge_opened(values, opened)
             content = compute(*(plain for _, plain in opened))
             if type(content) not in (str, *NUMERIC_TYPES):
                 raise NotImplementedError("explicit computation must return an ordinary string or supported number")
-            return context._publish(
-                data, content=content, declared=None, claims=claims, origins=origins,
-                values=values, request=request, decision_id=decision,
-                call_id=call_id, literals=literal_inputs,
-            )
+            return context.publish_value(content, request=request, metadata=metadata, actions=(decision,))
         except Exception as exc:
             context._append("Failure", request, call_id, {
                 "decision_id": decision, "error_type": type(exc).__name__,

@@ -1,8 +1,9 @@
-"""A verification run shares publication work while checking every sibling field."""
+"""A fresh verification pass checks the signed dataframe output and its governing editions."""
 
 from collections import Counter
 import functools
 import json
+import os
 import shutil
 from types import SimpleNamespace
 
@@ -36,7 +37,7 @@ def retained_frame(tmp_path_factory):
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(UnityCatalogRegistry, "_request", request)
-        result = run_case(root, "primitive", rows=5)
+        result = run_case(root, "primitive", rows=5, sdk_build_record=os.environ.get("TN_SDK_BUILD_RECORD"))
     assert result["completed"] and result["verified"], result
     return root
 
@@ -120,30 +121,26 @@ def observation(monkeypatch):
                            decoded=decoded, manifests=manifests, caches=caches, clears=clears)
 
 
-def assert_cleared(observation, *, minimum=3):
+def assert_cleared(observation, *, minimum=2):
     assert len(observation.caches) >= minimum
     assert all(cache.cache_info().maxsize is not None for cache in observation.caches)
     assert all(cache.cache_info().currsize == 0 for cache in observation.caches)
     assert len(observation.clears) == len(observation.caches)
 
 
-def test_shared_publications_are_verified_and_opened_once(saved_frame, observation):
+def test_verification_checks_the_output_without_opening_operands(saved_frame, observation):
     root, run = saved_frame
     result = module.verify_frame(root)
-    sources = {item["source_object_id"] for item in run["source_editions"]}
-    assert len(sources) == 2
-    for identity in sources:
-        assert observation.reads[identity] == 1
-        assert observation.receives[identity] == 1
-        assert observation.views[identity] == 1
-        assert observation.lineage[identity] == 1
-    assert len(observation.decoded) == 12  # Ten source fields and two numeric outputs.
-    references = run["evaluation"]["dataframe"][0]["input_references"] + [
-        run["outputs"][label]["reference"] for label in ("dataframe_result", "amount")]
-    assert len(observation.manifests) == len({reference["object_id"] for reference in references})
-    assert {payload for payload, kind in observation.decoded if kind == "int"} >= {
-        "1250", "1251", "1252", "1253", "1254"}
-    assert result["opa_decisions_replayed"] == 12
+    handle = run["outputs"]["dataframe_result"]["reference"]
+    identity = handle["object_id"]
+    assert result["output_reference"] == handle and result["value_matches_reference"]
+    assert result["source_rows"] == 5
+    assert observation.reads[identity] == observation.receives[identity] == 1
+    assert len(observation.decoded) == len(observation.manifests) == 1
+    for edition in run["source_editions"]:
+        assert observation.reads[edition["record_id"]] == 1
+        assert observation.reads[edition["source_object_id"]] == 0
+    assert not observation.lineage
     assert_cleared(observation)
 
 
@@ -153,7 +150,7 @@ def test_next_verification_rechecks_changed_inputs(saved_frame, observation, cha
     module.verify_frame(root)
     assert_cleared(observation)
     first_cache_ids = {id(cache) for cache in observation.caches}
-    source = run["source_editions"][0]["source_object_id"]
+    source = run["outputs"]["dataframe_result"]["reference"]["object_id"]
     if changed == "authority":
         run["authority"] = run["writers"][0]
         (root / "run.json").write_text(json.dumps(run), encoding="utf-8")
@@ -172,31 +169,20 @@ def test_next_verification_rechecks_changed_inputs(saved_frame, observation, cha
         assert observation.receives[source] == 1
 
 
-def test_duplicate_records_across_chains_are_rejected(saved_frame, observation):
+def test_omitted_edition_is_rejected(saved_frame, observation):
     root, run = saved_frame
-    checkpoint = next(iter(run["tapes"].values()))
-    run["tapes"]["duplicate"] = dict(checkpoint)
-    (root / "run.json").write_text(json.dumps(run), encoding="utf-8")
-    with pytest.raises(EvidenceError, match="duplicate evidence record"):
+    run["source_editions"].pop()
+    (root / "run.json").write_text(json.dumps(run))
+    with pytest.raises((EvidenceError, GovernedError)):
         module.verify_frame(root)
-    assert_cleared(observation, minimum=2)
+    assert_cleared(observation)
 
 
-def test_cached_publication_still_checks_each_siblings_declared_facts(saved_frame, observation, monkeypatch):
-    root, run = saved_frame
+def test_signed_declared_facts_checked_on_current_output(saved_frame, observation, monkeypatch):
+    root, _ = saved_frame
     describe = module.describe
-
-    def wrong_second_field(value):
-        facts = describe(value)
-        if type(value) is int and value == 1251:
-            return {**facts, "kind": "float"}
-        return facts
-
-    monkeypatch.setattr(module, "describe", wrong_second_field)
-    with pytest.raises(EvidenceError, match="declared facts"):
+    monkeypatch.setattr(module, "describe", lambda value: {**describe(value), "kind": "float"})
+    with pytest.raises(EvidenceError, match="published dataframe amount"):
         module.verify_frame(root)
-    source = next(item["source_object_id"] for item in run["source_editions"]
-                  if item["dataset"].endswith(".value"))
-    assert observation.receives[source] == 1
-    assert ("1250", "int") in observation.decoded and ("1251", "int") in observation.decoded
+    assert len(observation.decoded) == 1
     assert_cleared(observation)

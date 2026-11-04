@@ -61,11 +61,10 @@ def test_retained_constructor_handle_cannot_mutate_native_siblings(tmp_path):
         released_ids = []
         for child in (first, second):
             independent = child.tn_object
-            assert independent.get("rows", group="finance") == [{"amount": 42}]
             assert len(independent.policies) == 1
             assert independent.policies[0].matches_contract(original_policy)
             assert independent.dataset_bindings == original_bindings
-            assert {source.object_id for source in independent.sources} == original_sources
+            assert not independent.sources
 
             publication = child.release_tn(
                 use=BUSINESS_USE, to="internal",
@@ -75,7 +74,7 @@ def test_retained_constructor_handle_cannot_mutate_native_siblings(tmp_path):
             assert len(governance.policies) == 1
             assert governance.policies[0].matches_contract(original_policy)
             assert governance.dataset_bindings == original_bindings
-            assert {source.object_id for source in governance.sources} == original_sources
+            assert not governance.sources
             result = session.receive(publication, use=BUSINESS_USE, groups=["finance"],
                                      decide=lambda _: True)
             assert result.get("rows", group="finance") == [{"amount": 42}]

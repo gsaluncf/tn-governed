@@ -19,7 +19,7 @@ from .query_receipt import QueryTransport, check_result_binding
 from .runtime import Request
 from .string import MetadataUnavailable, ValueReference
 
-RESULT_SCHEMA = "tn.sql-result.v1"
+RESULT_SCHEMA = "tn.sql-result.v2"
 
 
 @dataclass(frozen=True)
@@ -32,31 +32,32 @@ class AdmittedQuery:
     reference: ValueReference
     decision_id: str
     claims: tuple = ()
+    actions: tuple = ()
 
 
-def publish_result(context, rows, binding, lineage, *, request, decision_id, query_id):
+def publish_result(context, rows, binding, *, request, decision_id, query_id):
     """Publish one relation under the full query policy union, including controls."""
     policies = request.policies
     if not policies:
         raise ValueError("query result requires source policies")
-    # Native creation seals a retained ancestor. Business content is added only
-    # after every value and control dependency's contract has been attached.
-    data = context.session.create({}, policies[0], object_type=VALUE_TYPE, group="values")
-    context.recorder.store.put(data.snapshot)
+    authority = context.session.create({}, policies[0], object_type=VALUE_TYPE, group="values")
     for policy in policies[1:]:
-        data.attach(
+        authority.attach(
             policy, decide=lambda ctx, expected=policy: ctx.policy.matches_contract(expected)
         )
-    data.set("rows", [[encode_sql(value) for value in row] for row in rows.rows], group="values")
     manifest = {
         "schema": RESULT_SCHEMA,
         "binding": binding,
         "binding_id": digest(binding),
         "decision_id": decision_id,
         "row_count": len(rows.rows),
-        "lineage": lineage,
+        "actions": [decision_id] if context.recorder.read(decision_id).body["details"]["obligations"] else [],
     }
-    data.set(None, {"manifest": manifest}, group="evidence")
+    data = authority.policy_output(VALUE_TYPE, {
+        "values": {"rows": [[encode_sql(value) for value in row] for row in rows.rows]},
+        "evidence": {"manifest": manifest},
+    })
+    data.bind_manifest("evidence")
     publication = context._release_value(data, request)
     result_id = context._append(
         "Result",
@@ -69,7 +70,6 @@ def publish_result(context, rows, binding, lineage, *, request, decision_id, que
             "field_commitment": field_hash(publication, "values", "rows"),
             "binding_id": manifest["binding_id"],
             "manifest_id": digest(manifest),
-            "transition": {"governed_inputs": [], "retained_claims": [], "literal_inputs": []},
             "source": {"query_id": query_id, "schema": RESULT_SCHEMA},
         },
     )
@@ -112,7 +112,7 @@ class GovernedQueryResult:
         self.publication = publication
         metadata = self.metadata()
         if self.publication is None:
-            self.publication = self._carried(context)
+            self.publication = self._carried(context, metadata)
         self.description = tuple(
             (column["name"], None, None, None, None, None, None)
             for column in metadata["binding"]["output_schema"]
@@ -125,7 +125,10 @@ class GovernedQueryResult:
             raise MetadataUnavailable("query processing requires binding to a receiving context")
         return context
 
-    def _carried(self, context):
+    def _carried(self, context, manifest):
+        if manifest["schema"] == RESULT_SCHEMA:
+            return CarriedPublication(context.store_object(self.object_id),
+                support=(context.store_object(self.decision_id), context.store_object(self.result_id)))
         objects, pending = {}, [self.object_id, self.decision_id, self.result_id]
         while pending:
             identity = pending.pop()
@@ -137,10 +140,6 @@ class GovernedQueryResult:
             objects[identity] = obj
             view = context.session.governance(obj)
             pending.extend(source.object_id for source in view.governance.sources)
-            if obj.object_type == "experiment.evidence":
-                record = context.recorder.read(identity)
-                if record.body["previous"] is not None:
-                    pending.append(record.body["previous"])
         return CarriedPublication(
             objects[self.object_id],
             support=tuple(obj for identity, obj in objects.items() if identity != self.object_id),
@@ -288,7 +287,7 @@ class GovernedQueryResult:
         manifest = data.get("manifest", group="evidence")
         if (
             not isinstance(manifest, dict)
-            or manifest.get("schema") != RESULT_SCHEMA
+            or manifest.get("schema") not in {RESULT_SCHEMA, "tn.sql-result.v1"}
             or manifest.get("decision_id") != self.decision_id
             or manifest.get("binding_id") != digest(manifest.get("binding"))
         ):
@@ -319,6 +318,8 @@ class GovernedQueryResult:
             != [{key: value for key, value in binding.items() if key != "output_schema"}]
             or rb["details"].get("field_commitment")
             != field_hash(data.snapshot, "values", "rows")
+            or (manifest["schema"] == RESULT_SCHEMA and
+                manifest.get("actions") != ([self.decision_id] if db["details"].get("obligations") else []))
             or db["details"].get("permitted") is not True
             or rb["sequence"] <= db["sequence"]
             or any(
@@ -421,9 +422,11 @@ class GovernedQueryResult:
                     "outcome": "admitted-for-processing",
                 },
             )
-            return AdmittedQuery(
-                opened, rows, manifest, reference, decision, tuple(manifest.get("claims", ()))
-            )
+            actions = list(manifest.get("actions", ()))
+            if self.context.recorder.read(decision).body["details"].get("obligations"):
+                actions.append(decision)
+            return AdmittedQuery(opened, rows, manifest, reference, decision,
+                                 tuple(manifest.get("claims", ())), tuple(dict.fromkeys(actions)))
         except Exception as exc:
             self.context._append(
                 "Failure",

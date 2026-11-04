@@ -16,7 +16,7 @@ from .evidence import require
 from .model import runtime_limits_from_config
 from .report_profile import visible_text
 
-_SCOPE = ("Independent native recipient admission and lineage verification; exact transport and signed "
+_SCOPE = ("Independent native recipient and policy admission; exact transport and signed "
           "evidence bindings; notice found in unstyled HTML. Native process logs are supporting "
           "observations, not signed remote attestation.")
 
@@ -87,12 +87,12 @@ class Exchange:
 
 
 def verify_model(root, run, records, by_id, rules, nodes, bindings, store, catalog, dag, resolve, hash_key):
-    """`resolve` gives an ancestor's governance view; `hash_key` derives a view's governance
+    """`resolve` opens governance for the submitted object; `hash_key` derives a view's governance
     hash key through the observer's own reader, never from the evidence being checked."""
     ctx = Verified(root, run["model"], records, by_id, rules, nodes, bindings, store, catalog, dag,
                    resolve, hash_key)
     handoff = _handoff(ctx)
-    limits, section = _runtime_section(ctx, handoff)
+    limits, section, profile = _runtime_section(ctx, handoff)
     exchange = _exchange(ctx, handoff)
     results = [r for r in records if r.body["kind"] == "ModelResult"]
     if not ctx.model["completed"]:
@@ -100,16 +100,17 @@ def verify_model(root, run, records, by_id, rules, nodes, bindings, store, catal
     result = _model_result(ctx, handoff, exchange, results)
     release, trace = _release(ctx, handoff, exchange, result)
     review = _check_review(ctx, handoff, exchange, result, release, trace)
-    visible = _open_report(ctx, handoff, result, release, section, limits, exchange.request_digest)
+    visible = _open_report(ctx, handoff, result, release, section, limits, exchange.request_digest, profile)
     outcome = {"completed": True, "input_object_id": handoff.source.id,
                "output_object_id": release.output_object.id,
                "tool_object_ids": [o.id for o in release.tool_objects], "required_disclosure": handoff.notice,
                "visible_report_text": visible, "source_policy_revisions": handoff.revisions,
                "source_claim_ids": bindings[handoff.key]["claims"],
-               "native_edges": _native_edges(ctx, handoff, release, section),
                "request_digest": exchange.request_digest, "review": review,
                "native_observations": exchange.observations, "scope": _SCOPE}
-    (root / "model-lineage.json").write_text(json.dumps(outcome, indent=2), encoding="utf-8")
+    if not profile.get("carried_policy"):
+        outcome["native_edges"] = _native_edges(ctx, handoff, release, section)
+        (root / "model-lineage.json").write_text(json.dumps(outcome, indent=2), encoding="utf-8")
     return outcome
 
 
@@ -169,7 +170,7 @@ def _runtime_section(ctx, handoff):
     require(section["required_attribution"] == handoff.notice and section["propagate_source_governance"] is True
             and all(section["required_tool"] == m["required_tool"] for m in handoff.declarations),
             "native gate does not carry the complete disclosure/compliance requirement")
-    return runtime_limits_from_config(config), section
+    return runtime_limits_from_config(config), section, config["governed_objects"]
 
 
 def _exchange(ctx, handoff):
@@ -303,13 +304,16 @@ def _review_notifications(audit, trace, run_id, notice):
             and notice in base64.b64decode(r["rendered_prompt_b64"]).decode("utf-8")]
 
 
-def _open_report(ctx, handoff, result, release, section, limits, request_digest):
+def _open_report(ctx, handoff, result, release, section, limits, request_digest, profile):
     """Admit the report as the enrolled recipient; its visible text carries every original notice."""
+    carried_policy = profile.get("carried_policy", False)
     use = tn.UseContext(**ctx.model["recipient_use"])
     with tn.Session.from_config(str(ctx.root / ctx.model["recipient_config"])) as recipient:
         reader = NativeOutputReader(recipient, expected_source=handoff.source, expected_writer=ctx.model["writer"],
             use=use, destination=ctx.model["destination"], release_use=tn.UseContext(**ctx.model["use"]),
-            catalog=ctx.catalog, policy_dag=ctx.dag, resolve_ancestor=ctx.resolve,
+            catalog=ctx.catalog, policy_dag=ctx.dag, resolve_ancestor=None if carried_policy else ctx.resolve,
+            expected_source_view=ctx.resolve(handoff.source.id) if carried_policy else None,
+            carried_policy=carried_policy, source_edition_id=profile.get("source_edition_id"),
             decide=lambda admitted: admitted.use_context == use,
             expected_tool_name=section["required_tool"], expected_tool_sections=("values",),
             required_tools=(section["required_tool"],), expected_request_digest=request_digest,

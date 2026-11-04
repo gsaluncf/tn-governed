@@ -10,7 +10,7 @@ use crate::governed_input::{refused, AcceptedGovernedRequest, GovernedInputRunti
 use crate::reference_runs::Subject;
 use crate::TnLlamaError;
 
-const CLAIM_BODY_FIELDS: [&str; 12] = [
+const EVIDENCE_BODY_FIELDS: [&str; 12] = [
     "schema",
     "context_id",
     "sequence",
@@ -76,7 +76,9 @@ impl GovernedInputRuntime {
         Ok(claims)
     }
 
-    fn claim_records_by_id(&self) -> Result<BTreeMap<String, GovernedObject>, TnLlamaError> {
+    pub(super) fn claim_records_by_id(
+        &self,
+    ) -> Result<BTreeMap<String, GovernedObject>, TnLlamaError> {
         let mut records = BTreeMap::new();
         for wire in &self.claim_records {
             let record =
@@ -130,7 +132,19 @@ impl GovernedInputRuntime {
         Ok(())
     }
 
-    fn open_claim(
+    pub(super) fn open_claim(
+        &self,
+        record: &GovernedObject,
+        request: &AcceptedGovernedRequest,
+    ) -> Result<(Map<String, Value>, Governance), TnLlamaError> {
+        let (body, governance) = self.open_evidence(record, request)?;
+        if !is_claim_body(&body) {
+            return Err(refused("tn_claim_record_invalid"));
+        }
+        Ok((body, governance))
+    }
+
+    pub(super) fn open_evidence(
         &self,
         record: &GovernedObject,
         request: &AcceptedGovernedRequest,
@@ -168,17 +182,16 @@ impl GovernedInputRuntime {
             .get("record")
             .and_then(Value::as_object)
             .ok_or_else(|| refused("tn_claim_record_invalid"))?;
-        if fields.len() != 1 || !is_claim_body(body) {
+        if fields.len() != 1 || !is_evidence_body(body) {
             return Err(refused("tn_claim_record_invalid"));
         }
         Ok((body.clone(), governance))
     }
 }
 
-/// A signed attest record: every evidence field, nonempty identities, and a nonblank statement.
-fn is_claim_body(body: &Map<String, Value>) -> bool {
-    body.len() == CLAIM_BODY_FIELDS.len()
-        && CLAIM_BODY_FIELDS
+fn is_evidence_body(body: &Map<String, Value>) -> bool {
+    body.len() == EVIDENCE_BODY_FIELDS.len()
+        && EVIDENCE_BODY_FIELDS
             .iter()
             .all(|field| body.contains_key(*field))
         && ["context_id", "call_id", "application", "purpose"]
@@ -193,7 +206,10 @@ fn is_claim_body(body: &Map<String, Value>) -> bool {
             .and_then(Value::as_u64)
             .is_some_and(|sequence| sequence != 0)
         && body.get("schema") == Some(&json!("tn.string-evidence.v1"))
-        && body.get("kind") == Some(&json!("Claim"))
+}
+
+fn is_claim_body(body: &Map<String, Value>) -> bool {
+    body.get("kind") == Some(&json!("Claim"))
         && body.get("operation") == Some(&json!("attest"))
         && body
             .get("details")

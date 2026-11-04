@@ -3,7 +3,7 @@ revision = 3
 requires-python = "==3.12.*"
 
 [manifest]
-overrides = [{ name = "tn-proto", path = "vendor/wheels/648ec96686e59efaa0b82af88cd8b1126568b15ce43718c8089cdaa7811de2f4/tn_proto-2026.9.10b2.dev2-cp39-abi3-win_amd64.whl" }]
+overrides = [{ name = "tn-proto", path = "vendor/wheels/799dbb899c5bdd08c6915ab3d3c1d945847b60fec076d6255ca2250d0e8642ed/tn_proto-2026.9.13b1+policy.1-cp39-abi3-win_amd64.whl" }]
 
 [[package]]
 name = "annotated-doc"
@@ -764,7 +764,7 @@ requires-dist = [
     { name = "sqlglot", specifier = "==28.10.1" },
     { name = "tn-llama-client", editable = "dependencies/tn-llama-client" },
     { name = "tn-polars", editable = "dependencies/tn-polars" },
-    { name = "tn-proto", path = "vendor/wheels/648ec96686e59efaa0b82af88cd8b1126568b15ce43718c8089cdaa7811de2f4/tn_proto-2026.9.10b2.dev2-cp39-abi3-win_amd64.whl" },
+    { name = "tn-proto", path = "vendor/wheels/799dbb899c5bdd08c6915ab3d3c1d945847b60fec076d6255ca2250d0e8642ed/tn_proto-2026.9.13b1+policy.1-cp39-abi3-win_amd64.whl" },
     { name = "uvicorn", marker = "extra == 'engine-service'", specifier = ">=0.34,<1" },
     { name = "wasmtime", specifier = ">=25" },
 ]
@@ -779,7 +779,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "tn-proto", specifier = "==2026.9.10b2.dev2" }]
+requires-dist = [{ name = "tn-proto", specifier = "==2026.9.13b1+policy.1" }]
 
 [[package]]
 name = "tn-polars"
@@ -788,7 +788,6 @@ source = { editable = "dependencies/tn-polars" }
 dependencies = [
     { name = "cloudpickle" },
     { name = "polars" },
-    { name = "python-dotenv" },
     { name = "tn-proto" },
     { name = "wasmtime" },
 ]
@@ -797,15 +796,14 @@ dependencies = [
 requires-dist = [
     { name = "cloudpickle", specifier = "==3.1.2" },
     { name = "polars", specifier = "==1.39.3" },
-    { name = "python-dotenv", specifier = ">=1.0" },
-    { name = "tn-proto", specifier = "==2026.9.10b2.dev2" },
+    { name = "tn-proto", specifier = "==2026.9.13b1+policy.1" },
     { name = "wasmtime", specifier = ">=25,<49" },
 ]
 
 [[package]]
 name = "tn-proto"
-version = "2026.9.10b2.dev2"
-source = { path = "vendor/wheels/648ec96686e59efaa0b82af88cd8b1126568b15ce43718c8089cdaa7811de2f4/tn_proto-2026.9.10b2.dev2-cp39-abi3-win_amd64.whl" }
+version = "2026.9.13b1+policy.1"
+source = { path = "vendor/wheels/799dbb899c5bdd08c6915ab3d3c1d945847b60fec076d6255ca2250d0e8642ed/tn_proto-2026.9.13b1+policy.1-cp39-abi3-win_amd64.whl" }
 dependencies = [
     { name = "base58" },
     { name = "cryptography" },
@@ -821,7 +819,7 @@ dependencies = [
     { name = "typing-extensions" },
 ]
 wheels = [
-    { filename = "tn_proto-2026.9.10b2.dev2-cp39-abi3-win_amd64.whl", hash = "sha256:648ec96686e59efaa0b82af88cd8b1126568b15ce43718c8089cdaa7811de2f4" },
+    { filename = "tn_proto-2026.9.13b1+policy.1-cp39-abi3-win_amd64.whl", hash = "sha256:799dbb899c5bdd08c6915ab3d3c1d945847b60fec076d6255ca2250d0e8642ed" },
 ]
 
 [package.metadata]

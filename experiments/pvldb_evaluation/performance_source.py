@@ -3,8 +3,8 @@
 Each reader has a distinct signing key, BTN reader kit, native session, catalog,
 evaluator and native object collection. Source publisher states are read without mutation.
 Enrollment, publication transfer and signed catalog admission happen outside request
-timing. Recipient requests still verify the carried value and its lineage and
-make their own authorization decisions.
+timing. Each recipient verifies the value's signed policies and makes its own
+authorization decision.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from tn_governed.values.string import ValueReference
 
 def _source_manifest(source):
     manifest = json.loads((source / "run.json").read_text(encoding="utf-8"))
-    if manifest.get("schema") != "tn.primitive-run.v1":
+    if manifest.get("schema") not in {"tn.primitive-run.v1", "tn.policy-run.v2"}:
         raise ValueError("recipient workload requires a retained primitive run")
     if not manifest.get("outputs", {}).get("model_input"):
         raise ValueError("recipient workload requires a retained model-input value")
@@ -44,14 +44,45 @@ def _source_manifest(source):
     return manifest
 
 
-def _transfer_publications(source, destination):
+def _transfer_publications(source, destination, identities=None):
     with open_publication_store(source, read_only=True) as archive:
-        NativeObjects.from_archive(archive).export(destination)
+        if identities is None:
+            NativeObjects.from_archive(archive).export(destination)
+        else:
+            with NativeObjects() as received:
+                for identity in identities:
+                    received.put(archive.read(identity))
+                received.export(destination)
+
+
+def _transfer_editions(source, destination, editions):
+    required = {item["record_id"] for item in editions}
+    for index in source.glob("*/editions.json"):
+        document = json.loads(index.read_bytes())
+        selected = [item for item in document["editions"] if item["record_id"] in required]
+        if selected:
+            folder = destination / index.parent.name
+            for item in selected:
+                bundle = _index_bundle(index.parent.resolve(), item["bundle"])
+                shutil.copytree(bundle, _index_bundle(folder.resolve(), item["bundle"]))
+            (folder / index.name).write_text(json.dumps({**document, "editions": selected}), encoding="utf-8")
 
 
 def _prepare(source, destinations):
-    _source_manifest(source)
-    manifest_bytes = (source / "run.json").read_bytes()
+    manifest = _source_manifest(source)
+    identities = None
+    if manifest["schema"] == "tn.policy-run.v2":
+        identities = set(manifest["recipient_objects"])
+        brief = manifest["outputs"]["model_input"]
+        if brief["reference"]["object_id"] not in identities or manifest["assignment_id"] not in identities:
+            raise ValueError("recipient transfer is missing the authorized result or assignment")
+        manifest = {key: manifest[key] for key in ("schema", "authority", "writers", "audit_policy",
+                    "administration_policy", "assignment_id", "source", "request", "source_editions")} | {
+                    "outputs": {"model_input": brief}}
+        manifest["source_editions"] = [item for item in manifest["source_editions"] if item["record_id"] in identities]
+        manifest_bytes = json.dumps(manifest).encode()
+    else:
+        manifest_bytes = (source / "run.json").read_bytes()
     catalog = source / "sessions" / "catalog"
     configuration = yaml.safe_load((catalog / "tn.yaml").read_text(encoding="utf-8"))
     key_root = Path(configuration["keystore"]["path"])
@@ -80,8 +111,10 @@ def _prepare(source, destinations):
             yaml.safe_dump(local_configuration), encoding="utf-8"
         )
         shutil.copytree(catalog / ".tn", session_root / ".tn")
-        _transfer_publications(source / "publications", destination / "publications")
-        if (source / "editions").is_dir():
+        _transfer_publications(source / "publications", destination / "publications", identities)
+        if identities is not None:
+            _transfer_editions(source / "editions", destination / "editions", manifest["source_editions"])
+        elif (source / "editions").is_dir():
             shutil.copytree(source / "editions", destination / "editions")
         (destination / "run.json").write_bytes(manifest_bytes)
         (destination / "recipient.json").write_text(json.dumps({

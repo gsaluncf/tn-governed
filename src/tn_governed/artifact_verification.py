@@ -1,15 +1,12 @@
-"""Verify an artifact's manifest against its signed records, its parents, and its external inputs.
-
-Each check is an application check on signed records; the endpoint's native session
-admits and opens the publications. A cache belongs to one verification pass.
-"""
+"""Check the carried rules, claims, and action records of a signed publication."""
 
 from __future__ import annotations
 
 from .artifact_types import MANIFEST_GROUP, GovernedArtifact, artifact_json, check_manifest
 from .native_objects import include_carrier
-from .values.evidence import EvidenceError
+from .values.evidence import OBJECT_ID, EvidenceError, check_monitor
 from .values.holders import field_hash, holds_field
+from .values.manifests import POLICY_SCHEMA, SCHEMAS, signed_manifest
 from .values.references import unpack_references
 from .values.runtime import Claim
 from .values.string import ValueReference
@@ -18,7 +15,7 @@ _CALL_FIELDS = ("context_id", "call_id", "application", "purpose", "operation", 
 _RELEASE_FIELDS = ("application", "purpose", "operation", "destination")
 
 
-def verify_artifact(endpoint, artifact, cache=None, depth=0):
+def verify_artifact(endpoint, artifact, cache=None):
     """The artifact's admitted evidence, manifest, and claims, once every check holds."""
     if not isinstance(artifact, GovernedArtifact):
         raise TypeError("governed endpoint inputs require GovernedArtifact handles")
@@ -27,30 +24,21 @@ def verify_artifact(endpoint, artifact, cache=None, depth=0):
     cache = {} if cache is None else cache
     if artifact in cache:
         return cache[artifact]
-    if depth > 256:
-        raise EvidenceError("artifact ancestry exceeds the verification depth limit")
     obj = endpoint.store.read(artifact.reference.object_id)
     data = endpoint.session.receive(obj, use=endpoint.inspect_use, groups=[MANIFEST_GROUP], decide=endpoint._admit)
     manifest = data.get("manifest", group=MANIFEST_GROUP)
     check_manifest(manifest, artifact.decision_id)
-    parents = tuple(GovernedArtifact.from_dict(parent) for parent in manifest["parents"])
-    external = tuple(ValueReference(**reference) for reference in manifest["external_inputs"])
-    view = endpoint.session.governance(obj)
-    inputs = [parent.reference.to_dict() for parent in parents] + [item.to_dict() for item in external]
-    decision = _check_operation_records(endpoint, artifact, obj, view, manifest, inputs)
-    _check_required_actions(endpoint, decision)
+    if not holds_field(obj, artifact.reference.group, artifact.reference.field):
+        raise EvidenceError("artifact value is absent from the signed publication")
+    if artifact.decision_id:
+        _check_operation_records(endpoint, artifact, obj, endpoint.session.governance(obj), manifest)
     claims = _read_claims(endpoint, manifest)
     _check_disputes_and_actions(endpoint, artifact, manifest)
-    inherited = _parent_policies(endpoint, parents, manifest, cache, depth) + _external_policies(endpoint, external)
-    _check_policy_union(inherited, data.policies)
-    direct = {item.reference.object_id for item in parents} | {item.object_id for item in external}
-    if not direct <= {source.object_id for source in view.governance.sources}:
-        raise EvidenceError("artifact native provenance omits a direct input")
     cache[artifact] = data, artifact_json(manifest), tuple(claims)
     return cache[artifact]
 
 
-def _check_operation_records(endpoint, artifact, obj, view, manifest, inputs):
+def _check_operation_records(endpoint, artifact, obj, view, manifest):
     """The Decision and Result agree with the manifest, the native commitments, and each other."""
     decision, result = endpoint._record(artifact.decision_id), endpoint._record(artifact.result_id)
     db, rb = decision.body, result.body
@@ -67,7 +55,6 @@ def _check_operation_records(endpoint, artifact, obj, view, manifest, inputs):
         or db["operation"] != manifest["operation"]
         or db["details"].get("parameters") != manifest["parameters"]
         or db["destination"] != manifest["destination"]
-        or unpack_references(db["inputs"]) != inputs
         or rb["sequence"] <= db["sequence"]
         or any(rb[key] != db[key] for key in _CALL_FIELDS)
         or view.governance.fields.get("release_context") != {key: db[key] for key in _RELEASE_FIELDS}
@@ -81,13 +68,22 @@ def _check_required_actions(endpoint, decision):
     db = decision.body
     progress, discharged = db["details"].get("action_progress"), db["details"].get("discharged")
     if (
-        not isinstance(progress, list)
-        or not isinstance(discharged, list)
-        or len(progress) != len(discharged)
+        not isinstance(discharged, list)
+        or (progress is not None and (not isinstance(progress, list) or len(progress) != len(discharged)))
         or [step.get("obligation") for step in discharged] != db["details"].get("obligations")
-        or any(step.get("satisfied") is not True for step in discharged)
+        or any(step.get("satisfied") is not True or not isinstance(step.get("evidence"), str)
+               or not step["evidence"].strip() for step in discharged)
     ):
         raise EvidenceError("artifact decision has incomplete required-action evidence")
+    if progress is None:
+        for step in discharged:
+            if OBJECT_ID.fullmatch(step["evidence"]):
+                receipt = endpoint._record(step["evidence"])
+                if step["obligation"] == "monitor":
+                    check_monitor(decision, receipt)
+            elif step["obligation"] == "monitor":
+                raise EvidenceError("monitoring requires a signed receipt")
+        return
     for index, (identity, step) in enumerate(zip(progress, discharged, strict=True)):
         observation = endpoint._record(identity)
         body = observation.body
@@ -121,77 +117,59 @@ def _check_disputes_and_actions(endpoint, artifact, manifest):
         ):
             raise EvidenceError("artifact dispute is not bound to its original claim")
     for identity in manifest["action_records"]:
-        if endpoint._record(identity).body["kind"] != "Decision":
+        decision = endpoint._record(identity)
+        if decision.body["kind"] != "Decision" or decision.body["details"].get("permitted") is not True:
             raise EvidenceError("action evidence must reference signed decisions")
-    if artifact.decision_id not in manifest["action_records"]:
+        _check_required_actions(endpoint, decision)
+    if artifact.decision_id and artifact.decision_id not in manifest["action_records"]:
         raise EvidenceError("artifact omits its producing action decision")
 
 
-def _parent_policies(endpoint, parents, manifest, cache, depth):
-    """Verify each parent; the artifact keeps its claims, actions, and disputes. Return their policies."""
-    inherited = []
-    for parent in parents:
-        parent_data, parent_manifest, _ = verify_artifact(endpoint, parent, cache, depth + 1)
-        inherited.extend(parent_data.policies)
-        if (
-            not set(parent_manifest["claims"]) <= set(manifest["claims"])
-            or not set(parent_manifest["action_records"]) <= set(manifest["action_records"])
-            or any(dispute not in manifest["disputes"] for dispute in parent_manifest["disputes"])
-        ):
-            raise EvidenceError("artifact omits contributing claims or completed-action evidence")
-    return inherited
-
-
-def _external_policies(endpoint, external):
-    """Admit each external input's group; return the policies its admitted route carries."""
-    inherited = []
-    for reference in external:
-        source = endpoint.store.read(reference.object_id)
-        # Native admission asks the source and each object on the path to the group's
-        # holder; the admitted route holds the policies a received copy holds.
-        inherited.extend(endpoint.session.admit(source, use=endpoint.inspect_use, groups=[reference.group],
-                                                decide=endpoint.accept_metadata).policies)
-        if not holds_field(source, reference.group, reference.field):
-            raise EvidenceError("external input does not identify a signed field")
-    return inherited
-
-
-def _check_policy_union(inherited, policies):
-    if inherited and (
-        not all(any(policy.matches_contract(other) for other in policies) for policy in inherited)
-        or not all(any(policy.matches_contract(other) for other in inherited) for policy in policies)
-    ):
-        raise EvidenceError("artifact does not preserve its contributing policy union")
-
-
-def external_claims(endpoint, publication, identities, limit=10000):
-    """The signed Claims an import carries; each subject is a signed field of the publication's ancestry."""
-    lineage = _external_lineage(endpoint, publication, limit) if identities else {}
-    claims = []
-    for identity in identities:
-        record = endpoint._record(identity)
-        if record.body["kind"] != "Claim" or not isinstance(record.body["details"].get("statement"), str):
-            raise EvidenceError("external claim reference is not a claim")
-        subjects = tuple(ValueReference(**item) for item in unpack_references(record.body["inputs"]))
-        if not subjects or any(
-            subject.object_id not in lineage
-            or not holds_field(lineage[subject.object_id], subject.group, subject.field)
-            for subject in subjects
-        ):
-            raise EvidenceError("external claim subject is not a contributing signed field")
-        claims.append(Claim(record.id, record.writer, subjects, record.body["details"]["statement"]))
+def external_claims(endpoint, publication, reference, identities, bound_claims):
+    """Accept claims named by the field's signed manifest or made about this field directly."""
+    claims = _read_claims(endpoint, {"claims": identities})
+    for claim in claims:
+        if claim.id not in bound_claims and (reference not in claim.subjects or
+                not holds_field(publication, reference.group, reference.field)):
+            raise EvidenceError("external claim subject is not bound to the imported field")
     return claims
 
 
-def _external_lineage(endpoint, publication, limit):
-    lineage, pending = {}, [publication.id]
-    while pending:
-        identity = pending.pop()
-        if identity in lineage:
-            continue
-        if len(lineage) >= limit:
-            raise EvidenceError("external ancestry exceeds the configured object limit")
-        ancestor = endpoint.store.read(identity)
-        lineage[identity] = ancestor
-        pending.extend(source.object_id for source in endpoint.session.governance(ancestor).governance.sources)
-    return lineage
+def imported_field_evidence(endpoint, data, metadata_group, group, field):
+    fields = data.get(group=metadata_group)
+    frame = fields.get("tn_polars_governance")
+    manifest = fields.get("manifest")
+    if frame is not None:
+        if (frame.get("schema"), frame.get("group"), frame.get("rows_field")) != (
+            "tn.polars-governance.v2", group, field
+        ):
+            raise EvidenceError("frame governance does not describe the imported field")
+        binding = frame
+    elif isinstance(manifest, dict) and manifest.get("schema") == "tn.governed-fields.v1":
+        binding = manifest["bindings"].get(field)
+        if not isinstance(binding, dict) or binding.get("group") != group:
+            raise EvidenceError("no governance binding for the imported field")
+    elif isinstance(manifest, dict) and manifest.get("schema") == "tn.sql-result.v2":
+        if (group, field) != ("values", "rows"):
+            raise EvidenceError("SQL governance does not describe the imported field")
+        binding = {"claims": [], "actions": manifest["actions"]}
+    elif isinstance(manifest, dict) and manifest.get("schema") in SCHEMAS:
+        if metadata_group != MANIFEST_GROUP or group != "values":
+            raise EvidenceError("primitive governance does not describe the imported group")
+        binding = signed_manifest(data)["bindings"].get(field)
+        if binding is None:
+            raise EvidenceError("no governance binding for the imported field")
+        if manifest["schema"] != POLICY_SCHEMA:
+            decision = endpoint._record(binding["decision_id"])
+            binding = {**binding, "actions": [decision.id] if decision.body["details"].get("obligations") else []}
+    else:
+        return (), ()
+    claims, actions = binding["claims"], binding["actions"]
+    if not all(isinstance(ids, list) and all(isinstance(i, str) for i in ids) for ids in (claims, actions)):
+        raise EvidenceError("invalid evidence on the imported field")
+    for identity in actions:
+        decision = endpoint._record(identity)
+        if decision.body["kind"] != "Decision" or decision.body["details"].get("permitted") is not True:
+            raise EvidenceError("import requires signed action decisions")
+        _check_required_actions(endpoint, decision)
+    return claims, actions

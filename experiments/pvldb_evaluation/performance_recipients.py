@@ -53,7 +53,12 @@ def _request(recipient):
     try:
         admitted = context.hydrate(value.reference, value.decision_id, value.result_id, kind="str")
         content = admitted.reveal(context, destination=recipient["destination"])
-        if content != recipient["manifest"]["console_disclosures"]["internal"]:
+        expected = recipient["manifest"].get("console_disclosures")
+        if expected is None:
+            # The internal coordinator receives the authorized disclosure over
+            # its private worker pipe and removes it before saving the result.
+            result["released_content"] = content
+        elif content != expected["internal"]:
             raise AssertionError("recipient content differs from the retained workload result")
         result["status"] = "completed"
     except Exception as error:
@@ -69,6 +74,13 @@ def _request(recipient):
         identity=recipient["session"].did, pid=os.getpid(),
     )
     return result
+
+
+def _check_disclosures(requests, expected):
+    for response in requests:
+        actual = response.pop("released_content", None)
+        if response.get("status") == "completed" and actual != expected:
+            response.update(status="failed", error_type="AssertionError", failure_stage="verification")
 
 
 def _worker(directory, connection, barrier):
@@ -135,7 +147,7 @@ def run_recipients(source_directory, output_directory, concurrency, repetitions,
         "concurrency": concurrency, "repetitions": repetitions, "warmups": warmups,
         "clock": "time.perf_counter_ns", "process_start_method": "spawn",
         "timed_operation": (
-            "hydrate, verify lineage, authorize, open, record disclosure, compare content"
+            "hydrate, verify carried governance, authorize, open, and record disclosure"
         ),
         "excluded_setup": (
             "enrollment, publication transfer, process startup, signed catalog admission"
@@ -144,6 +156,7 @@ def run_recipients(source_directory, output_directory, concurrency, repetitions,
             "admitted local catalog; request-local value verification; no decision reuse"
         ),
         "round_wall_boundary": "before request dispatch through receipt of every worker result",
+        "content_check": "the coordinator compares each authorized disclosure with the producer result after receipt",
         "response_evidence": "native signed records serialized after each request timer",
         "workers": [], "rounds": [], "error_type": None,
     }
@@ -151,9 +164,11 @@ def run_recipients(source_directory, output_directory, concurrency, repetitions,
     context = multiprocessing.get_context("spawn")
     barrier = context.Barrier(concurrency + 1)
     try:
+        source_manifest = json.loads((Path(source_directory) / "run.json").read_bytes())
+        expected = source_manifest["console_disclosures"]["internal"]
         directories = prepare_recipients(source_directory, root / "endpoints", concurrency)
         manifest = json.loads((directories[0] / "run.json").read_text(encoding="utf-8"))
-        result["source_rows"] = manifest.get("evaluation", {}).get("rows")
+        result["source_rows"] = source_manifest.get("evaluation", {}).get("rows")
         result["source_object_id"] = manifest["outputs"]["model_input"]["reference"]["object_id"]
         for directory in directories:
             parent, child = context.Pipe()
@@ -184,6 +199,8 @@ def run_recipients(source_directory, output_directory, concurrency, repetitions,
                     "wall_ns": time.perf_counter_ns() - started,
                     "requests": requests, "synchronization_error": synchronization_error,
                 }
+                if source_manifest["schema"] == "tn.policy-run.v2":
+                    _check_disclosures(requests, expected)
                 result["rounds"].append(row)
                 raw.write(json.dumps(row) + "\n")
                 raw.flush()

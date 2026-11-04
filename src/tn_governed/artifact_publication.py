@@ -12,51 +12,47 @@ from .values.holders import field_hash
 from .values.string import ValueReference
 
 
-def publish_artifact(endpoint, value, inputs, metadata, opened, request, decision, call_id, *,
-                     claim=None, dispute=None, state="active", external_inputs=()):
+def publish_artifact(endpoint, value, metadata, opened, request, decision, call_id, *,
+                     claim=None, dispute=None, state="active", actions=()):
     """Release `value` with its manifest under the request's policies; return the carried artifact."""
     value = artifact_json(value)
     data = _working_copy(endpoint, opened, request)
     claims, disputes = _artifact_claims(endpoint, request, metadata, call_id, claim, dispute)
     action_records = list(dict.fromkeys([
-        *(identity for _, manifest, _ in metadata for identity in manifest["action_records"]), decision]))
+        *(identity for _, manifest, _ in metadata for identity in manifest["action_records"]),
+        *actions, *((decision,) if decision else ())]))
     manifest = {
         "schema": ARTIFACT_SCHEMA,
         "operation": request.operation,
         "parameters": request.parameters[0],
         "destination": request.destination,
         "decision_id": decision,
-        "parents": [item.to_dict() for item in inputs],
         "claims": claims,
         "disputes": list({json.dumps(item, sort_keys=True): item for item in disputes}.values()),
         "action_records": action_records,
         "state": state,
-        "external_inputs": [reference.to_dict() for reference in external_inputs],
     }
     publication = _release(endpoint, data, value, manifest, request)
     reference = ValueReference(publication.id, "value", "values")
-    result = endpoint._append("Result", request, call_id, {
+    result = None if decision is None else endpoint._append("Result", request, call_id, {
         "decision_id": decision,
         "output": reference.to_dict(),
         "claims": claims,
         "manifest_commitment": field_hash(publication, MANIFEST_GROUP, "manifest"),
         "value_commitment": field_hash(publication, "values", "value"),
     })
-    return carried(endpoint, GovernedArtifact(reference, decision, result), parents=inputs,
-                   manifest=manifest, parent_metadata=metadata)
+    return carried(endpoint, GovernedArtifact(reference, decision, result), manifest=manifest)
 
 
 def _working_copy(endpoint, opened, request):
     """Copy the opened inputs together, or originate an empty copy under every requested policy."""
     if opened:
-        data = opened[0].copy()
-        data.include_all(opened[1:])
-        return data
+        return opened[0].policy_output(ARTIFACT_TYPE, {"values": {}}, inputs=opened[1:])
     data = endpoint.session.create({}, request.policies[0], object_type=ARTIFACT_TYPE, group="values")
     endpoint.store.put(data.snapshot)
     for policy in request.policies[1:]:
         data.attach(policy, decide=lambda ctx, policy=policy: ctx.policy.matches_contract(policy))
-    return data
+    return data.policy_output(ARTIFACT_TYPE, {"values": {}})
 
 
 def _artifact_claims(endpoint, request, metadata, call_id, claim, dispute):
@@ -96,7 +92,7 @@ def _release(endpoint, data, value, manifest, request):
         )
 
     publication = data.release(
-        use=tn.UseContext(endpoint.application, endpoint.purpose, request.operation),
+        use=tn.UseContext(endpoint.application, endpoint.purpose, manifest["operation"]),
         to=request.destination,
         object_type=ARTIFACT_TYPE,
         decide=release,

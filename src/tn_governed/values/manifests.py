@@ -4,7 +4,8 @@ from collections.abc import Mapping
 
 SCHEMA = "tn.primitive-bindings.v1"
 BATCH_SCHEMA = "tn.primitive-batch.v1"
-SCHEMAS = (SCHEMA, BATCH_SCHEMA)
+POLICY_SCHEMA = "tn.primitive-policy.v1"
+SCHEMAS = (SCHEMA, BATCH_SCHEMA, POLICY_SCHEMA)
 
 
 def _origin_key(value):

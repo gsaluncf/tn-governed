@@ -1,21 +1,17 @@
 """Configured Polars plan execution with conservative dependency coverage."""
 
-import hashlib
 from dataclasses import dataclass
 
 import polars as pl
 
 from .release import PolicyDenied
-from .support import Support
 
 
 @dataclass(frozen=True)
 class PlanTransform:
     """Endpoint-trusted lazy-plan builder; callbacks receive admitted input plans.
 
-    The identifier and version identify the configured implementation. Plan bytes
-    are hashed, not transported: in-memory scans and Python closures can contain
-    protected values. The verifier does not deserialize or execute a saved plan.
+    The endpoint authorizes the configured identifier and version before invoking the builder.
     """
 
     identifier: str
@@ -41,7 +37,7 @@ def transform(frame, registration, others):
     inputs = (frame, *others)
     if any(not isinstance(item, GovernedLazyFrame) or item._tn is None for item in inputs):
         raise PolicyDenied("plan inputs require native governed dataframe admission")
-    boundary = frame._tn.copy()
+    boundary = frame._tn
     for item in others:
         boundary = boundary.include(item._tn)
     roots = set().union(*(set().union(*item.sources.values()) for item in inputs))
@@ -49,7 +45,6 @@ def transform(frame, registration, others):
     parameters = {
         "identifier": registration.identifier,
         "version": registration.version,
-        "input_heads": [list(item._tn.policies.audit.heads) for item in inputs],
     }
     boundary.policies.decide(
         "transform",
@@ -63,19 +58,6 @@ def transform(frame, registration, others):
     if not isinstance(result, pl.LazyFrame):
         raise TypeError("plan builders must return a Polars LazyFrame")
     names = result.collect_schema().names()
-    if any(name.startswith("__tn_support_") for name in names):
-        raise PolicyDenied("plan outputs use reserved contributor columns")
-    parameters["plan_digest"] = "sha256:" + hashlib.sha256(result.serialize()).hexdigest()
-    parameters["engine_version"] = pl.__version__
-    parameters["output_columns"] = names
-    boundary.policies.record_operation("transform", parameters)
-    policies = {}
-    for item in inputs:
-        for identity, sources in item._support.policy_sources.items():
-            policies[identity] = policies.get(identity, frozenset()) | sources
-    support = Support(
-        result, {}, {}, policies, any(item._support.aggregated for item in inputs), False, False
-    )
     return GovernedLazyFrame(
         result,
         frame.policy,
@@ -84,5 +66,5 @@ def transform(frame, registration, others):
         sources={name: set(roots) for name in names},
         row_sources=roots,
         tn_boundary=boundary,
-        _support=support,
+        ordinary_rows=False,
     )

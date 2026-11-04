@@ -32,7 +32,6 @@ from tn_governed.values.catalog import AssignedRules
 from tn_governed.values.evidence import EvidenceRecorder
 from tn_governed.values.model import NativeModelEndpoint, digest, prepare_native_model
 from tn_governed.values.provision import provision
-from tn_governed.values.references import pack_references
 from tn_governed.values.sql import GovernedSQL, source_identity
 
 from .case_request import CaseRequest, Workload
@@ -58,7 +57,7 @@ PROMPT = (
     "Mark the report as requiring human review, using the exact carried review notice in a visible paragraph. "
     "Generate the report now; do not claim a human has reviewed it. Use no CSS, hidden content, or external resources."
 )
-VERIFICATION_FACTS = ("record_count", "record_kinds", "incarnations", "derivation_edges",
+VERIFICATION_FACTS = ("record_count", "record_kinds", "outputs",
                       "source_editions", "policy_revisions")
 
 
@@ -337,8 +336,15 @@ class _Case:
 
     def _manifest(self, tapes):
         request, db = self.request, self.db
+        recipient_objects = []
+        if self.brief is not None:
+            carried = self.brief.publication
+            bindings = self.context.session.governance(carried.object).governance.dataset_bindings
+            recipient_objects = sorted({obj.id for obj in carried.objects()} | {
+                self.assignment_id, *self.publisher.assignments[self.assignment_id]["revisions"],
+                *(binding.edition_record_id for binding in bindings)})
         return {
-            "schema": "tn.primitive-run.v1", "created_utc": self.stamp,
+            "schema": "tn.policy-run.v2", "created_utc": self.stamp,
             "execution": "live Java Unity, SQLite, governed Polars with OPA and native TN" + (
                 ", governed model report and pending review" if request.model else ", scalar computation"),
             "unity": {"url": request.unity_url, "catalog": self.catalog_name,
@@ -348,8 +354,7 @@ class _Case:
             "authority": self.authority, "writers": self.writers, "audit_policy": self.audit_policy.fields,
             "administration_policy": self.admin.fields, "assignment_id": self.assignment_id,
             "source": source_identity(self.database), "observer_config": "sessions/observer/tn.yaml",
-            "tapes": tapes, "source_editions": db.editions,
-            "sources": pack_references(v.reference.to_dict() for v in db.published_values),
+            "tapes": tapes, "source_editions": db.editions, "recipient_objects": recipient_objects,
             "outputs": self.outputs,
             "console_disclosures": {"internal": self.internal}, "sql_executions": db.executions,
             "unity_resolutions": {role: ctx.resolver.requests for role, ctx in self.contexts.items()},
@@ -430,12 +435,12 @@ class _Case:
         """The model input, and a completed model result, keep the original claim."""
         if not (self.request.claim and self.outputs.get("model_input")):
             return
-        graph = json.loads((self.root / "dag.json").read_text())
-        final = next(node for node in graph["nodes"]
-                     if node["id"] == self.outputs["model_input"]["reference"]["object_id"])
-        if not final["claims"]:
-            raise RuntimeError("required original claim is absent from the model input")
-        if verification.get("model", {}).get("completed") and not verification["model"]["source_claim_ids"]:
+        outputs = verification["outputs"]
+        required = set(outputs["attested_name"]["claims"])
+        if not required or any(not required <= set(outputs[name]["claims"])
+                               for name in ("dataframe_result", "amount", "model_input")):
+            raise RuntimeError("a calculated output omitted an original claim")
+        if verification.get("model", {}).get("completed") and not required <= set(verification["model"]["source_claim_ids"]):
             raise RuntimeError("required original claim is absent from model result evidence")
 
 

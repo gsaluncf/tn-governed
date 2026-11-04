@@ -1,6 +1,7 @@
 """Required-governed application boundaries validate handles before dispatch."""
 
 from .artifact_types import GovernedArtifact
+from .artifact_verification import verify_artifact
 
 
 class BoundaryError(TypeError):
@@ -25,10 +26,20 @@ class GovernedBoundary:
     def dispatch(self, handler, value):
         accepted = self.accept(value)
         result = self.accept(handler(accepted))
-        required = {artifact.reference.object_id for artifact in self._leaves(accepted)}
+        sources = [verify_artifact(self.endpoint, item) for item in self._leaves(accepted)]
+        required_claims = {claim.id for _, _, claims in sources for claim in claims}
+        required_actions = {action for _, manifest, _ in sources for action in manifest["action_records"]}
+        required_editions = [binding for source, _, _ in sources for binding in source.dataset_bindings]
+        disputes = [dispute for _, manifest, _ in sources for dispute in manifest["disputes"]]
         for artifact in self._leaves(result):
-            if not required <= self.endpoint.ancestors(artifact):
-                raise BoundaryError("result omits a contributing boundary input")
+            data, manifest, claims = verify_artifact(self.endpoint, artifact)
+            if (any(not any(p.matches_contract(q) for q in data.policies)
+                    for source, _, _ in sources for p in source.policies)
+                    or not required_claims <= {claim.id for claim in claims}
+                    or any(binding not in data.dataset_bindings for binding in required_editions)
+                    or any(dispute not in manifest["disputes"] for dispute in disputes)
+                    or not required_actions <= set(manifest["action_records"])):
+                raise BoundaryError("result omits a contributing input's governance")
         return result
 
     def _leaves(self, value):

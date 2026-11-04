@@ -111,7 +111,7 @@ def _two_group_publication(context):
 
 
 @pytest.mark.parametrize("reverse", [False, True])
-def test_same_publication_different_groups_preserve_both_native_references(context, reverse):
+def test_same_publication_different_groups_preserve_the_contract(context, reverse):
     source, inputs = _two_group_publication(context)
     retained_wire = source.forward()
     if reverse:
@@ -122,26 +122,17 @@ def test_same_publication_different_groups_preserve_both_native_references(conte
     assert output.reveal(context, destination="console") == "samesame"
     publication = context.store_object(output.reference.object_id)
     governance = context.session.governance(publication).governance
-    parents = governance.sources
-    assert len(parents) == 2
-    assert {parent.object_id for parent in parents} == {source.id}
-    assert {frozenset(parent.groups) for parent in parents} == {
-        frozenset({"strings", "evidence"}), frozenset({"values", "evidence"}),
-    }
-    assert {parent.operation for parent in parents} == {"concat"}
-    expected_inputs = [value.reference.to_dict() for value in inputs]
+    assert not governance.sources
     metadata, binding, claims = context._metadata(output)
-    assert binding["parents"] == expected_inputs
+    assert "parents" not in binding
     assert claims == ()
     assert len(metadata.policies) == 1
     assert metadata.policies[0].matches_contract(context.session.policy(VALUE_TYPE))
-    result = context.recorder.read(output.result_id).body
-    assert result["inputs"] == expected_inputs
-    assert result["details"]["transition"]["governed_inputs"] == expected_inputs
+    assert output.result_id is None
     assert context.store_object(source.id).forward() == retained_wire
 
 
-def test_explicit_sibling_arithmetic_preserves_results_and_each_source_row(context, monkeypatch):
+def test_explicit_sibling_arithmetic_preserves_result_and_policy(context, monkeypatch):
     left, right = _batch(context)
     assert left.reference.object_id == right.reference.object_id
     calls = []
@@ -157,15 +148,12 @@ def test_explicit_sibling_arithmetic_preserves_results_and_each_source_row(conte
 
     assert output.reveal(context, destination="console") == 15
     metadata, binding, claims = context._metadata(output)
-    assert binding["parents"] == [left.reference.to_dict(), right.reference.to_dict()]
-    assert binding["origins"][0]["rows"] == [[0, 1]]
+    assert "parents" not in binding and "origins" not in binding
     assert claims == ()
     assert len(metadata.policies) == 1
     assert metadata.policies[0].matches_contract(context.session.policy(VALUE_TYPE))
     parents = context.session.governance(context.store_object(output.reference.object_id)).governance.sources
-    assert len(parents) == 1
-    assert parents[0].object_id == left.reference.object_id
-    assert frozenset(parents[0].groups) == frozenset({"values", "evidence"})
+    assert not parents
     assert calls == []
 
 
@@ -179,7 +167,7 @@ def test_explicit_arithmetic_preserves_original_claim_subject_and_author(context
 
     assert output.reveal(context, destination="console") == 15
     _, binding, claims = context._metadata(output)
-    assert binding["parents"] == [claimed.reference.to_dict(), right.reference.to_dict()]
+    assert "parents" not in binding
     assert binding["claims"] == [original_claim.id]
     assert len(claims) == 1
     assert claims[0].id == original_claim.id
@@ -211,4 +199,4 @@ def test_refused_explicit_arithmetic_opens_no_values_and_does_not_call_compute(c
     decision = context.recorder.read(refusal.body["details"]["decision_id"])
     assert decision.body["kind"] == "Decision"
     assert decision.body["details"]["permitted"] is False
-    assert decision.body["inputs"] == [left.reference.to_dict(), right.reference.to_dict()]
+    assert decision.body["inputs"] == []

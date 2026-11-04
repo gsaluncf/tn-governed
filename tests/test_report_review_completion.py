@@ -167,10 +167,11 @@ def report_workflow(tmp_path, monkeypatch, request):
                         for policy in release.policies)
             )
 
-        def construct_release(tool_payloads=None, *, request_digest="sha256:" + "a" * 64):
+        def construct_release(tool_payloads=None, *, request_digest="sha256:" + "a" * 64, source=source, selection=None):
             source_data = sessions["model-reader"].receive(
-                source, use=use, groups=["values"],
-                decide=lambda admission: context.catalog.accepts(admission, context.policy_dag),
+                source, use=use, groups=["values"], selection=selection,
+                decide=lambda admission: (admission.object.id == selection.source_object_id if selection
+                    else context.catalog.accepts(admission, context.policy_dag)),
             )
             data = source_data.copy()
             run_id = "report-request-" + str(len(releases) + 1)
@@ -238,7 +239,7 @@ def report_workflow(tmp_path, monkeypatch, request):
             runtime_config=config,
         )
         yield SimpleNamespace(
-            context=context, value=value, endpoint=endpoint, reader=reader, events=events,
+            context=context, value=value, source_handle=name, endpoint=endpoint, reader=reader, events=events,
             releases=releases, root=tmp_path, queue=queue,
             record_count=len(context.recorder.records()), source=source,
             construct_release=construct_release,
@@ -429,7 +430,8 @@ def evidence_reader(workflow, *, expectations, required_tools=(), expected_reque
         expected_writer=original.expected_writer, use=original.use,
         destination=original.destination, release_use=original.release_use,
         catalog=original.catalog, policy_dag=original.policy_dag,
-        resolve_ancestor=original.resolve_ancestor, decide=original.decide,
+        resolve_ancestor=original.resolve_ancestor, decide=original.decide, carried_policy=original.carried_policy,
+        expected_source_view=original.expected_source_view,
         tool_expectations=expectations, required_tools=required_tools,
         expected_request_digest=expected_request_digest,
     ), session

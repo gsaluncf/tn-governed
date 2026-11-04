@@ -59,6 +59,11 @@ impl GovernedInputRuntime {
                 if !self.config.trusted_writers.contains(ctx.object().writer()) {
                     return Ok(false);
                 }
+                if let Some(selection) = &self.source_selection {
+                    if ctx.object().id() == selection.source_object_id() {
+                        selection.verify_context(ctx)?;
+                    }
+                }
                 for policy in ctx.policies()? {
                     let Some(permission) = self.config.contracts.iter().find(|permission| {
                         Some(permission.revision_id.as_str()) == policy.revision_id()
@@ -130,7 +135,7 @@ pub(super) fn manifest_bindings(
 }
 
 /// A root's manifest names exactly the fields its group's holder committed to.
-fn check_complete(
+pub(super) fn check_complete(
     object: &GovernedObject,
     group: &str,
     fields: &Map<String, Value>,

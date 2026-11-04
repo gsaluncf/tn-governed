@@ -17,6 +17,7 @@ from tn_governed.llama import submit_governed_report
 from tn_governed.native_objects import CarriedPublication, NativeObjects
 from tn_governed.publications import write_once
 
+from .manifests import POLICY_SCHEMA, signed_manifest
 from .report_profile import visible_text
 from .string import OperationDenied, _active
 
@@ -198,7 +199,7 @@ class NativeModelEndpoint:
                 "tool_object_ids": [obj.id for obj in release.tool_objects],
                 "required_disclosure": requirements["required_disclosure"],
                 "claims": [claim.id for claim in request.claims],
-                "claim_resolution": "original subjects and statements remain in the exact retained input ancestry",
+                "claim_resolution": "each cited signed claim identifies its original issuer, subjects, and statement",
                 "report_html_sha256": hashlib.sha256(html.encode()).hexdigest(),
                 "review_request_id": review.record_id if review else None,
             })
@@ -215,32 +216,13 @@ class NativeModelEndpoint:
             raise
 
 
-def prepare_native_model(value, *, context, input_session, output_session, recipient_session,
-                         input_config, output_config, directory, model, binary, translate=str,
-                         runtime_limits=None):
-    """Compile carried requirements into the native endpoint's configuration."""
-    limits = resolve_runtime_limits(runtime_limits)
-    context._adopt((value,))
-    source = (value.publication.object if value.publication is not None
-              else context.store_object(value.reference.object_id))
-    _require_standalone_value(source, value.reference)
-    metadata, _, claims = context._metadata(value)
-    directory = Path(directory)
-    directory.mkdir(parents=True, exist_ok=True)
-    input_config, output_config = Path(input_config), Path(output_config)
-    requirements = model_requirements(context, metadata.policies)
-    model_use = tn.UseContext(**requirements["use"])
-    recipient_use = tn.UseContext(**requirements["recipient_use"])
-    def resolve(identity):
-        obj = context.store_object(identity)
-        if obj.writer not in context.evaluator.writers:
-            raise OperationDenied("unrecognized primitive ancestor writer")
-        return input_session.governance(obj)
+def _legacy_sources(root_view, context, resolve, limits):
+    """Reconstruct the evidence required by the earlier parent-linked wire format."""
     lineage = tn.LineageVerifier(max_objects=limits["lineage_max_objects"],
-        max_depth=limits["lineage_max_depth"]).verify(input_session.governance(source),
+        max_depth=limits["lineage_max_depth"]).verify(root_view,
             context.catalog, context.policy_dag, resolve)
     publication_ids = set(lineage.object_ids)
-    pending = [(source.id, 0)]
+    pending = [(root_view.object.id, 0)]
     visited = set()
     while pending:
         identity, depth = pending.pop()
@@ -254,8 +236,60 @@ def prepare_native_model(value, *, context, input_session, output_session, recip
             raise OperationDenied("claim subject ancestry exceeds the native object limit")
         pending.extend((parent.object_id, depth + 1)
                        for parent in resolve(identity).governance.sources)
-    revision_ids = list(dict.fromkeys(identity for a in context.resolver.assignments.values() for identity in a["revisions"]))
-    edition_ids = [r.id for r in context.editions.values()]
+    return publication_ids
+
+
+def prepare_native_model(value, *, context, input_session, output_session, recipient_session,
+                         input_config, output_config, directory, model, binary, translate=str,
+                         runtime_limits=None):
+    """Compile carried requirements into the native endpoint's configuration."""
+    limits = resolve_runtime_limits(runtime_limits)
+    context._adopt((value,))
+    source = (value.publication.object if value.publication is not None
+              else context.store_object(value.reference.object_id))
+    _require_standalone_value(source, value.reference)
+    metadata, binding, claims = context._metadata(value)
+    carried_policy = signed_manifest(metadata)["schema"] == POLICY_SCHEMA
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    input_config, output_config = Path(input_config), Path(output_config)
+    requirements = model_requirements(context, metadata.policies)
+    model_use = tn.UseContext(**requirements["use"])
+    recipient_use = tn.UseContext(**requirements["recipient_use"])
+    def resolve(identity):
+        obj = context.store_object(identity)
+        if obj.writer not in context.evaluator.writers:
+            raise OperationDenied("unrecognized primitive ancestor writer")
+        return input_session.governance(obj)
+    source_edition = None
+    if carried_policy:
+        publication_ids = ()
+        action_ids = context._action_support(binding["actions"], {})
+        revision_ids = []
+        seen = set()
+        def add_revision(identity):
+            if identity not in seen:
+                seen.add(identity)
+                for parent in context.policy_dag.get(identity).parents:
+                    add_revision(parent.revision_id)
+                revision_ids.append(identity)
+        for policy in metadata.policies:
+            add_revision(policy.revision_id)
+        edition_ids = [item.edition_record_id for item in
+                       input_session.governance(source).governance.dataset_bindings]
+        if not edition_ids:
+            source_edition = context.editions.get(source.id)
+            if source_edition is None:
+                raise OperationDenied("model input needs its exact signed dataset edition")
+            selection = context.catalog.select(source_edition.dataset, source_edition.edition, source_edition.id, model_use)
+            selection.verify_source(input_session.governance(source), model_use, ["values", "evidence"])
+            edition_ids.append(source_edition.id)
+    else:
+        action_ids = ()
+        publication_ids = _legacy_sources(input_session.governance(source), context, resolve, limits)
+        revision_ids = list(dict.fromkeys(identity for a in context.resolver.assignments.values()
+                                         for identity in a["revisions"]))
+        edition_ids = [r.id for r in context.editions.values()]
     metadata_path = directory / "native-metadata.json"
     wire = lambda identity: context.recorder.store.get(identity).decode("utf-8")
     write_once(metadata_path, json.dumps({
@@ -263,6 +297,7 @@ def prepare_native_model(value, *, context, input_session, output_session, recip
         "dataset_editions": [wire(i) for i in edition_ids],
         "publications": [wire(i) for i in sorted(publication_ids)],
         "claim_records": [wire(i) for i in sorted({claim.id for claim in claims})],
+        "action_records": [wire(i) for i in sorted(action_ids)],
     }).encode())
     # The runtime's independent output reader takes its kits from this copy; the input
     # reader decrypts with the input session's own keystore.
@@ -280,6 +315,8 @@ def prepare_native_model(value, *, context, input_session, output_session, recip
         # values is selectable as model content under the report contract below.
         "expected_event_type": source.object_type, "allowed_input_groups": ["values", "evidence"],
         "governed_objects": {
+            "carried_policy": carried_policy,
+            "source_edition_id": source_edition.id if source_edition else None,
             "lineage_max_objects": limits["lineage_max_objects"],
             "lineage_max_depth": limits["lineage_max_depth"],
             "native_reader_config_path": translate(input_config), "metadata_store_path": translate(metadata_path),
@@ -316,7 +353,10 @@ def prepare_native_model(value, *, context, input_session, output_session, recip
     write_once(path, json.dumps(config, indent=2).encode())
     reader = NativeOutputReader(recipient_session, expected_source=source, expected_writer=output_session.did,
         use=recipient_use, destination=requirements["report_destination"], release_use=model_use,
-        catalog=context.catalog, policy_dag=context.policy_dag, resolve_ancestor=resolve,
+        catalog=context.catalog, policy_dag=context.policy_dag, resolve_ancestor=None if carried_policy else resolve,
+        expected_source_view=input_session.governance(source) if carried_policy else None,
+        source_edition_id=source_edition.id if source_edition else None,
+        carried_policy=carried_policy,
         decide=lambda ctx: ctx.use_context == recipient_use,
         expected_tool_name=requirements["required_tool"], expected_tool_sections=("values",),
         required_tools=(requirements["required_tool"],),

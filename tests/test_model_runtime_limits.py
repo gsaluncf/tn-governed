@@ -74,7 +74,7 @@ def test_actual_encoded_request_is_checked_before_transport(source_values, tmp_p
             assert len(calls) == 1
 
 
-def test_recipient_verification_uses_configured_lineage_limit(report_workflow):
+def test_current_recipient_can_verify_with_no_calculation_history(report_workflow):
     from tn_llama_client.clients import NativeOutputReader
 
     original = report_workflow.reader
@@ -85,13 +85,10 @@ def test_recipient_verification_uses_configured_lineage_limit(report_workflow):
             expected_writer=original.expected_writer, use=original.use,
             destination=original.destination, release_use=original.release_use,
             catalog=original.catalog, policy_dag=original.policy_dag,
-            resolve_ancestor=original.resolve_ancestor, decide=original.decide,
+            resolve_ancestor=original.resolve_ancestor, decide=original.decide, carried_policy=original.carried_policy,
+            expected_source_view=original.expected_source_view,
             tool_expectations=tuple(original.tool_expectations.values()),
             required_tools=tuple(original.required_tools), lineage_max_objects=limit,
         )
-        if limit == 1:
-            with pytest.raises(Exception, match="lineage.*object|object.*limit"):
-                reader.open(release)
-        else:
-            opened = reader.open(release)
-            assert "ACME" in opened.get("report_html", group="default")
+        opened = reader.open(release)
+        assert "ACME" in opened.get("report_html", group="default")

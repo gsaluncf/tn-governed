@@ -12,19 +12,20 @@ from dataclasses import dataclass, replace
 from uuid import uuid4
 
 import tn
-from tn_governed.native_objects import NativeObjects
+from tn_governed.native_objects import CarriedPublication, NativeObjects
 
-from .evidence import EvidenceError, EvidenceRecorder
+from .evidence import OBJECT_ID, EvidenceError, EvidenceRecorder, check_monitor
 from .obligations import ObligationResult as ObligationResult
 from .obligations import ObligationRun, run_obligations
 from .references import pack_references, unpack_references
 from .string import (
     OperationDenied, StringMetadataProvider, TNString, ValueReference, _active, _exposure,
 )
-from .holders import field_hash
+from .holders import holds_field
 
 STRING_TYPE = "experiment.string"
 STRING_SCHEMA = "tn.string-bindings.v1"
+STRING_POLICY_SCHEMA = "tn.string-policy.v1"
 
 
 @dataclass(frozen=True)
@@ -97,25 +98,19 @@ def publish_source(session, store=None, fields=None, *, policy=None, string_meta
                          for k, v in fields.items()):
         raise TypeError("source requires nonempty string fields")
     policy = policy or session.policy(STRING_TYPE)
-    data = session.create(fields, policy, object_type=STRING_TYPE, group="strings")
-    store.put(data.snapshot)
-    data.set(None, {"manifest": {
-        "schema": STRING_SCHEMA,
-        "bindings": {name: {"claims": [], "parents": [], "decision_id": None}
-                     for name in fields},
-    }}, group="evidence")
+    data = session.create({}, policy, object_type=STRING_TYPE, group="strings")
+    data = data.policy_output(STRING_TYPE, {
+        "strings": fields, "evidence": {"manifest": {"schema": STRING_POLICY_SCHEMA,
+            "bindings": {name: {"claims": [], "actions": []} for name in fields}}},
+    })
+    data.bind_manifest("evidence")
     publication = session.release(
         data, use=tn.UseContext("local-source", "string-experiment", "originate"),
         to="governed-runtime", object_type=STRING_TYPE,
         decide=lambda ctx: len(ctx.policies) == 1 and ctx.policies[0].matches_contract(policy),
     )
     store.put(publication)
-    carried = None
-    if isinstance(store, NativeObjects):
-        for ancestor in data.history:
-            store.put(ancestor)
-        store.link(publication.id, tuple(obj.id for obj in data.history if obj.id != publication.id))
-        carried = store.carry(publication.id)
+    carried = CarriedPublication(publication)
     return {name: TNString(ValueReference(publication.id, name), metadata_provider=string_metadata,
                            publication=carried)
             for name in fields}
@@ -188,35 +183,72 @@ class Context:
             self.recorder.store.link(publication.id, tuple(
                 obj.id for obj in history if obj.id != publication.id))
 
-    def _carried(self, publication, values=(), extra_ids=()):
-        """Attach native evidence and parent objects to the returned datatype."""
-        if not isinstance(self.recorder.store, NativeObjects):
-            return None
-        extra_ids = list(extra_ids)
-        if getattr(self, "resolver", None) is not None:
-            governance = self.session.governance(publication).governance
-            pending = [policy.revision_id for policy in governance.policies
-                       if policy.revision_id is not None]
-            revisions = set()
-            while pending:
-                identity = pending.pop()
-                if identity in revisions:
-                    continue
-                revision = self.policy_dag.get(identity)
-                if revision is None:
-                    raise EvidenceError("carried policy revision is not admitted")
-                revisions.add(identity)
-                pending.extend(parent.revision_id for parent in revision.parents)
-            extra_ids.extend(revisions)
-            extra_ids.extend(binding.edition_record_id for binding in governance.dataset_bindings)
-        return self.recorder.store.carry(publication.id,
-            parents=tuple(value.publication for value in values
-                          if getattr(value, "publication", None) is not None),
-            extra_ids=tuple(identity for identity in extra_ids if identity is not None))
+    def _policy_credentials(self, publication):
+        if getattr(self, "resolver", None) is None:
+            return []
+        governance = self.session.governance(publication).governance
+        pending = [policy.revision_id for policy in governance.policies if policy.revision_id]
+        revisions = set()
+        while pending:
+            identity = pending.pop()
+            if identity in revisions:
+                continue
+            revision = self.policy_dag.get(identity)
+            if revision is None:
+                raise EvidenceError("carried policy revision is not admitted")
+            revisions.add(identity)
+            pending.extend(parent.revision_id for parent in revision.parents)
+        records = [binding.edition_record_id for binding in governance.dataset_bindings]
+        # A newly issued original is registered after signing. Its edition identifies
+        # the final signed object, so that credential travels beside the source.
+        direct = self.editions.get(publication.id)
+        if direct is not None:
+            records.append(direct.id)
+        return [*sorted(revisions), *records]
+
+    def _action_support(self, actions, records):
+        """Check required actions and return the native receipts needed to inspect them."""
+        support = []
+        for identity in actions:
+            decision = self._record(identity, records)
+            body = decision.body
+            details = body["details"]
+            obligations = details.get("obligations")
+            discharged = details.get("discharged")
+            if (body["kind"] != "Decision" or details.get("permitted") is not True
+                    or not isinstance(obligations, list) or not obligations
+                    or not isinstance(discharged, list) or len(discharged) != len(obligations)):
+                raise EvidenceError("invalid signed required-action decision")
+            support.append(identity)
+            for name, step in zip(obligations, discharged, strict=True):
+                if (not isinstance(step, dict) or step.get("obligation") != name
+                        or step.get("satisfied") is not True
+                        or not isinstance(step.get("evidence"), str) or not step["evidence"].strip()):
+                    raise EvidenceError("required action lacks completion evidence")
+                receipt = step["evidence"]
+                if OBJECT_ID.fullmatch(receipt):
+                    received = self._record(receipt, records)
+                    if name == "monitor":
+                        check_monitor(decision, received)
+                    support.append(receipt)
+                elif name == "monitor":
+                    raise EvidenceError("monitoring requires a signed receipt")
+        return support
+
+    def _record(self, identity, records):
+        if identity not in records:
+            records[identity] = self.recorder.read(identity)
+        return records[identity]
+
+    def _policy_carrier(self, publication, binding):
+        """Carry original claims, action receipts and policy credentials by their signed IDs."""
+        support = [*binding["claims"], *self._action_support(binding["actions"], {})]
+        support.extend(self._policy_credentials(publication))
+        return CarriedPublication(publication, support=tuple(
+            self.store_object(identity) for identity in dict.fromkeys(support)))
 
     def _received_carrier(self, value, binding, *, shared):
         """Retain only the native ancestry and evidence needed by a verified received handle."""
-        from tn_governed.native_objects import CarriedPublication
         from .evidence import EVIDENCE_TYPE, referenced_publications
 
         active, count = set(), [0]
@@ -254,6 +286,8 @@ class Context:
             finally:
                 active.remove(identity)
 
+        if "actions" in binding and "parents" not in binding:
+            return self._policy_carrier(self.store_object(value.reference.object_id), binding)
         root = collect(value.reference.object_id)
         references = (value.decision_id, value.result_id, *binding.get("claims", ()))
         parents = (root, *(collect(identity) for identity in references if identity is not None))
@@ -264,48 +298,58 @@ class Context:
         obj = self.store_object(value.reference.object_id)
         use = tn.UseContext(self.application, self.purpose, "inspect-claims")
 
-        def ancestor(identity):
-            parent = self.store_object(identity)
-            view = self.session.governance(parent)
-            group = "evidence" if "evidence" in parent.group_names else value.reference.group
-            view.accept(use=use, groups=[group], decide=self.metadata_accept)
-            return view
-
-        tn.LineageVerifier(max_objects=65536, max_depth=256).verify(
-            self.session.governance(obj), tn.DatasetCatalog(), tn.PolicyDag(), ancestor,
-        )
         data = self.session.receive(
             obj, use=use,
             groups=["evidence"], decide=self.metadata_accept,
         )
         manifest = data.get("manifest", group="evidence")
-        if not isinstance(manifest, dict) or manifest.get("schema") != STRING_SCHEMA:
+        if not isinstance(manifest, dict) or manifest.get("schema") not in {STRING_SCHEMA, STRING_POLICY_SCHEMA}:
             raise EvidenceError("missing signed string manifest")
-        binding = manifest.get("bindings", {}).get(value.reference.field)
-        if not isinstance(binding, dict) or set(binding) != {"claims", "parents", "decision_id"}:
-            raise EvidenceError("missing signed field binding")
-        if not isinstance(binding["claims"], list) or not isinstance(binding["parents"], (list, dict)):
-            raise EvidenceError("invalid signed string lineage")
-        decision_id = binding["decision_id"]
-        if decision_id is not None:
-            if decision_id != value.decision_id or value.result_id is None:
-                raise EvidenceError("derived string requires its signed decision/result citations")
-            result = self.recorder.read(value.result_id)
-            decision = self.recorder.read(decision_id)
-            rb, db = result.body, decision.body
-            if (rb["kind"] != "Result" or db["kind"] != "Decision"
-                    or result.writer != obj.writer or decision.writer != obj.writer
-                    or rb["details"].get("output") != value.reference.to_dict()
-                    or rb["details"].get("decision_id") != decision_id
-                    or rb["inputs"] != binding["parents"]
-                    or rb["details"].get("claims") != binding["claims"]
-                    or db["details"].get("permitted") is not True
-                    or any(rb[key] != db[key] for key in (
-                        "context_id", "call_id", "operation", "inputs", "application", "purpose",
-                    ))):
-                raise EvidenceError("result citation does not bind this string to its decision")
-        elif value.decision_id is not None or value.result_id is not None:
-            raise EvidenceError("origin has unexpected derived citations")
+        if manifest["schema"] == STRING_POLICY_SCHEMA:
+            binding = manifest.get("bindings", {}).get(value.reference.field)
+            if (not isinstance(binding, dict) or set(binding) != {"claims", "actions"}
+                    or not isinstance(binding["actions"], list) or not isinstance(binding["claims"], list)
+                    or not holds_field(obj, "strings", value.reference.field)
+                    or value.reference.group != "strings"
+                    or value.decision_id is not None or value.result_id is not None):
+                raise EvidenceError("invalid signed string binding")
+            self._action_support(binding["actions"], {})
+        else:
+            def ancestor(identity):
+                parent = self.store_object(identity)
+                view = self.session.governance(parent)
+                group = "evidence" if "evidence" in parent.group_names else value.reference.group
+                view.accept(use=use, groups=[group], decide=self.metadata_accept)
+                return view
+
+            tn.LineageVerifier(max_objects=65536, max_depth=256).verify(
+                self.session.governance(obj), tn.DatasetCatalog(), tn.PolicyDag(), ancestor,
+            )
+            binding = manifest.get("bindings", {}).get(value.reference.field)
+            if not isinstance(binding, dict) or set(binding) != {"claims", "parents", "decision_id"}:
+                raise EvidenceError("missing signed field binding")
+            if not isinstance(binding["claims"], list) or not isinstance(binding["parents"], (list, dict)):
+                raise EvidenceError("invalid signed string lineage")
+            decision_id = binding["decision_id"]
+            if decision_id is not None:
+                if decision_id != value.decision_id or value.result_id is None:
+                    raise EvidenceError("derived string requires its signed decision/result citations")
+                result = self.recorder.read(value.result_id)
+                decision = self.recorder.read(decision_id)
+                rb, db = result.body, decision.body
+                if (rb["kind"] != "Result" or db["kind"] != "Decision"
+                        or result.writer != obj.writer or decision.writer != obj.writer
+                        or rb["details"].get("output") != value.reference.to_dict()
+                        or rb["details"].get("decision_id") != decision_id
+                        or rb["inputs"] != binding["parents"]
+                        or rb["details"].get("claims") != binding["claims"]
+                        or db["details"].get("permitted") is not True
+                        or any(rb[key] != db[key] for key in (
+                            "context_id", "call_id", "operation", "inputs", "application", "purpose",
+                        ))):
+                    raise EvidenceError("result citation does not bind this string to its decision")
+            elif value.decision_id is not None or value.result_id is not None:
+                raise EvidenceError("origin has unexpected derived citations")
         claims = []
         for identity in binding["claims"]:
             record = self.recorder.read(identity)
@@ -325,6 +369,8 @@ class Context:
                        (data.snapshot.writer,), tuple(data.policies), claims)
 
     def _append(self, kind, request, call_id, details):
+        if kind != "Claim" and request.operation not in {"select", "reveal", "model_handoff", "compare", "truth", "is_integer"}:
+            request = replace(request, inputs=())
         return self.recorder.append(
             kind, call_id=call_id, application=self.application, purpose=self.purpose,
             operation=request.operation, inputs=request.inputs,
@@ -360,7 +406,7 @@ class Context:
                 "permitted": permitted, "requested_permit": assessment.permit,
                 "reason": "decision could not be completed" if cause else assessment.reason,
                 "obligations": list(assessment.obligations),
-                **actions.record_details(), "parameters": list(parameters),
+                **actions.record_details(),
                 "policies": [{"authority": p.governed_by, "policy": p.policy_ref,
                               "revision": p.revision_id} for p in request.policies],
                 "considered_claims": [claim.id for claim in request.claims],
@@ -372,6 +418,8 @@ class Context:
             cause = exc
             details = {"permitted": False, "reason": "decision could not be completed",
                        **actions.record_details(), "error_type": type(exc).__name__}
+        if permitted and not actions.steps and operation != "reveal":
+            return request, metadata, None
         decision_id = self._append("Decision", request, call_id, details)
         if not permitted:
             self._append("Refusal", request, call_id, {"decision_id": decision_id,
@@ -429,7 +477,9 @@ class Context:
                 if operation == "attest":
                     claim_id = self._append("Claim", request, call_id, {"statement": parameters[0]})
                     claims.append(claim_id)
-                # Both operations publish a new incarnation with the same text.
+                if operation == "copy" and decision_id is None:
+                    return values[0]
+                # An endorsement can forward the original signed, encrypted text.
                 # Retaining ciphertext does not require opening the business group.
                 data = metadata[0][0].copy()  # Keep unopened strings as native retained ciphertext.
                 field = values[0].reference.field
@@ -455,45 +505,30 @@ class Context:
                     content = content * parameters[0]
                 elif operation == "concat":
                     if literal_concat:
-                        # Plain operands are caller-supplied parameters in the signed
-                        # decision; they are not attributed to an earlier endpoint.
                         literal, side = parameters
                         content = literal + content if side == "left" else content + literal
                     else:
-                        data.include(opened[1][0])
                         content += opened[1][1]
                 field = "value"
-                data.set(None, {field: content}, group="strings")
-            data.set(None, {"manifest": {
-                "schema": STRING_SCHEMA,
-                "bindings": {field: {"claims": claims,
-                                     "parents": [v.reference.to_dict() for v in values],
-                                     "decision_id": decision_id}},
-            }}, group="evidence")
-            use = tn.UseContext(self.application, self.purpose, operation)
+                data = data.policy_output(STRING_TYPE, {"strings": {field: content}},
+                                          inputs=[item[0] for item in opened[1:]])
+            actions = [action for _, binding, _ in metadata for action in binding.get("actions", ())]
+            if decision_id is not None:
+                actions.append(decision_id)
+            binding = {"claims": claims, "actions": list(dict.fromkeys(actions))}
+            data.set(None, {"manifest": {"schema": STRING_POLICY_SCHEMA, "bindings": {field: binding}}},
+                     group="evidence")
+            data.bind_manifest("evidence")
+            use = tn.UseContext(self.application, self.purpose, "publish")
             publication = self.session.release(
                 data, use=use, to="governed-runtime", object_type=STRING_TYPE,
                 decide=lambda ctx: ctx.writer == self.session.did and ctx.use_context == use
-                and all(any(p.matches_contract(parent) for parent in request.policies)
-                        for p in ctx.policies),
+                and all(any(p.matches_contract(q) for q in request.policies) for p in ctx.policies)
+                and all(any(p.matches_contract(q) for q in ctx.policies) for p in request.policies),
             )
-            self._retain_publication(data, publication)
-            reference = ValueReference(publication.id, field)
-            result_id = self._append("Result", request, call_id, {
-                "decision_id": decision_id, "output": reference.to_dict(), "claims": claims,
-                "field_commitment": field_hash(publication, "strings", field),
-                "transition": {
-                    "governed_inputs": pack_references(v.reference.to_dict() for v in values),
-                    "governance": "retain-all-contributing-governance",
-                    "literal_inputs": ([{
-                        "parameter_index": 0, "position": parameters[1], "claims": [],
-                    }] if literal_concat else []),
-                },
-            })
-            return TNString(reference, decision_id, result_id,
-                            metadata_provider=self.string_metadata,
-                            publication=self._carried(publication, values,
-                                (decision_id, result_id, *claims)))
+            self.recorder.store.put(publication)
+            return TNString(ValueReference(publication.id, field), metadata_provider=self.string_metadata,
+                            publication=self._policy_carrier(publication, binding))
         except Exception as exc:
             # Execution/key/storage failures are not represented as successful results.
             self._append("Failure", request, call_id,

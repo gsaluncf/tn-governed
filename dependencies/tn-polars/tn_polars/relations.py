@@ -5,10 +5,9 @@ from copy import deepcopy
 import polars as pl
 import tn
 
-from .audit import rows_digest, verify_native_frame
+from .audit import rows_digest, verify_frame_metadata, verify_native_frame
 from .authority import local_policy_set
 from .release import PolicyDenied
-from .support import Support
 from .tn_boundary import TnBoundary, _check_use, root_name
 
 
@@ -28,6 +27,10 @@ def _claims(data, groups, verify_claim):
         manifest = _get(data, "manifest", group)
         if isinstance(manifest, dict):
             identifiers.update(manifest.get("claims", []))
+    return _verified_claims(identifiers, verify_claim)
+
+
+def _verified_claims(identifiers, verify_claim):
     if identifiers and not callable(verify_claim):
         raise PolicyDenied("attributed source claims require a configured record verifier")
     result = []
@@ -43,6 +46,22 @@ def _claims(data, groups, verify_claim):
     return tuple(result)
 
 
+def _admit_metadata(session, obj, group, use, decide, policies, verify_record):
+    name = obj.manifest_group or ("evidence" if "evidence" in obj.envelope else None)
+    if name is None or name == group:
+        return None
+    metadata = session.receive(obj, use=use, groups=[name], decide=decide)
+    policies.claims = _claims(metadata, [name], verify_record)
+    if _get(metadata, "tn_polars_governance", name) is not None:
+        descriptor = verify_frame_metadata(metadata, name, verify_record)
+        policies.actions = tuple(descriptor["actions"])
+        return descriptor
+    manifest = _get(metadata, "manifest", name)
+    if isinstance(manifest, dict):
+        policies.actions = tuple(manifest.get("actions", ()))
+    return None
+
+
 def _frame(
     data,
     rows,
@@ -54,7 +73,9 @@ def _frame(
     rows_field,
     claims=(),
     schema=None,
-    upstream=None,
+    actions=(),
+    ordinary_rows=False,
+    metadata_group=None,
 ):
     from .frame import GovernedLazyFrame
 
@@ -73,23 +94,17 @@ def _frame(
     )
     policies.claims = claims
     sources = {name: {root_name(source_id, name)} for name in columns}
+    policies.actions = tuple(actions)
     policies.decide("load", use.application, sources, set(), use)
-    parameters = {"group": group, "rows_field": rows_field}
-    if upstream is not None:
-        parameters["upstream"] = deepcopy(upstream)
-    policies.record_operation("load", parameters)
     first = next(iter(policies._entries.values()))
-    support = Support.source(frame, source_id, policies.revision_ids)
-    if upstream is not None:
-        support = support.unknown(frame)
     return GovernedLazyFrame(
         frame,
         first.policy,
         {},
         first.evaluator,
         sources=sources,
-        tn_boundary=TnBoundary(data.copy(), policies, use, group, rows_field, "tn.polars.frame"),
-        _support=support,
+        tn_boundary=TnBoundary(data, policies, use, group, rows_field, "tn.polars.frame", metadata_group=metadata_group),
+        ordinary_rows=ordinary_rows,
     )
 
 
@@ -122,10 +137,7 @@ def load_relation(
     policies = local_policy_set(
         view.governance.policies, evaluators, source_id=obj.id, columns=list(schema or ())
     )
-    metadata = None
-    if "evidence" in obj.envelope and group != "evidence":
-        metadata = session.receive(obj, use=use, groups=["evidence"], decide=decide)
-        policies.claims = _claims(metadata, ["evidence"], verify_claim)
+    descriptor = _admit_metadata(session, obj, group, use, decide, policies, verify_claim)
 
     def admit(context):
         policies.validate_contracts(context)
@@ -136,24 +148,22 @@ def load_relation(
     claims = {item["id"]: item for item in policies.claims}
     claims.update({item["id"]: item for item in _claims(data, [group], verify_claim)})
     rows = deepcopy(data.get(rows_field, group=group))
-    upstream = None
-    if _get(data, "tn_polars_audit", group) is not None:
-        prior = verify_native_frame(
+    actions = policies.actions
+    governed = _get(data, "tn_polars_governance", group)
+    if descriptor is not None and governed != descriptor:
+        raise PolicyDenied("frame metadata differs from the signed business field")
+    if governed is not None:
+        verify_native_frame(data, governance=view.governance, group=group, rows_field=rows_field,
+                            verify_claim=verify_claim)
+        actions = tuple(governed["actions"])
+    elif _get(data, "tn_polars_audit", group) is not None:
+        verify_native_frame(
             data,
             governance=view.governance,
             group=group,
             rows_field=rows_field,
             verify_claim=verify_claim,
         )
-        upstream = {
-            "kind": "tn.polars-audit.v1",
-            "audit_id": prior["id"],
-            "support": deepcopy(prior["support"]),
-        }
-    elif metadata is not None:
-        manifest = _get(metadata, "manifest", "evidence")
-        if isinstance(manifest, dict):
-            upstream = {"kind": "native-manifest", "manifest": deepcopy(manifest)}
     return _frame(
         data,
         rows,
@@ -164,7 +174,8 @@ def load_relation(
         rows_field=rows_field,
         claims=tuple(claims.values()),
         schema=schema,
-        upstream=upstream,
+        actions=actions,
+        metadata_group=obj.manifest_group or ("evidence" if "evidence" in obj.envelope else None),
     )
 
 
@@ -172,7 +183,7 @@ def from_admitted_query(admitted, *, use, evaluators, names=None, verify_claim=N
     """Continue from an authorized SQL processing admission without plain reveal.
 
     Output names are positional. Duplicate SQL aliases require an explicit unique
-    mapping. Query lineage remains in the signed load observation for recipients.
+    mapping. The admitted native policies govern the resulting frame.
     """
     _check_use(use)
     from tn_governed.values.query_result import AdmittedQuery
@@ -188,7 +199,7 @@ def from_admitted_query(admitted, *, use, evaluators, names=None, verify_claim=N
     ):
         raise ValueError("SQL columns require unique positional dataframe names")
     rows = [dict(zip(names, row, strict=True)) for row in admitted.rows]
-    claims = _claims(admitted.data, ["evidence"], verify_claim)
+    claims = _verified_claims(admitted.claims, verify_claim)
     return _frame(
         admitted.data,
         rows,
@@ -199,5 +210,6 @@ def from_admitted_query(admitted, *, use, evaluators, names=None, verify_claim=N
         rows_field="rows",
         claims=claims,
         schema={name: pl.Null for name in names} if not rows else None,
-        upstream=admitted.manifest["lineage"],
+        actions=admitted.actions,
+        metadata_group="evidence",
     )

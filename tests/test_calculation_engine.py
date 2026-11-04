@@ -18,7 +18,6 @@ def test_actual_engine_computes_peak_to_trough_drawdown():
     assert result.function_version == "calculation-engine/1.0.0"
     assert result.method == "peak_to_trough_running_max"
     assert result.unit == "decimal"
-    assert result.calculation_id
 
 
 @pytest.mark.parametrize("arguments", [

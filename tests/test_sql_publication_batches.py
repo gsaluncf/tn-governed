@@ -3,6 +3,7 @@
 import sqlite3
 
 import pytest
+import tn
 from test_sql_query_results import sql_endpoint as sql_endpoint
 
 from tn_governed.values.primitives import Context
@@ -24,7 +25,7 @@ def database(tmp_path):
 
 
 def test_native_256_cell_batches_preserve_field_positions_policies_and_claims(
-    sql_endpoint, tmp_path
+    sql_endpoint, tmp_path, monkeypatch
 ):
     original = sql_endpoint.driver
     driver = GovernedSQL(
@@ -35,6 +36,9 @@ def test_native_256_cell_batches_preserve_field_positions_policies_and_claims(
         directory=tmp_path / "large-editions",
         batch_size=256,
     )
+    def reject_walk(*args, **kwargs):
+        pytest.fail("a current SQL source must not request calculation history")
+    monkeypatch.setattr(tn, "LineageVerifier", reject_walk)
     rows = driver.execute("SELECT id, amount FROM orders").fetchall()
     context = sql_endpoint.contexts["consumer"]
     assert len(rows) == 257
@@ -46,9 +50,12 @@ def test_native_256_cell_batches_preserve_field_positions_policies_and_claims(
     for index, (data, binding, claims) in enumerate(metadata):
         row, column_index = divmod(index, 2)
         column = ("id", "amount")[column_index]
-        assert binding["source"]["row"] == row
-        assert binding["source"]["column"] == column
-        assert binding["origins"] == [binding["source"]]
+        value = rows[row][column_index]
+        assert value.reference.field == f"value_{row}"
+        edition = context.editions[value.reference.object_id]
+        assert edition.dataset == f"orders.{column}"
+        assert value.publication.resolve(edition.id).id == edition.id
+        assert set(binding) == {"claims", "declared", "actions"}
         assert claims == ()
         assert len(data.policies) == 1
         policies.setdefault(column, data.policies[0])
@@ -56,6 +63,10 @@ def test_native_256_cell_batches_preserve_field_positions_policies_and_claims(
     assert not policies["id"].matches_contract(policies["amount"])
     publication = context.store_object(rows[0][0].reference.object_id)
     assert len(publication.envelope["values"]["field_hashes"]) == 256
+    assert not context.session.governance(publication).governance.sources
+    gateway = original.gateway
+    records = [gateway.recorder.read(identity).body["kind"] for identity in gateway.recorder.ids()]
+    assert "Decision" in records and "SQLRead" in records and "Result" not in records
     with context:
         claimed = rows[64][1].attest("Amount at row 64 is a synthetic observation.", context)
         result = claimed + rows[255][1]
@@ -63,7 +74,7 @@ def test_native_256_cell_batches_preserve_field_positions_policies_and_claims(
     assert len(claims) == 1
     assert claims[0].subjects == (rows[64][1].reference,)
     assert claims[0].issuer == context.session.did
-    assert [origin["rows"] for origin in binding["origins"]] == [[[64, 64], [255, 255]]]
+    assert "origins" not in binding and "parents" not in binding
     assert data.policies[0].matches_contract(policies["amount"])
     assert result.reveal(context, destination="support-console") == 339
 

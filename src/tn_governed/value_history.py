@@ -124,11 +124,6 @@ class ValueHistory:
             or type(history.get("sequence")) is not int
             or history != {"key": name, "sequence": sequence, "previous": prior}
             or manifest["operation"] not in {"insert", "rederive", "delete", "restore"}
-            or (
-                prior is not None
-                and prior
-                not in {parent["reference"]["object_id"] for parent in manifest["parents"]}
-            )
         ):
             raise HistoryConflict("version index differs from signed predecessor evidence")
         transition = (previous_state, manifest["operation"], manifest["state"])
@@ -176,7 +171,7 @@ class ValueHistory:
             elif operation == "restore":
                 output = self.endpoint.restore(head, inputs[-1], parameters=parameters)
             else:
-                output = self.endpoint.execute(operation, inputs, compute, parameters=parameters)
+                output = self.endpoint.execute(operation, inputs, compute, parameters=parameters, record_use=True)
             state = self._check_transition(
                 name, len(versions) + 1, output, head, self._states.get(name)
             )
@@ -215,9 +210,9 @@ class ValueHistory:
             publications = {}
             versions = []
             for name, artifacts in self._versions.items():
-                bundle = self.endpoint.export(artifacts[-1])
-                for wire in bundle.publications:
-                    publications.setdefault(wire, None)
+                for artifact in artifacts:
+                    for wire in self.endpoint.export(artifact).publications:
+                        publications.setdefault(wire, None)
                 versions.append(
                     (name, tuple(GovernedArtifact.from_dict(item.to_dict()) for item in artifacts))
                 )

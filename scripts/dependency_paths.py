@@ -4,7 +4,7 @@ from pathlib import Path
 import shutil
 
 SETTINGS = {
-    "tn_wheel": ("TN_WHEEL", "--tn-wheel", "tn_proto-2026.9.10b2.dev2-cp39-abi3-win_amd64.whl"),
+    "tn_wheel": ("TN_WHEEL", "--tn-wheel", "tn_proto-2026.9.13b1+policy.1-cp39-abi3-win_amd64.whl"),
     "opa": ("TN_POLARS_OPA", "--opa", "opa.exe"),
     "binary": ("TN_LLAMA_BINARY", "--binary", "llama-server"),
     "model_path": ("TN_LLAMA_MODEL", "--model-path", "*.gguf"),

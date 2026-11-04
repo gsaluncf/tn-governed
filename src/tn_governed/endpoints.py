@@ -9,8 +9,8 @@ import tn
 
 from . import artifact_transfer
 from .artifact_publication import publish_artifact
-from .artifact_types import ARTIFACT_TYPE, MANIFEST_GROUP, ArtifactBundle, GovernedArtifact, artifact_json
-from .artifact_verification import external_claims, verify_artifact
+from .artifact_types import ARTIFACT_TYPE, MANIFEST_GROUP, ArtifactBundle, artifact_json
+from .artifact_verification import external_claims, imported_field_evidence, verify_artifact
 from .native_objects import NativeObjects
 from .values.evidence import EvidenceError, EvidenceRecorder, read_record
 from .values.obligations import ObligationRun, run_obligations
@@ -118,7 +118,7 @@ class Endpoint:
         )
         return request, metadata
 
-    def _authorize(self, request, call_id):
+    def _authorize(self, request, call_id, *, record=False):
         actions, cause, progress = ObligationRun(), None, []
         details = {"parameters": request.parameters[0], "action_progress": progress}
 
@@ -139,6 +139,8 @@ class Endpoint:
             permitted, cause = False, exc
             details.update({**actions.record_details(), "permitted": False,
                             "reason": "decision could not be completed", "error_type": type(exc).__name__})
+        if permitted and not assessment.obligations and not record:
+            return None
         decision = self._append("Decision", request, call_id, details)
         if not permitted:
             self._append("Refusal", request, call_id, {"decision_id": decision, "reason": details["reason"]})
@@ -176,6 +178,7 @@ class Endpoint:
         claim=None,
         dispute=None,
         state="active",
+        record_use=False,
         open_values=True,
         metadata_only=(),
     ):
@@ -185,7 +188,7 @@ class Endpoint:
                 operation, inputs, artifact_json(parameters or {}), destination, policies, metadata_only
             )
             call_id = uuid4().hex
-            decision = self._authorize(request, call_id)
+            decision = self._authorize(request, call_id, record=record_use)
             try:
                 pairs = tuple(
                     (metadata[index][0], None) if value in metadata_only else self._open(value, request)
@@ -193,7 +196,7 @@ class Endpoint:
                 ) if open_values else ()
                 value = compute(tuple(value for _, value in pairs))
                 opened = tuple(data for data, _ in pairs) if open_values else tuple(item[0] for item in metadata)
-                return publish_artifact(self, value, inputs, metadata, opened, request, decision, call_id,
+                return publish_artifact(self, value, metadata, opened, request, decision, call_id,
                                         claim=claim, dispute=dispute, state=state)
             except Exception as exc:
                 self._fail(request, call_id, decision, exc)
@@ -205,11 +208,11 @@ class Endpoint:
         )
 
     def execute(
-        self, operation, inputs, compute, *, parameters=None, destination="governed-runtime"
+        self, operation, inputs, compute, *, parameters=None, destination="governed-runtime", record_use=False
     ):
         if not callable(compute):
             raise TypeError("operation requires an authorized computation callback")
-        return self._execute(operation, inputs, compute, parameters, destination)
+        return self._execute(operation, inputs, compute, parameters, destination, record_use=record_use)
 
     def attest(self, artifact, statement):
         if not isinstance(statement, str) or not statement.strip():
@@ -243,6 +246,7 @@ class Endpoint:
             lambda _: None,
             parameters,
             "governed-runtime",
+            record_use=True,
             state="deleted",
             open_values=False,
         )
@@ -258,22 +262,9 @@ class Endpoint:
             lambda values: values[1],
             parameters,
             "governed-runtime",
+            record_use=True,
             metadata_only=(previous,),
         )
-
-    def ancestors(self, artifact):
-        with self._lock:
-            pending, visited, identities, cache = [artifact], set(), set(), {}
-            while pending:
-                current = pending.pop()
-                if current in visited:
-                    continue
-                visited.add(current)
-                manifest = verify_artifact(self, current, cache)[1]
-                identities.add(current.reference.object_id)
-                identities.update(item["object_id"] for item in manifest["external_inputs"])
-                pending.extend(GovernedArtifact.from_dict(item) for item in manifest["parents"])
-            return frozenset(identities)
 
     def import_publication(
         self,
@@ -284,14 +275,14 @@ class Endpoint:
         operation="import",
         parameters=None,
         claims=(),
+        actions=(),
         publications=(),
         decide=None,
         validate=None,
     ):
         """Admit an external native field without exposing it through public reveal.
 
-        Carried objects retain the source's native ancestry and signed claim
-        records. The endpoint supplies its own operation and metadata decisions.
+        Signed claims retain their original issuers and subjects. The endpoint supplies its own operation and metadata decisions.
         """
         _check_import(publication, operation, validate)
         with self._lock:
@@ -307,16 +298,28 @@ class Endpoint:
             # group's holder. Receipt reuses this route after the endpoint decides.
             use = tn.UseContext(self.application, self.purpose, operation)
             admitted = self.session.admit(publication, use=use, groups=[group], decide=accept)
+            bound_claims, bound_actions = (), ()
+            metadata_group = publication.manifest_group or MANIFEST_GROUP
+            if metadata_group != group and metadata_group in publication.group_names:
+                evidence = self.session.receive(publication, use=use, groups=[metadata_group], decide=accept)
+                bound_claims, bound_actions = imported_field_evidence(self, evidence, metadata_group, group, field)
+            if set(actions) - set(bound_actions):
+                raise EvidenceError("action is not attached to the imported field")
+            claim_ids = tuple(dict.fromkeys((*bound_claims, *claims)))
             request = self._import_request(publication, reference, admitted.policies, operation, parameters,
-                                           external_claims(self, publication, claims))
+                                           external_claims(self, publication, reference, claim_ids, bound_claims))
             call_id = uuid4().hex
             decision = self._authorize(request, call_id)
             try:
                 data = self.session.receive(admitted, decide=accept)
                 if validate is not None and validate(data) is not True:
                     raise EvidenceError("external content validation refused the publication")
-                return publish_artifact(self, data.get(field, group=group), (), (), (data,), request, decision,
-                                        call_id, external_inputs=(reference,))
+                descriptor = data.get(group=group).get("tn_polars_governance")
+                if descriptor and (set(descriptor["claims"]) != set(bound_claims)
+                                   or set(descriptor["actions"]) != set(bound_actions)):
+                    raise EvidenceError("frame governance differs from the admitted metadata")
+                return publish_artifact(self, data.get(field, group=group), (), (data,), request, decision,
+                                        call_id, actions=bound_actions)
             except Exception as exc:
                 self._fail(request, call_id, decision, exc)
                 raise
@@ -334,7 +337,7 @@ class Endpoint:
         with self._lock:
             request, _ = self._request("reveal", (artifact,), {}, destination)
             call_id = uuid4().hex
-            decision = self._authorize(request, call_id)
+            decision = self._authorize(request, call_id, record=True)
             try:
                 _, value = self._open(artifact, request)
                 self._append("Disclosure", request, call_id,

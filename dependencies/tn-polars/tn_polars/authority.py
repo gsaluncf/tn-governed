@@ -4,7 +4,7 @@ import json
 from copy import deepcopy
 from dataclasses import dataclass
 
-from .audit import AuditTrail, _digest
+from .audit import _digest
 from .policy import CompiledPolicy
 from .release import Decision, PolicyDenied
 
@@ -88,29 +88,4 @@ def local_policy_set(policies, evaluators, *, source_id, columns, bindings=()):
         entries[identity] = _PolicyEntry(
             classification, evaluator, evaluator.artifact(policy), frozenset({source_id}), None
         )
-    audit = AuditTrail()
-    if bindings:
-        for binding in bindings:
-            audit = audit.append(
-                "source",
-                {
-                    "source_id": source_id,
-                    "binding_source_id": binding.source_object_id,
-                    "dataset": binding.dataset,
-                    "edition": binding.edition,
-                    "edition_record_id": binding.edition_record_id,
-                    "policy_revisions": sorted(native),
-                },
-            )
-    else:
-        audit = audit.append(
-            "source",
-            {
-                "source_id": source_id,
-                "dataset": None,
-                "edition": None,
-                "edition_record_id": None,
-                "policy_revisions": sorted(native),
-            },
-        )
-    return PolicySet(entries, audit=audit)
+    return PolicySet(entries)

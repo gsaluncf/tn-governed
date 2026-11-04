@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import urllib.request
@@ -42,7 +41,6 @@ class CalculationResult:
     method: str
     unit: str
     value: float
-    calculation_id: str
 
 
 def _result(request: CalculationRequest, reply: dict) -> CalculationResult:
@@ -61,14 +59,9 @@ def _result(request: CalculationRequest, reply: dict) -> CalculationResult:
         or not -1 <= reply["value"] <= 0
     ):
         raise ValueError("Calculation returned a result outside the declared calculation contract")
-    # This identifies the calculation record. The surrounding TN object signs it.
-    invocation = {"request": {"function": request.function, "arguments": request.arguments},
-                  "result": reply}
-    record = json.dumps(invocation, sort_keys=True, separators=(",", ":"), allow_nan=False)
     return CalculationResult(
         function=request.function, function_version=reply["function_version"],
         method=reply["method"], unit=reply["unit"], value=float(reply["value"]),
-        calculation_id="sha256:" + hashlib.sha256(record.encode("utf-8")).hexdigest(),
     )
 
 

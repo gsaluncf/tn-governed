@@ -118,11 +118,11 @@ def run(directory, *, storage="files"):
             a = a.attest('Original source numeric claim', context)
             combined = a + d
             _, binding, claims = context._metadata(combined)
-            assert binding['parents'] == [a.reference.to_dict(), d.reference.to_dict()]
+            assert set(binding) == {'claims', 'actions', 'declared'}
             assert len(claims) == 1 and claims[0].subjects == (source_subject := context._metadata(a)[2][0].subjects)
             assert source_subject != (combined.reference,)
             same(combined.copy(), Decimal('8.2350'))
-            checks.append('both parents and original claim subjects retained across mixed arithmetic and copy')
+            checks.append('original claim subjects retained across mixed arithmetic and copy')
             try:
                 context.hydrate(d.reference, d.decision_id, d.result_id, kind='float')
             except EvidenceError:

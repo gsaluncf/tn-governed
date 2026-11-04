@@ -55,7 +55,8 @@ def recipients(tmp_path, monkeypatch):
         assignment = resolvers["catalog"].publish_assignment(
             tmp_path / "assignment", table="people", source_identity=source,
             application="support", actors=["analyst"], purposes=["internal"],
-            columns={"name": {"kind": "str", "markdown": markdown("name")}},
+            columns={"name": {"kind": "str", "markdown": markdown("name"),
+                              "rule": {"obligations": ["monitor"]}}},
         )
         packet = None
         contexts = {}
@@ -169,7 +170,8 @@ def test_recipient_derivative_retains_original_claim_and_policy(recipients):
     assert claims[0].issuer == run.sessions["gateway"].did
     assert claims[0].subjects == (run.original.reference,)
     assert claims[0].statement == run.statement
-    assert binding["parents"] == [run.value.reference.to_dict()]
+    assert "parents" not in binding
+    assert not context.session.governance(result.publication.object).governance.sources
     assert len(data.policies) == 1 and data.policies[0].matches_contract(run.policy)
     decision = next(record for record in records(run, "internal")
                     if record.body["kind"] == "Decision")

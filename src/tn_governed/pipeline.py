@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import io
 from dataclasses import dataclass
 
 import tn
@@ -42,12 +41,11 @@ def run_governed_calculation_path(
     decide_calculation_receive,
     decide_calculation_release,
     to: str,
-    decide_ancestor=None,
 ) -> GovernedCalculationPathResult:
     """Fetch selected publications, prepare wealth, and publish one calculation result.
 
     Sessions and use contexts belong to the configured receiving endpoints.
-    Application callbacks supplement native selection, catalog and ancestry checks.
+    Application callbacks supplement native selection and catalog checks.
     """
     catalog = wealth_edition.catalog
     if catalog is not calendar_edition.catalog:
@@ -66,22 +64,6 @@ def run_governed_calculation_path(
         group="finance", rows_field="rows", object_type="portfolio.calculation.input",
     )
     publication_store.put(polars_object)
-    accepted_writers = {
-        wealth_edition.selection.record.source_writer,
-        calendar_edition.selection.record.source_writer,
-        polars_session.did,
-        calculation_session.did,
-    }
-
-    def resolve_ancestor(identity):
-        object = tn.GovernedObject.read(io.BytesIO(publication_store.get(identity)))
-        view = calculation_session.governance(object)
-        if object.writer not in accepted_writers:
-            raise PermissionError("retained ancestor writer is not accepted by this calculation")
-        if decide_ancestor is not None and decide_ancestor(view) is not True:
-            raise PermissionError("application refused the retained ancestor governance")
-        return view
-
     def accept_calculation(context):
         if (context.writer != polars_session.did
                 or context.object.id != polars_object.id
@@ -90,9 +72,6 @@ def run_governed_calculation_path(
             return False
         if not catalog.accepts(context, policy_dag):
             return False
-        tn.LineageVerifier().verify(
-            calculation_session.governance(context.object), catalog, policy_dag, resolve_ancestor,
-        )
         return decide_calculation_receive(context)
 
     expected_view = calculation_session.governance(polars_object)
@@ -116,8 +95,6 @@ def run_governed_calculation_path(
             and context.destination == to
             and context.object_type == "portfolio.calculation.calculated"
             and exact_contracts
-            and len(context.sources) == 1
-            and context.sources[0].references(polars_object)
             and decide_calculation_release(context)
         )
 

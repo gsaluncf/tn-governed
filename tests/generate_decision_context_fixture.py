@@ -60,6 +60,52 @@ def boundary_fixture(workflow, profile, with_claim=True):
         "publications": [*snapshots, original.forward().decode("utf-8"), attested.forward().decode("utf-8")]}
 
 
+def generate_carried():
+    """Generate the current wire sample using the same producer and real endpoint config as the test."""
+    with tempfile.TemporaryDirectory() as directory, pytest.MonkeyPatch.context() as monkeypatch:
+        from dataclasses import replace
+        from tn_governed.values.catalog import AssignedRules
+        evaluate = AssignedRules.__call__
+        def require_monitor(rules, request):
+            result = evaluate(rules, request)
+            return replace(result, obligations=("monitor",)) if result.permit and request.operation == "upper" else result
+        monkeypatch.setattr(AssignedRules, "__call__", require_monitor)
+        fixture = report_workflow.__wrapped__(Path(directory), monkeypatch, SimpleNamespace(param="native"))
+        workflow = next(fixture)
+        try:
+            profile = json.loads(workflow.endpoint.runtime_config.read_bytes())["governed_objects"]
+            config = Path(profile["native_reader_config_path"])
+            metadata = json.loads(Path(profile["metadata_store_path"]).read_bytes())
+            _, _, claims = workflow.context._metadata(workflow.value)
+            profile.update(native_reader_config_path="input/tn.yaml", metadata_store_path="metadata.json")
+            result = {
+                "profile": profile, "metadata": metadata, "reader_config": yaml.safe_load(config.read_text()),
+                "keys": {p.name: base64.b64encode(p.read_bytes()).decode("ascii")
+                         for p in (config.parent / "keys").iterdir()},
+                "request": json.loads(build_model_request(workflow.source, "Describe the company.",
+                    workflow.endpoint.use, destination=workflow.endpoint.requirements["report_destination"])),
+                "expected_claim": {"record_id": claims[0].id, "issuer": claims[0].issuer,
+                    "statement": claims[0].statement,
+                    "original_subjects": [subject.to_dict() for subject in claims[0].subjects]},
+            }
+            data, binding, _ = workflow.context._metadata(workflow.value)
+            field = {"group": "values", "claims": binding["claims"], "actions": binding["actions"]}
+            generic = data.policy_output("finance.calculation", {
+                "values": {"share": 0.25}, "evidence": {"manifest": {
+                    "schema": "tn.governed-fields.v1", "bindings": {"share": field}}},
+            })
+            generic = workflow.context.session.release(generic, use=workflow.endpoint.use, to="internal-model",
+                object_type="finance.calculation", decide=lambda _: True)
+            result["generic"] = generic.forward().decode("utf-8")
+            direct_id, edition = next(iter(workflow.context.editions.items()))
+            result["direct"] = workflow.context.store_object(direct_id).wire
+            result["direct_edition_id"] = edition.id
+            target = Path("native/tn-llama/crates/tn-runtime/tests/fixtures/carried-decision.json")
+            target.write_text(json.dumps(result, separators=(",", ":")) + "\n", encoding="utf-8")
+        finally:
+            fixture.close()
+
+
 def generate():
     with tempfile.TemporaryDirectory() as directory, pytest.MonkeyPatch.context() as monkeypatch:
         # The workflow fixture is parametrized; tn-llama's claim fixture is the native case.
@@ -129,4 +175,4 @@ def generate():
 
 
 if __name__ == "__main__":
-    generate()
+    generate_carried()

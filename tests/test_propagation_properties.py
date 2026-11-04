@@ -26,7 +26,6 @@ from tn_governed.native_objects import NativeObjects
 from tn_governed.values.catalog import AssignedRules, markdown
 from tn_governed.values.evidence import EvidenceRecorder
 from tn_governed.values.provision import provision
-from tn_governed.values.query import lineage_cells
 from tn_governed.values.sql import GovernedSQL, source_identity
 
 SCALAR_CASES = 40
@@ -179,7 +178,7 @@ def source_columns(metadata):
 
 
 def random_statement(generator):
-    """Return SQL, every column it reads, and whether contributors can be tracked."""
+    """Return SQL and the set of columns whose rules apply."""
     aggregate = generator.random() < 0.4
     used = {("orders", "amount")}
     predicate = ""
@@ -200,23 +199,22 @@ def random_statement(generator):
     else:
         sql = f"SELECT o.amount + 1 AS total FROM orders o{join}{predicate} ORDER BY 1"
     if generator.random() < 0.3:
-        return f"WITH shaped AS ({sql}) SELECT * FROM shaped", used, False
-    return sql, used, True
+        return f"WITH shaped AS ({sql}) SELECT * FROM shaped", used
+    return sql, used
 
 
 def test_sql_results_retain_every_read_column_and_match_ordinary_sqlite(sql_endpoint, database):
     generator = random.Random(20261103)
     with closing(sqlite3.connect(database)) as plain:
         for _ in range(SQL_CASES):
-            sql, used, tracked = random_statement(generator)
+            sql, used = random_statement(generator)
             result = sql_endpoint.driver.execute_query(sql)
             metadata = result.metadata()
             expected = plain.execute(sql).fetchall()
             assert result.reveal("support-console") == expected, sql
             assert used <= source_columns(metadata), sql
             assert len({p.revision_id for p in result.policies}) == len(source_columns(metadata))
-            assert metadata["lineage"]["row_support"] == ("known" if tracked else "unknown"), sql
-            assert bool(lineage_cells(metadata["lineage"])) == (tracked and bool(expected)), sql
+            assert "lineage" not in metadata and "sql" not in metadata["binding"]
 
 
 def random_plan(generator):
@@ -258,6 +256,5 @@ def test_polars_plans_match_ordinary_polars_and_retain_their_policies(relation):
                                           to="internal", decide=lambda _: True)
         rows, audit = opened(session, publication)
         assert rows == plan(plain.lazy()).collect().to_dicts()
-        assert {item["policy_revision"] for item in audit["policies"]} == set(
-            frame._tn.policies.revision_ids)
-        assert bool(audit["output"]["row_selection_sources"]) == selective or not selective
+        assert set(audit["policies"]) == set(frame._tn.policies.revision_ids)
+        assert not session.governance(publication).governance.sources

@@ -18,6 +18,7 @@ from .evidence import require, verify_tape
 from .provision import POLICY
 
 RUN_SCHEMA = "tn.primitive-run.v1"
+POLICY_RUN_SCHEMA = "tn.policy-run.v2"
 ASSIGNMENT_SCHEMA = "tn.sql-assignment.v1"
 # Administration and evidence records are read under this use.
 INSPECT = ("offline-verifier", "inspect-evidence", "read")
@@ -41,7 +42,7 @@ def open_retained_run(root):
     """Open the run at `root` under its configured observer; every cache clears on exit."""
     root = Path(root).resolve()
     run = json.loads((root / "run.json").read_text())
-    require(run["schema"] == RUN_SCHEMA, "unknown run manifest")
+    require(run["schema"] in (RUN_SCHEMA, POLICY_RUN_SCHEMA), "unknown run manifest")
     store = open_publication_store(root / "publications", read_only=True)
     with store, tn.Session.from_config(str(root / run["observer_config"])) as session, ExitStack() as caches:
         yield RetainedRun(root, run, store, session, caches)
@@ -126,7 +127,8 @@ class RetainedRun:
                     "source edition has an unrecognized assignment or writer")
             catalog.admit(edition, dag, lambda record: record.writer == self.authority)
             selected = catalog.select(edition.dataset, edition.edition, edition.id, use)
-            selected.verify_source(self.governance(edition.source_object_id), use, ["values", "evidence"])
+            if self.run["schema"] == RUN_SCHEMA:
+                selected.verify_source(self.governance(edition.source_object_id), use, ["values", "evidence"])
             editions.append(edition)
         return catalog, editions
 

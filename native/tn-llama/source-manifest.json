@@ -52,16 +52,20 @@
       "sha256": "ef19797928673289ff0f68b8cdf958143c7208b7156f80611af2a4955a6ce675"
     },
     {
+      "path": "crates/tn-runtime/src/decision_context/carried.rs",
+      "sha256": "ec445629f3d99e3d731f601a29c1d6248f2960be177e9399cb51313fd352402b"
+    },
+    {
       "path": "crates/tn-runtime/src/decision_context/claims.rs",
-      "sha256": "244dd12c5be9cac09faf6d74850cb229f1c9477c796c6f6134e01b2ef6a9b99f"
+      "sha256": "b26aba251b7f2be37b02d86d403daab8cb6583342bff9c241da9854aa7add4eb"
     },
     {
       "path": "crates/tn-runtime/src/decision_context/manifest.rs",
-      "sha256": "f424cc9bd8799dbfbf6aa3f7da32ec4ee71e270efe074e009d86de851bc3063e"
+      "sha256": "a2b52406682d2bcd7de00954113b617b81eec425db0aecee8952b99ef2fed55e"
     },
     {
       "path": "crates/tn-runtime/src/decision_context/mod.rs",
-      "sha256": "63d6ae3b26bce76886d1ea1010b5e644c659a727035ebbff850dec31d4b762f7"
+      "sha256": "ff4982bda69470e92b158895864099297cdadcc42c7d12846322bfc072dc7df9"
     },
     {
       "path": "crates/tn-runtime/src/error.rs",
@@ -89,7 +93,7 @@
     },
     {
       "path": "crates/tn-runtime/src/governed_input.rs",
-      "sha256": "e084959b9f7fdd3410e12f7e5da19c481422a6537c21032bc9287ff8593e0e2b"
+      "sha256": "3af1c93b2fcaacdc44ea81fbf844bae901999ea3b3bbb65d969b8f509629c41a"
     },
     {
       "path": "crates/tn-runtime/src/lib.rs",
@@ -192,6 +196,10 @@
       "sha256": "0fe1608cf588f324a257f2d087e4b04b97f3a80fcaf817ce61bb0d1fc2781d2a"
     },
     {
+      "path": "crates/tn-runtime/tests/fixtures/carried-decision.json",
+      "sha256": "4be200cb2141385f27cc11c264afee118b20b506f965fff97a96ef90ebb07ff1"
+    },
+    {
       "path": "crates/tn-runtime/tests/fixtures/decision-context.json",
       "sha256": "90ea954de63fa86f146959fc3e99984cd6d495541917f0c59e8254d7fe8f3a96"
     },
@@ -225,7 +233,7 @@
     },
     {
       "path": "crates/tn-runtime/tests/governed_decision_context.rs",
-      "sha256": "dc70339f5d864933a181b0614c4e2ed1f52775213bb43d1a682cbd63cc32fd34"
+      "sha256": "fa11fa5120e4be7e8ed32e25ed4154bc45b441d10ce54e8854ced60afc7c9727"
     },
     {
       "path": "crates/tn-runtime/tests/governed_object_admission.rs",

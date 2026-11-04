@@ -133,6 +133,7 @@ def integrate_chain(context, report, source, depth, directory):
             lambda _: report.report_html,
             parameters={"accepted_native_report": evidence},
             destination="governed-tool-runtime",
+            record_use=True,
         )
     bridge_seconds = time.perf_counter() - bridge_started
     bridge_records = len(endpoint.store.record_ids(endpoint.recorder.context_id))

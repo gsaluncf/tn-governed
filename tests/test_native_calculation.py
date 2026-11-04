@@ -65,7 +65,7 @@ def execute(session, publication, port, *, accept=lambda _: True, release=lambda
     )
 
 
-def test_native_calculation_preserves_contract_and_exact_parent_and_projects_output():
+def test_native_calculation_sends_the_result_and_contract_to_the_model():
     with tn.Session(POLICY, groups=["finance", "audit"]) as session:
         publication = source(session)
         port = CountingPort()
@@ -77,15 +77,13 @@ def test_native_calculation_preserves_contract_and_exact_parent_and_projects_out
         )
         assert len(port.requests) == len(releases) == 1
         assert execution.result.value == -0.25
-        assert execution.source_object_id == publication.id
-        assert execution.request.arguments["wealth_path"] == [100, 120, 90, 110]
+        assert port.requests[0].arguments["wealth_path"] == [100, 120, 90, 110]
         output = session.receive(
             result, use=tn.UseContext("tn-llama", "portfolio_analysis", "generate_report"),
             groups=["finance"], decide=lambda _: True,
         )
-        assert output.governance.sources[0].object_id == publication.id
-        assert output.data["calculation"]["input_object_id"] == publication.id
-        assert output.data["calculation"]["result"] == asdict(execution.result)
+        assert not output.governance.sources
+        assert dict(output.data["calculation"]) == {"result": asdict(execution.result)}
         assert "rows" not in output.data
         assert "audit" not in result.envelope
         assert len(output.policies) == 1

@@ -38,6 +38,12 @@ pub struct EvidenceContractPermission {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GovernedInputConfig {
+    /// Admit the current publisher's signed policy carrier and its attached evidence.
+    #[serde(default)]
+    pub carried_policy: bool,
+    /// Exact catalog edition for an original publication issued before its edition was signed.
+    #[serde(default)]
+    pub source_edition_id: Option<String>,
     #[serde(
         default = "crate::config::default_lineage_max_objects",
         deserialize_with = "crate::config::deserialize_lineage_max_objects"
@@ -162,6 +168,8 @@ struct MetadataStore {
     publications: Vec<String>,
     #[serde(default)]
     claim_records: Vec<String>,
+    #[serde(default)]
+    action_records: Vec<String>,
 }
 
 pub(crate) struct GovernedInputRuntime {
@@ -170,9 +178,11 @@ pub(crate) struct GovernedInputRuntime {
     pub report_policy: Option<tn_core::governed::Governance>,
     pub(crate) dag: PolicyDag,
     pub(crate) catalog: DatasetCatalog,
+    pub(crate) source_selection: Option<tn_core::governed::DatasetSelection>,
     pub(crate) retained: BTreeMap<String, GovernanceView>,
     pub(crate) lineage: LineageVerifier,
     pub(crate) claim_records: Vec<String>,
+    pub(crate) action_records: Vec<String>,
     /// Opened and verified evidence manifests of retained objects, by object and use.
     pub(crate) manifests: Mutex<OpenedManifests>,
 }
@@ -263,6 +273,19 @@ impl GovernedInputRuntime {
                 })
                 .map_err(|_| refused("tn_governed_authority_denied"))?;
         }
+        let source_selection = config
+            .source_edition_id
+            .as_ref()
+            .map(|id| {
+                let record = catalog
+                    .get(id)
+                    .filter(|_| config.carried_policy)
+                    .ok_or_else(|| refused("tn_governed_source_denied"))?;
+                catalog
+                    .select(record.dataset(), record.edition(), id, &config.use_context)
+                    .map_err(|_| refused("tn_governed_source_denied"))
+            })
+            .transpose()?;
         let mut retained = BTreeMap::new();
         for wire in &metadata.publications {
             let object =
@@ -298,9 +321,11 @@ impl GovernedInputRuntime {
             report_policy,
             dag,
             catalog,
+            source_selection,
             retained,
             lineage,
             claim_records: metadata.claim_records,
+            action_records: metadata.action_records,
             manifests: Mutex::new(BTreeMap::new()),
         })
     }
@@ -320,6 +345,9 @@ impl GovernedInputRuntime {
         }
         if !self.accepts_contracts(context)? {
             return Ok(false);
+        }
+        if self.config.carried_policy {
+            return Ok(true);
         }
         self.lineage.verify(view, &self.catalog, &self.dag, |id| {
             self.retained
@@ -351,6 +379,14 @@ impl GovernedInputRuntime {
             }
             self.dag.resolve(&policy, &permission.scope)?;
         }
+        if let Some(selection) = &self.source_selection {
+            if context.object().id() == selection.source_object_id() {
+                selection.verify_context(context)?;
+                if context.governance().dataset_bindings()?.is_empty() {
+                    return Ok(true);
+                }
+            }
+        }
         if !self.catalog.accepts(context, &self.dag)? {
             return Ok(false);
         }
@@ -375,6 +411,9 @@ impl GovernedInputRuntime {
             })
         {
             return Ok(false);
+        }
+        if self.config.carried_policy {
+            return Ok(true);
         }
         self.lineage.verify(view, &self.catalog, &self.dag, |id| {
             if let Some(parent) = parents.iter().find(|parent| id == parent.object().id()) {
@@ -407,9 +446,13 @@ impl GovernedInputRuntime {
         // Strict group-bound acceptance before any contract content reaches inference.
         let route = self
             .reader
-            .admit_route(&request.object, &request.use_context, groups, None, |ctx| {
-                self.accepts_on_route(ctx, &view)
-            })
+            .admit_route(
+                &request.object,
+                &request.use_context,
+                groups,
+                self.source_selection.iter(),
+                |ctx| self.accepts_on_route(ctx, &view),
+            )
             .map_err(|_| refused("tn_governed_use_denied"))?;
         Ok((view, checked, route))
     }

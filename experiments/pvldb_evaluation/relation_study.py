@@ -2,10 +2,8 @@
 
 Each query runs through the governed path: authorized SQLite execution, one
 signed relation publication, processing admission, governed Polars, and release.
-Contributor mode records source rows for each output cell; source-scope mode
-records authorized source columns and unknown row support. The baseline executes
-the same statement with the sqlite3 module and applies the same Polars plan. No
-language model participates.
+Each recipient checks the policy set on the released result. The baseline uses the
+same SQLite statement and Polars plan. Both outputs are compared outside the timer.
 """
 
 from __future__ import annotations
@@ -82,7 +80,6 @@ def ordering_plan(source):
 
 def column_definition(column, kind):
     return {"kind": kind, "markdown": markdown(column), "rule": {
-        "sql_lineage": ["conservative", "exact"],
         "additional_uses": [{"application": "archive", "purpose": "audit", "operation": "read"}],
     }}
 
@@ -134,10 +131,9 @@ def timed(timings, name, function):
     return value
 
 
-def governed_query(driver, contexts, sql, plan, tracking):
+def governed_query(driver, contexts, sql, plan):
     timings = {}
-    result = timed(timings, "query_and_publication", lambda: driver.execute_query(
-        sql, contributor_tracking=tracking))
+    result = timed(timings, "query_and_publication", lambda: driver.execute_query(sql))
     admitted = timed(timings, "admission", lambda: result.open_for_processing("select", "polars"))
     frame = timed(timings, "frame_construction", lambda: from_admitted_query(
         admitted, use=USE, evaluators=evaluators_for(admitted.data.policies)))
@@ -148,14 +144,14 @@ def governed_query(driver, contexts, sql, plan, tracking):
     wire = timed(timings, "transport_export", lambda: result.export().to_bytes())
     timed(timings, "recipient_receipt", lambda: GovernedQueryResult.receive(
         contexts["consumer"], QueryTransport.from_bytes(wire)))
-    manifest = result.metadata()
-    lineage = manifest["lineage"]
-    return {"timings_seconds": timings, "processing_seconds": processing,
-            "wire_bytes": len(wire), "released_bytes": len(publication.forward()),
-            "output_rows": manifest["row_count"], "precision": lineage.get("precision"),
-            "row_support": lineage.get("row_support"),
-            "row_identities": sum(len(item) for row in lineage.get("contributor_rows", []) for item in row),
-            "policies": len(result.policies)}
+    required = {item["revision_id"] for item in result.metadata()["binding"]["sources"]}
+    def accept(context):
+        return {policy.revision_id for policy in context.policies} == required
+    received = contexts["consumer"].session.receive(publication, use=USE, groups=["values"], decide=accept)
+    return ({"timings_seconds": timings, "processing_seconds": processing,
+             "wire_bytes": len(wire), "released_bytes": len(publication.forward()),
+             "output_rows": result.metadata()["row_count"], "policies": len(required)},
+            received.get("rows", group="values"))
 
 
 def plain_query(database, sql, plan):
@@ -165,22 +161,25 @@ def plain_query(database, sql, plan):
         rows = timed(timings, "fetch", cursor.fetchall)
         names = [item[0] for item in cursor.description]
     frame = timed(timings, "frame_construction", lambda: pl.DataFrame(
-        [dict(zip(names, row, strict=True)) for row in rows], infer_schema_length=None).lazy())
-    timed(timings, "plan", lambda: plan(frame).collect())
+        [dict(zip(names, row, strict=True)) for row in rows], infer_schema_length=None,
+        schema={name: pl.Null for name in names} if not rows else None).lazy())
+    output = timed(timings, "plan", lambda: plan(frame).collect())
     return {"timings_seconds": timings, "processing_seconds": sum(timings.values()),
-            "output_rows": len(rows)}
+            "output_rows": len(rows)}, output.to_dicts()
 
 
-def run_case(root, label, database, tables, name, sql, plan, tracking, repetition):
-    mode = "contributors" if tracking else "source-scope"
+def run_case(root, label, database, tables, name, sql, plan, repetition):
+    mode = "governed"
     directory = root / "cases" / f"{label}-{name}-{mode}-{repetition}"
     directory.mkdir(parents=True)
     reset_peak_memory()
     with ExitStack() as stack:
         driver, contexts = build_endpoint(stack, directory, database, tables)
-        governed = governed_query(driver, contexts, sql, plan, tracking)
+        governed, actual = governed_query(driver, contexts, sql, plan)
     peak = peak_memory_bytes()
-    plain = plain_query(database, sql, plan)
+    plain, expected = plain_query(database, sql, plan)
+    if actual != expected:
+        raise ValueError("governed relation differs from the plain result")
     shutil.rmtree(directory)
     print(label, name, mode, repetition, round(governed["processing_seconds"], 3),
           round(plain["processing_seconds"], 3), flush=True)
@@ -197,21 +196,19 @@ def isolated_case(*arguments):
             return None
 
 
-def run_workload(root, label, database, tables, queries, plan, repetitions, modes):
+def run_workload(root, label, database, tables, queries, plan, repetitions):
     outcomes, exhausted = [], set()
     for repetition in range(repetitions):
         for name, sql in queries.items():
-            for tracking in modes:
-                mode = "contributors" if tracking else "source-scope"
-                if (name, mode) in exhausted:
-                    continue
-                result = isolated_case(root, label, database, tables, name, sql, plan, tracking, repetition)
-                if result is None:
-                    exhausted.add((name, mode))
-                    print(label, name, mode, repetition, "process-killed", flush=True)
-                    result = {"workload": label, "query": name, "mode": mode,
-                              "repetition": repetition, "failure": "process-killed"}
-                outcomes.append(result)
+            if name in exhausted:
+                continue
+            result = isolated_case(root, label, database, tables, name, sql, plan, repetition)
+            if result is None:
+                exhausted.add(name)
+                print(label, name, repetition, "process-killed", flush=True)
+                result = {"workload": label, "query": name, "mode": "governed",
+                          "repetition": repetition, "failure": "process-killed"}
+            outcomes.append(result)
     return outcomes
 
 
@@ -232,8 +229,6 @@ def summarize(outcomes):
                         "wire_bytes": items[0]["governed"]["wire_bytes"],
                         "released_bytes": items[0]["governed"]["released_bytes"],
                         "output_rows": items[0]["governed"]["output_rows"],
-                        "row_support": items[0]["governed"]["row_support"],
-                        "row_identities": items[0]["governed"]["row_identities"],
                         "policies": items[0]["governed"]["policies"],
                         "peak_rss_bytes": max(i["peak_rss_bytes"] or 0 for i in items)})
     return summary
@@ -246,8 +241,6 @@ def main():
     parser.add_argument("--scale-factors", type=float, nargs="*", default=[0.01, 0.1])
     parser.add_argument("--queries", nargs="*", default=sorted(QUERIES))
     parser.add_argument("--repetitions", type=int, default=5)
-    parser.add_argument("--contributor-scale-limit", type=float, default=0.01,
-                        help="Largest scale factor that also runs contributor mode")
     args = parser.parse_args()
     root = args.run_directory.resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -260,7 +253,7 @@ def main():
     for rows in args.market_rows:
         database = market_database(root / f"market-{rows}.sqlite", rows)
         outcomes += run_workload(root, f"market-{rows}", database, MARKET, {"sum": MARKET_QUERY},
-                                 market_plan, args.repetitions, (True, False))
+                                 market_plan, args.repetitions)
         database.unlink()
         save()
     for scale in args.scale_factors:
@@ -268,10 +261,9 @@ def main():
         started = time.perf_counter()
         generate(database, scale)
         print("generated", scale, round(time.perf_counter() - started, 1), flush=True)
-        modes = (True, False) if scale <= args.contributor_scale_limit else (False,)
         outcomes += run_workload(root, f"tpch-sf{scale}", database, SCHEMA,
                                  {name: QUERIES[name] for name in args.queries}, ordering_plan,
-                                 args.repetitions, modes)
+                                 args.repetitions)
         database.unlink()
         save()
 

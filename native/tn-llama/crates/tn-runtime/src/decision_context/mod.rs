@@ -11,6 +11,7 @@ use crate::output_tn::GovernedPublication;
 use crate::reference_runs::Subject;
 use crate::TnLlamaError;
 
+mod carried;
 mod claims;
 mod manifest;
 
@@ -27,6 +28,9 @@ impl GovernedInputRuntime {
         tools: &[GovernedPublication],
     ) -> Result<BTreeMap<String, Value>, TnLlamaError> {
         let mut views = self.bound_views(request, source, tools)?;
+        if self.config.carried_policy {
+            return self.carried_decision_context(request, source, tools);
+        }
         let (sources, root_ids) = self.verify_roots(source, tools, &mut views)?;
         let mut bindings = self.root_bindings(request, tools, &views, &root_ids)?;
         let required = required_claims(&root_ids, &bindings);

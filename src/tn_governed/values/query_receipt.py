@@ -1,4 +1,4 @@
-"""What a recipient checks: the SQL transport container and the signed query lineage."""
+"""What a recipient checks: the SQL transport container and the signed source policy assignments."""
 
 from __future__ import annotations
 
@@ -12,13 +12,25 @@ from .query import decode_sql, encode_sql
 def check_result_binding(manifest, *, sources, source, grant_ref):
     """The signed binding names the admitted sources, snapshot, and edition, with a valid lineage."""
     binding = manifest["binding"]
-    lineage = manifest.get("lineage")
     if (
         not isinstance(binding, dict)
-        or binding.get("schema") != "tn.sql-query.v1"
         or binding.get("sources") != sources
         or binding.get("snapshot") != source
         or manifest["binding_id"] != grant_ref
+        or type(manifest.get("row_count")) is not int
+        or manifest["row_count"] < 0
+    ):
+        raise EvidenceError("query result differs from the admitted source assignments")
+    _check_output_schema(binding.get("output_schema"))
+    if manifest["schema"] == "tn.sql-result.v2":
+        if (set(binding) != {"schema", "query_id", "snapshot", "sources", "output_schema"}
+                or binding["schema"] != "tn.sql-query.v2"):
+            raise EvidenceError("invalid signed SQL policy binding")
+        return
+    # Previously issued v1 objects carried additional signed lineage.
+    lineage = manifest.get("lineage")
+    if (
+        binding.get("schema") != "tn.sql-query.v1"
         or not isinstance(lineage, dict)
         or binding.get("lineage_precision") not in {"exact", "conservative"}
         or binding["lineage_precision"] != lineage.get("precision")
@@ -29,7 +41,6 @@ def check_result_binding(manifest, *, sources, source, grant_ref):
         or manifest["row_count"] < 0
     ):
         raise EvidenceError("query result differs from the admitted source assignments")
-    _check_output_schema(binding.get("output_schema"))
     verify_lineage(manifest)
 
 

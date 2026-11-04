@@ -7,7 +7,6 @@ rows and columns, and the context publishes the numeric result with signed recor
 """
 
 from copy import deepcopy
-from dataclasses import replace
 import hashlib
 import io
 import json
@@ -17,13 +16,11 @@ from uuid import uuid4
 
 import polars as pl
 import tn
-from tn_polars.audit import build_frame_audit, record_release
 from tn_polars.build import build_opa_wasm
 from tn_polars.frame import GovernedLazyFrame
 from tn_polars.opa import OpaModuleCache
 from tn_polars.policy import CompiledPolicy
 from tn_polars.registry import write_edition_bundle
-from tn_polars.support import Support
 from tn_governed.values.collection import pauses_collection
 from tn_polars.tn_boundary import PolicySet, TnBoundary, root_name
 
@@ -31,24 +28,15 @@ from tn_governed.unity import FinanceEditionRequest, resolve_finance_editions
 from tn_governed.values.catalog import ReceivedEdition, UnityGovernance, markdown
 from tn_governed.values.evidence import EvidenceError
 from tn_governed.values.numeric import TNNumeric
-from tn_governed.values.numeric_codec import KINDS, record_value
+from tn_governed.values.numeric_codec import KINDS
 from .numeric_profile import numeric_profile, polars_dtype, build_frame, check_fixed_plan_range
-from tn_governed.values.manifests import unique_origins
 from tn_governed.values.primitives import Context, OPERATIONS
-from tn_governed.values.references import pack_references, pack_source_cells
 from tn_governed.values.string import OperationDenied, TNString, _active
 
 
 OPERATION = "dataframe_calculate"
 FRAME_OPERATIONS = ("load", "filter", "sort", "with_columns", "select", "release")
 ARTIFACT_NAMES = ("compiled_policy.json", "profile.json", "policy.wasm", "data.json")
-PLAN = (
-    {"operation": "filter", "column": "value", "comparison": ">=", "literal": 0},
-    {"operation": "sort", "columns": ["name"], "descending": False},
-    {"operation": "with_columns", "column": "value", "operator": "+",
-     "literal": 250, "output": "adjusted"},
-    {"operation": "select", "aggregate": "sum", "column": "adjusted", "output": "amount"},
-)
 
 
 class DataframeGovernance(UnityGovernance):
@@ -136,37 +124,12 @@ class DataframeGovernance(UnityGovernance):
 
 
 class DataframeContext(Context):
-    """Attach dataframe facts to the signed operation Result record."""
+    """Keeps measurements for the local evaluation run."""
 
     def __init__(self, *args, **kwargs):
         self.frame_editions = {}
         self.frame_runs = []
-        self._frame_pending = {}
         super().__init__(*args, **kwargs)
-
-    def _append(self, kind, request, call_id, details):
-        facts = self._frame_pending.get(call_id)
-        if facts is not None and kind in {"Result", "Refusal", "Failure"}:
-            details = {**details, "dataframe": deepcopy(facts)}
-        return super()._append(kind, request, call_id, details)
-
-
-class _RecordingEvaluator:
-    """Record the request and actual OPA answer without changing evaluation."""
-
-    def __init__(self, evaluator, records):
-        self.evaluator, self.records = evaluator, records
-
-    def decide(self, request):
-        decision = self.evaluator.decide(request)
-        self.records.append({"request": deepcopy(request), "decision_id": decision.decision_id,
-                             "allow": decision.allow, "reason": decision.reason})
-        return decision
-
-
-def _artifact_facts(artifacts):
-    return {name: getattr(artifacts, name) for name in (
-        "policy_revision", "compiled_policy_sha256", "profile_sha256", "wasm_sha256", "data_sha256")}
 
 
 def _checked_edition(context, data, column, use, module_cache, selected):
@@ -191,40 +154,19 @@ def _checked_edition(context, data, column, use, module_cache, selected):
             "contracts": [item.revision_id for item in record.contracts]}
 
 
-def _select_policies(context, metadata, values, use):
-    """Resolve each cell's original edition, including attested descendants."""
-    # Reuse only compiled code within this call. Each publication still has its own
-    # current edition checks and evaluator state, under this context and use.
+def _select_policies(context, metadata, use):
     module_cache = OpaModuleCache()
     sources = {"name": set(), "value": set()}
-    editions, inputs, selected, checked = {}, [], {}, {}
-    for index, ((data, primitive_binding, _), value) in enumerate(zip(metadata, values)):
+    selected, checked = {}, set()
+    for index, (data, _, _) in enumerate(metadata):
         column = "name" if index % 2 == 0 else "value"
-        key = value.reference.object_id, column
+        key = (data.snapshot.id, column)
         if key not in checked:
-            checked[key] = _checked_edition(context, data, column, use, module_cache, selected)
-            editions[checked[key]["record_id"]] = checked[key]
-            sources[column].add(root_name(checked[key]["source_object_id"], column))
-        edition = checked[key]
-        if len(primitive_binding["origins"]) != 1 or primitive_binding["origins"][0]["column"] != column:
-            raise EvidenceError("cell position differs from its retained SQL origin")
-        inputs.append({"row": index // 2, "column": column, "reference": value.reference.to_dict(),
-                       "source_object_id": edition["source_object_id"],
-                       "edition_record_id": edition["record_id"],
-                       "source_row": primitive_binding["origins"][0]["row"],
-                       "root": root_name(edition["source_object_id"], column)})
+            edition = _checked_edition(context, data, column, use, module_cache, selected)
+            sources[column].add(root_name(edition["source_object_id"], column))
+            checked.add(key)
     first, *others = selected.values()
-    return first.include_all(others), sources, list(editions.values()), inputs
-
-
-def _row_support(lazy, cells, policies, row_count):
-    """Bind row support to each cell publication, rather than one arbitrary input."""
-    return Support.from_contributors(
-        lazy,
-        ((cell["row"], cell["source_object_id"], cell["source_row"]) for cell in cells),
-        {revision: entry.source_ids for revision, entry in policies._entries.items()},
-        row_count=row_count,
-    )
+    return first.include_all(others), sources
 
 
 @pauses_collection
@@ -233,7 +175,7 @@ def dataframe_calculate(context, rows):
 
     ``rows`` contains (TNString, TNNumeric) pairs. Payloads open only after source
     assignments, signed evaluator artifacts, and OPA load admission succeed.
-    The result retains every input's contracts, original claims, and ancestry.
+    The result carries the applicable contracts, original claims, and action receipts.
     """
     if not isinstance(context, DataframeContext) or _active.get() is not context:
         raise OperationDenied("dataframe calculation requires its active DataframeContext")
@@ -243,21 +185,11 @@ def dataframe_calculate(context, rows):
         raise TypeError("dataframe calculation requires nonempty governed name/value rows")
     values = tuple(value for row in rows for value in row)
     call_id = uuid4().hex
-    request, metadata, decision = context._prepare(OPERATION, values, None, (deepcopy(PLAN),), call_id)
-    facts = {"schema": "tn.pvldb-dataframe.v1", "plan": deepcopy(list(PLAN)),
-             "input_references": pack_references(value.reference.to_dict() for value in values),
-             "source_row_count": len(rows), "opa_decisions": []}
-    context._frame_pending[call_id] = facts
+    request, metadata, decision = context._prepare(OPERATION, values, None, (), call_id)
     try:
         use = tn.UseContext(context.application, context.purpose, OPERATION)
-        policies, sources, editions, cells = _select_policies(context, metadata, values, use)
+        policies, sources = _select_policies(context, metadata, use)
         policies.validate_contracts(request)
-        policies = PolicySet({revision: replace(entry,
-            evaluator=_RecordingEvaluator(entry.evaluator, facts["opa_decisions"]))
-            for revision, entry in policies._entries.items()}, audit=policies.audit)
-        facts.update(source_editions=editions, source_cells=pack_source_cells(cells),
-            input_columns={column: sorted(roots) for column, roots in sources.items()},
-            policy_artifacts=[_artifact_facts(entry.artifacts) for entry in policies._entries.values()])
         profiles = [context.resolver.rules[p.revision_id]["dataframe_numeric"] for p in request.policies]
         profile = profiles[0]
         polars_dtype(profile)
@@ -269,52 +201,36 @@ def dataframe_calculate(context, rows):
         if any(binding["declared"]["kind"] != ("str" if i % 2 == 0 else profile["kind"])
                for i, (_, binding, _) in enumerate(metadata)):
             raise EvidenceError("input primitive kind differs from the signed dataframe profile")
-        facts["numeric_profile"] = deepcopy(profile)
         # All artifact verification and the OPA load decision precede this open.
         policies.decide("load", context.application, sources, set(), use)
-        policies.record_operation("load", {"input_references": facts["input_references"]})
         opened = context._open_values(request, values)
-        data = context._merge_opened(values, opened)
         frame_rows = [{"name": opened[i][1], "value": opened[i + 1][1]}
                       for i in range(0, len(opened), 2)]
         loaded = build_frame(frame_rows, profile)
         check_fixed_plan_range(loaded, profile)
         lazy = loaded.lazy()
-        facts["input_schema"] = {name: str(dtype) for name, dtype in loaded.schema.items()}
         policies.pin(lazy)
         first = next(iter(policies._entries.values()))
         frame = GovernedLazyFrame(lazy, first.policy, {}, first.evaluator, sources=sources,
-            tn_boundary=TnBoundary(data, policies, use, "values", "rows"),
-            _support=_row_support(lazy, cells, policies, len(rows)))
+            tn_boundary=TnBoundary(opened[0][0], policies, use, "values", "rows"), ordinary_rows=True)
         result = (frame.filter(pl.col("value") >= 0).sort("name")
                   .with_columns((pl.col("value") + 250).alias("adjusted")))
         result = result.select(pl.col("adjusted").sum().alias("amount"))
-        materialized = result._support.frame.collect()
-        record_release(result._tn.policies, result, materialized,
-                       use=use, audience="governed-runtime")
+        materialized, support = result._materialize()
+        policies.decide("release", "governed-runtime", result.sources, result.row_sources, use,
+                        aggregate_support=support)
         amount = materialized.select("amount").item()
         if type(amount) is not KINDS[profile["kind"]]:
             raise TypeError("dataframe result changed the signed numeric kind")
         if str(materialized.schema["amount"]) != profile["dtype"]:
             raise TypeError("dataframe result changed the signed numeric storage type")
-        facts["output_schema"] = {"amount": str(materialized.schema["amount"])}
-        facts.update(output_columns={name: sorted(roots) for name, roots in result.sources.items()},
-                     row_selection_sources=sorted(result.row_sources),
-                     output={"column": "amount", "value": record_value(amount)})
-        facts["audit"] = build_frame_audit(result, materialized,
-                                           input_references=facts["input_references"])
-        origins = unique_origins(origin for _, binding, _ in metadata
-                                 for origin in binding["origins"])
-        output = context._publish(result._tn.data.copy(), content=amount, declared=None,
-            claims=list(dict.fromkeys(claim.id for claim in request.claims)), origins=origins,
-            values=values, request=request, decision_id=decision, call_id=call_id,
-            literals=[{"parameter_index": 0, "role": "dataframe-plan", "claims": []}])
-        context.frame_runs.append({**deepcopy(facts), "decision_id": decision,
-            "result_id": output.result_id, "output_reference": output.reference.to_dict()})
+        output = context.publish_value(amount, request=request, metadata=metadata, actions=(decision,))
+        context.frame_runs.append({"schema": "tn.pvldb-dataframe.v2", "source_row_count": len(rows),
+            "numeric_profile": profile, "policies": list(policies.revision_ids),
+            "output_schema": {"amount": str(materialized.schema["amount"])},
+            "output_reference": output.reference.to_dict()})
         return output
     except Exception as exc:
         context._append("Failure", request, call_id,
             {"decision_id": decision, "error_type": type(exc).__name__})
         raise
-    finally:
-        context._frame_pending.pop(call_id, None)

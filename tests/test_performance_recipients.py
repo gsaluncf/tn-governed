@@ -126,16 +126,33 @@ def test_dataframe_recipient_admits_complete_signed_evaluator_artifacts(tmp_path
 
     monkeypatch.setattr(UnityCatalogRegistry, "_request", request)
     source = tmp_path / "dataframe-source"
-    result = run_case(source, "primitive", rows=65, claim=True)
+    import os
+    result = run_case(source, "primitive", rows=2, claim=True,
+                      sdk_build_record=os.getenv("TN_TEST_SDK_BUILD_RECORD"))
     assert result["completed"] and result["verified"], result
     root = prepare_recipient(source, tmp_path / "dataframe-recipient")
     with open_recipient(root) as recipient:
         value, context = recipient["value"], recipient["context"]
         opened = value.reveal(context, destination=recipient["destination"])
         assert opened == result["expected_content"]
+        from experiments.pvldb_evaluation.performance_recipients import _check_disclosures, _request
+        observations = [_request(recipient)]
+        damaged = [{**observations[0], "released_content": "wrong"}]
+        _check_disclosures(observations, opened)
+        _check_disclosures(damaged, opened)
+        assert observations[0]["status"] == "completed" and "released_content" not in observations[0]
+        assert damaged[0]["failure_stage"] == "verification" and "released_content" not in damaged[0]
         data, _, claims = context._metadata(value)
         assert len(data.policies) == 2 and len(claims) == 1
-        assert len(context.editions) == 4
+        assert len(context.editions) == 2
+        current = recipient["manifest"]
+        assert "console_disclosures" not in current and "evaluation" not in current
+        expected = json.loads((source / "run.json").read_text())["recipient_objects"]
+        from tn_governed.publications import open_publication_store
+        with open_publication_store(root / "publications", read_only=True) as delivered:
+            transferred = set(delivered.publication_sizes())
+        assert transferred == set(expected)
+        assert all(info["source_object_id"] not in transferred for info in current["source_editions"])
     bundle = next((root / "editions").glob("*/*/bundle.zip"))
     with zipfile.ZipFile(bundle) as archive:
         files = {name: archive.read(name) for name in archive.namelist()}

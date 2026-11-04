@@ -76,10 +76,9 @@ def test_compute_can_succeed_when_exposure_is_refused(env):
         with pytest.raises(OperationDenied):
             upper.reveal(context, destination="support-console")
     tape = records(context)
-    assert [r.body["kind"] for r in tape] == ["Decision", "Result", "Decision", "Refusal"]
-    assert tape[1].body["details"]["output"] == upper.reference.to_dict()
-    assert upper.decision_id == tape[0].id
-    assert upper.result_id == tape[1].id
+    assert [r.body["kind"] for r in tape] == ["Decision", "Refusal"]
+    assert tape[0].body["inputs"] == [upper.reference.to_dict()]
+    assert upper.decision_id is None and upper.result_id is None
     context.evaluator = rules
     assert upper.reveal(context, destination="support-console") == "ADA"
     assert [r.body["kind"] for r in records(context)[-2:]] == ["Decision", "Disclosure"]
@@ -140,14 +139,14 @@ def test_concat_preserves_claim_issuer_and_original_subjects(env):
     assert claim.statement == "This name is suitable for display."
     assert claim.subjects == (values["name"].reference,)
     assert combined.reveal(context, destination="support-console") == "AdaLovelace"
-    result = next(r for r in records(context) if r.id == combined.result_id)
-    assert result.body["inputs"] == [claimed.reference.to_dict(), values["value"].reference.to_dict()]
-    assert result.body["details"]["claims"] == [claim.id]
+    _, binding, _ = context._metadata(combined)
+    assert binding == {"claims": [claim.id], "actions": []}
+    assert {obj.id for obj in combined.publication.objects()} == {combined.reference.object_id, claim.id}
     governance = context.session.governance(context.store_object(combined.reference.object_id)).governance
     assert governance.matches_contract(context.session.policy("experiment.string"))
 
 
-def test_copy_records_its_source_and_gated_str_uses_destination(env):
+def test_copy_preserves_value_identity_and_gated_str_uses_destination(env):
     from tn_governed.values import OperationDenied
 
     context, values, _ = env
@@ -155,24 +154,19 @@ def test_copy_records_its_source_and_gated_str_uses_destination(env):
         str(values["name"])
     with context:
         copied = values["name"].copy()
-        assert copied.reference.object_id != values["name"].reference.object_id
-        assert copied.reference.field == values["name"].reference.field
-        copy_result = next(record for record in records(context) if record.id == copied.result_id)
-        assert copy_result.body["kind"] == "Result"
-        assert copy_result.body["operation"] == "copy"
-        assert copy_result.body["inputs"] == [values["name"].reference.to_dict()]
-        assert copy_result.body["details"]["output"] == copied.reference.to_dict()
+        assert copied.reference == values["name"].reference
+        assert not records(context)
         context.inspect(copied)
         with pytest.raises(OperationDenied):
             str(copied)
         with context.exposure("support-console"):
             assert str(copied) == "Ada"
     assert [record.body["kind"] for record in records(context)] == [
-        "Decision", "Result", "Decision", "Refusal", "Decision", "Disclosure",
+        "Decision", "Refusal", "Decision", "Disclosure",
     ]
 
 
-def test_recording_failure_never_returns_plaintext_or_runs_compute(env, monkeypatch):
+def test_disclosure_recording_failure_prevents_plaintext_open(env, monkeypatch):
     context, values, _ = env
     opened = []
     monkeypatch.setattr(context, "_open_values", lambda *args: opened.append(args))
@@ -182,7 +176,7 @@ def test_recording_failure_never_returns_plaintext_or_runs_compute(env, monkeypa
 
     monkeypatch.setattr(context.recorder, "append", disk_failed)
     with context, pytest.raises(OSError):
-        values["name"].upper()
+        values["name"].reveal(context, destination="support-console")
     assert opened == []
 
 
@@ -191,7 +185,7 @@ def test_record_chain_rejects_tampering_truncation_and_wrong_writer(env):
 
     context, values, _ = env
     with context:
-        values["name"].upper()
+        values["name"].reveal(context, destination="support-console")
     wires = list(context.recorder.records())
     kwargs = dict(
         session=context.session, expected_writer=context.session.did,
@@ -220,7 +214,7 @@ def test_forged_result_citation_and_invalid_outcomes_are_refused(env):
     with context:
         upper = values["name"].upper()
         other = values["value"].lower()
-        forged = TNString(upper.reference, upper.decision_id, other.result_id,
+        forged = TNString(upper.reference, upper.decision_id, other.reference.object_id,
                           metadata_provider=upper.metadata_provider)
         with pytest.raises(EvidenceError):
             context.inspect(forged)
@@ -229,10 +223,11 @@ def test_forged_result_citation_and_invalid_outcomes_are_refused(env):
             values["name"].upper()
 
 
-def test_scalar_conversions_preserve_exact_operation_and_content(env):
+def test_scalar_conversions_publish_content_without_an_operation_log(env):
     context, values, _ = env
     with context:
         result = values["value"].upper().slice(1, 5).lower()
     assert result.reveal(context, destination="support-console") == "ovel"
     operations = [r.body["operation"] for r in records(context) if r.body["kind"] == "Result"]
-    assert operations == ["upper", "slice", "lower"]
+    assert operations == []
+    assert not context.session.governance(result.publication.object).governance.sources

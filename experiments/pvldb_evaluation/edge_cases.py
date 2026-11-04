@@ -32,10 +32,7 @@ def recalculate(fixture):
 
 def result_claims(root):
     """Return the claims reachable from the governed dataframe result."""
-    outputs = json.loads((root / "run.json").read_text())["outputs"]
-    identity = outputs["dataframe_result"]["reference"]["object_id"]
-    graph = json.loads((root / "dag.json").read_text())
-    return next(node for node in graph["nodes"] if node["id"] == identity)["claims"]
+    return json.loads((root / "verification.json").read_text())["outputs"]["dataframe_result"]["claims"]
 
 
 def edge_case(root, name, fixture, unity_url):

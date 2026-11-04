@@ -66,11 +66,6 @@ def _context(session, policy, audit_policy, writers, *, actor="analyst"):
     )
 
 
-def _merged_source():
-    scope = {key: item for key, item in _source(0).items() if key != "row"}
-    return {**scope, "rows": [[0, 1]]}
-
-
 def _source(row):
     return {
         "table": "observations",
@@ -126,7 +121,7 @@ def test_numeric_operations_carry_native_objects_without_persistence(monkeypatch
         assert isinstance(result, TNNumeric)
         assert isinstance(publication, tn.GovernedObject)
         assert publication.id == result.reference.object_id
-        assert binding["origins"] == [_merged_source()]
+        assert "origins" not in binding
 
 
 def test_string_operations_preserve_claims_without_persistence(monkeypatch):
@@ -148,7 +143,7 @@ def test_string_operations_preserve_claims_without_persistence(monkeypatch):
         assert claims[0].issuer == session.did
         assert claims[0].subjects == (first.reference,)
         assert claims[0].statement == "Approved spelling"
-        assert binding["origins"] == [_merged_source()]
+        assert "origins" not in binding
 
 
 @pytest.fixture
@@ -192,10 +187,10 @@ def test_fresh_receiver_uses_carried_claims_after_producer_session_closes(enroll
             result = supplied * 2
         actual = result.reveal(receiver, destination="internal")
         _, binding, claims = receiver._metadata(result)
-        decision = receiver.recorder.read(result.decision_id)
+        decision = receiver.recorder.read(binding["actions"][-1])
     assert actual == 36
-    assert binding["parents"] == [supplied.reference.to_dict()]
-    assert binding["origins"] == [_merged_source()]
+    assert "parents" not in binding
+    assert "origins" not in binding
     assert claims[0].issuer == issuer
     assert claims[0].subjects == (first.reference,)
     assert claims[0].statement == "Estimated amount"
@@ -233,7 +228,7 @@ def test_carried_object_does_not_supply_missing_decryption_keys(enrolled, monkey
             supplied + 1
         with pytest.raises(NotEntitled):
             supplied.reveal(receiver, destination="internal")
-    assert binding["source"] == _source(0)
+    assert supplied.reference.field == "value_0" and "source" not in binding
 
 
 @pytest.mark.parametrize("contents", [("Ada", "Grace"), (7, 11)])
@@ -249,7 +244,7 @@ def test_carried_publication_does_not_authorize_a_forged_field_citation(monkeypa
             forged = type(first)(
                 second.reference,
                 second.decision_id,
-                first.result_id,
+                first.reference.object_id,
                 metadata_provider=context.string_metadata,
                 publication=second.publication,
             )
@@ -300,7 +295,7 @@ def _transport(value, *, omit=()):
     )
 
 
-def test_serialized_native_objects_supply_claims_and_contributors_to_receiver(
+def test_serialized_native_objects_supply_claims_without_arithmetic_inputs(
     enrolled, monkeypatch
 ):
     sessions, policy, audit = enrolled
@@ -318,15 +313,17 @@ def test_serialized_native_objects_supply_claims_and_contributors_to_receiver(
         actual = result.reveal(receiver, destination="internal")
         _, binding, claims = receiver._metadata(result)
     assert actual == 19
+    carried_ids = {obj.id for obj in received.publication.objects()}
+    assert carried_ids.isdisjoint({first.reference.object_id, second.reference.object_id, claimed.reference.object_id})
     assert received.publication.object is not supplied.publication.object
     assert received.metadata_provider is None
-    assert binding["origins"] == [_merged_source()]
+    assert "origins" not in binding
     assert claims[0].issuer == sessions["producer"].did
     assert claims[0].subjects == (first.reference,)
     assert claims[0].statement == "Estimated amount"
 
 
-@pytest.mark.parametrize("missing", ["result", "parent", "claim"])
+@pytest.mark.parametrize("missing", ["decision", "action", "claim"])
 def test_incomplete_native_handoff_is_refused_before_computation(enrolled, monkeypatch, missing):
     sessions, policy, audit = enrolled
     writers = {session.did for session in sessions.values()}
@@ -336,10 +333,11 @@ def test_incomplete_native_handoff_is_refused_before_computation(enrolled, monke
         with producer:
             claimed = source.attest("Estimated amount", producer)
             supplied = claimed + 1
-        _, _, claims = producer._metadata(supplied)
+        _, binding, claims = producer._metadata(supplied)
+        decision = producer.recorder.read(binding["actions"][-1])
         missing_id = {
-            "result": supplied.result_id,
-            "parent": claimed.reference.object_id,
+            "decision": decision.id,
+            "action": decision.body["details"]["discharged"][0]["evidence"],
             "claim": claims[0].id,
         }[missing]
         received = _transport(supplied, omit=(missing_id,))
@@ -397,3 +395,54 @@ def test_required_action_failure_retains_completed_evidence_in_memory(monkeypatc
             {"obligation": "review", "satisfied": False, "evidence": None},
         ]
         assert refusal.body["kind"] == "Refusal"
+
+
+def test_arithmetic_without_obligations_carries_only_the_signed_value(enrolled):
+    sessions, policy, audit = enrolled
+    writers = {session.did for session in sessions.values()}
+    producer = _context(sessions["producer"], policy, audit, writers)
+    producer.evaluator = lambda request: Assessment(True, "internal use")
+    left, right = _originate(producer, (4, 7), policy)
+    recorded = producer.recorder.ids()
+    with producer:
+        intermediate = left * 3
+        output = intermediate + right
+    assert producer.recorder.ids() == recorded
+    assert output.decision_id is None and output.result_id is None
+    assert list(output.publication.objects()) == [output.publication.object]
+    assert not producer.session.governance(output.publication.object).governance.sources
+    assert set(producer._metadata(output)[1]) == {"declared", "claims", "actions"}
+    receiver = _context(sessions["recipient"], policy, audit, writers)
+    assert _transport(output).reveal(receiver, destination="internal") == 19
+
+
+def test_two_policy_result_admitted_without_either_source(enrolled):
+    sessions, public, audit = enrolled
+    writers = {session.did for session in sessions.values()}
+    restricted = tn.Governance.from_markdown(
+        sessions["producer"].did, POLICY.replace("Internal analysis", "Research use"),
+        "research-policy", VALUE_TYPE)
+    policies = (public, restricted)
+
+    def admits(accepted):
+        return lambda ctx: (ctx.object_type == VALUE_TYPE and ctx.writer in writers and
+                            all(any(p.matches_contract(q) for q in accepted) for p in ctx.policies))
+
+    producer = _context(sessions["producer"], public, audit, writers)
+    producer.evaluator = lambda _: Assessment(True, "internal calculation")
+    producer.metadata_accept = admits(policies)
+    first = _originate(producer, [10], public)[0]
+    second = _originate(producer, [12], restricted)[0]
+    with producer:
+        total = (first + second) + first
+    received = _transport(total)
+    assert len(tuple(received.publication.objects())) == 1
+    consumer = _context(sessions["recipient"], public, audit, writers)
+    consumer.metadata_accept = admits((public,))
+    with pytest.raises(OperationDenied):
+        received.reveal(consumer, destination="internal")
+    consumer.metadata_accept = admits(policies)
+    result_policies = consumer.inspect(received).policies
+    assert len(result_policies) == 2
+    assert all(any(source.matches_contract(p) for p in result_policies) for source in policies)
+    assert received.reveal(consumer, destination="internal") == 32
