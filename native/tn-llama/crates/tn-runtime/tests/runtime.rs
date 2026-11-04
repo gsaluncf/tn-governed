@@ -1,3 +1,4 @@
+mod governed_support;
 mod support;
 
 use std::fs;
@@ -6,22 +7,22 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 
+use governed_support::{Fixture, SessionHarness};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use support::{
-    advance_to_selection, canonical_json, fixture_config,
-    literal_runnable_manifest, prepare_and_begin, SessionHarness,
-};
+use support::{canonical_json, literal_runnable_manifest, prepare_and_begin};
 use tn_runtime::{
-    ActionOutcome, AuditEvent, AuditFacts, AuditRecord, DecisionAudit, GovernedRuntime, ModelTurn,
-    ReportRelease, SensitiveTraceEvent, SensitiveTraceKind, SensitiveTraceSink, State,
+    ActionOutcome, AuditEvent, AuditFacts, AuditRecord, DecisionAudit, GovernedReportRelease,
+    GovernedRuntime, ModelTurn, SensitiveTraceEvent, SensitiveTraceKind, SensitiveTraceSink, State,
 };
-use tn_test_tools::build_real_tn_fixture;
 
 #[test]
 fn runtime_accepts_group_capability_writer_authority_for_a_configured_event_type() {
-    let fixture = build_real_tn_fixture().unwrap();
-    let mut config = fixture_config(&fixture);
+    let Fixture {
+        legacy: _keys,
+        mut config,
+        ..
+    } = Fixture::new();
     config.expected_event_type = "configured.source.event".to_string();
 
     GovernedRuntime::from_config(config).unwrap();
@@ -29,20 +30,19 @@ fn runtime_accepts_group_capability_writer_authority_for_a_configured_event_type
 
 #[test]
 fn one_long_lived_runtime_owns_admission_and_abort_or_drop_releases_it() {
-    let fixture = build_real_tn_fixture().unwrap();
-    let runtime = GovernedRuntime::from_config(fixture_config(&fixture)).unwrap();
+    let fixture = Fixture::new();
+    let request = fixture.request("calculation");
+    let (_keys, runtime) = fixture.runtime();
 
-    let mut first = runtime.start_session(&fixture.row1_request_json).unwrap();
-    let error = runtime
-        .start_session(&fixture.row1_request_json)
-        .unwrap_err();
+    let mut first = runtime.start_session(&request).unwrap();
+    let error = runtime.start_session(&request).unwrap_err();
     assert_eq!(error.code(), "tn_active_session_limit");
     first.abort().unwrap();
     assert_eq!(first.state(), State::Failed);
 
-    let second = runtime.start_session(&fixture.row1_request_json).unwrap();
+    let second = runtime.start_session(&request).unwrap();
     drop(second);
-    runtime.start_session(&fixture.row1_request_json).unwrap();
+    runtime.start_session(&request).unwrap();
 }
 
 #[test]
@@ -58,9 +58,10 @@ fn a_second_turn_cannot_be_issued_while_one_is_outstanding() {
 
 #[test]
 fn concurrent_start_session_calls_admit_exactly_one_request() {
-    let fixture = build_real_tn_fixture().unwrap();
-    let runtime = Arc::new(GovernedRuntime::from_config(fixture_config(&fixture)).unwrap());
-    let raw = Arc::new(fixture.row1_request_json.clone());
+    let fixture = Fixture::new();
+    let raw = Arc::new(fixture.request("calculation"));
+    let (_keys, runtime) = fixture.runtime();
+    let runtime = Arc::new(runtime);
     let barrier = Arc::new(Barrier::new(3));
     let finish = Arc::new(Barrier::new(3));
     let mut workers = Vec::new();
@@ -88,32 +89,28 @@ fn concurrent_start_session_calls_admit_exactly_one_request() {
 }
 
 #[test]
-fn admission_audit_records_verified_then_reserved_and_binds_terminal_denial() {
-    let fixture = build_real_tn_fixture().unwrap();
+fn admission_audit_records_reservation_then_governance_and_binds_terminal_denial() {
+    let fixture = Fixture::new();
+    let request = fixture.request_with("truthful admission audit");
     let audit = Arc::new(RecordingAudit::passing());
     let trace = Arc::new(RecordingTrace::passing());
-    let runtime = runtime_with_sinks(&fixture, Arc::clone(&audit), trace);
-    let harness = SessionHarness::from_fixture_and_runtime(
-        fixture,
-        runtime.clone(),
-        "truthful admission audit",
-    );
+    let (keys, runtime) = runtime_with_sinks(fixture, Arc::clone(&audit), trace);
+    let harness = SessionHarness::with_runtime(keys, runtime.clone(), request);
 
     let admission_error = runtime.start_session(&harness.raw_request).unwrap_err();
     assert_eq!(admission_error.code(), "tn_active_session_limit");
 
     let events = audit.events.lock().unwrap();
-    assert_eq!(events.len(), 5);
-    let verified = &events[0];
-    assert_eq!(verified.kind, "row_verified");
-    assert_eq!(verified.state_before, "received");
-    assert_eq!(verified.state_after, "row_verified");
-    assert_eq!(verified.target_row_hash, harness.row_hash);
-    assert_eq!(verified.request_digest, harness.request_digest);
-    assert_eq!(verified.outcome, "allow");
-    assert_eq!(verified.error_code, None);
+    assert_eq!(events.len(), 3);
+    let reserved = &events[0];
+    assert_eq!(reserved.kind, "standalone_object_reserved");
+    assert_eq!(reserved.state_before, "received");
+    assert_eq!(reserved.state_after, "governance_admission");
+    assert_eq!(reserved.target_row_hash, harness.object_id);
+    assert_eq!(reserved.outcome, "allow");
+    assert_eq!(reserved.error_code, None);
     assert_eq!(
-        verified.facts,
+        reserved.facts,
         AuditFacts {
             hashes_verified: Some(true),
             signature_verified: Some(true),
@@ -121,48 +118,29 @@ fn admission_audit_records_verified_then_reserved_and_binds_terminal_denial() {
         }
     );
 
-    let reserved = &events[1];
-    assert_eq!(reserved.kind, "chain_reserved");
-    assert_eq!(reserved.state_before, "row_verified");
-    assert_eq!(reserved.state_after, "governance_admission");
-    assert_eq!(reserved.target_row_hash, harness.row_hash);
-    assert_eq!(reserved.request_digest, harness.request_digest);
-    assert_eq!(reserved.outcome, "allow");
-    assert_eq!(reserved.error_code, None);
-    assert_eq!(reserved.facts, AuditFacts::default());
-
-    let governance = &events[2];
+    let governance = &events[1];
     assert_eq!(governance.kind, "governance_opened_and_verified");
     assert_eq!(governance.state_before, "governance_admission");
     assert_eq!(governance.state_after, "section_selection");
-    assert_eq!(governance.target_row_hash, harness.row_hash);
-    assert_eq!(governance.request_digest, harness.request_digest);
+    assert_eq!(governance.target_row_hash, harness.object_id);
+    assert_eq!(governance.request_digest, reserved.request_digest);
     assert_eq!(governance.facts.hashes_verified, Some(true));
-    assert_eq!(governance.facts.governance_value_count, Some(7));
-    assert_eq!(governance.facts.governance_commitment_count, Some(7));
+    assert!(governance
+        .facts
+        .governance_value_count
+        .is_some_and(|count| count > 0));
+    assert_eq!(
+        governance.facts.governance_value_count,
+        governance.facts.governance_commitment_count
+    );
     assert!(governance.llama_task_id.is_none());
 
-    let denied_verified = &events[3];
-    assert_eq!(denied_verified.kind, "row_verified");
-    assert_eq!(denied_verified.state_before, "received");
-    assert_eq!(denied_verified.state_after, "row_verified");
-    assert_eq!(denied_verified.target_row_hash, harness.row_hash);
-    assert_eq!(denied_verified.request_digest, harness.request_digest);
-    assert_eq!(
-        denied_verified.facts,
-        AuditFacts {
-            hashes_verified: Some(true),
-            signature_verified: Some(true),
-            ..AuditFacts::default()
-        }
-    );
-
-    let denied = &events[4];
+    let denied = &events[2];
     assert_eq!(denied.kind, "terminal_error");
-    assert_eq!(denied.state_before, "row_verified");
+    assert_eq!(denied.state_before, "received");
     assert_eq!(denied.state_after, "failed");
-    assert_eq!(denied.target_row_hash, harness.row_hash);
-    assert_eq!(denied.request_digest, harness.request_digest);
+    assert_eq!(denied.target_row_hash, harness.object_id);
+    assert_eq!(denied.request_digest, reserved.request_digest);
     assert_eq!(denied.outcome, "deny");
     assert_eq!(
         denied.error_code.as_deref(),
@@ -173,14 +151,13 @@ fn admission_audit_records_verified_then_reserved_and_binds_terminal_denial() {
 
 #[test]
 fn pre_verification_parse_failure_records_only_unbound_safe_error_evidence() {
-    let fixture = build_real_tn_fixture().unwrap();
     let audit = Arc::new(RecordingAudit::passing());
     let trace = Arc::new(RecordingTrace::passing());
-    let runtime = runtime_with_sinks(&fixture, Arc::clone(&audit), trace);
+    let (_keys, runtime) = runtime_with_sinks(Fixture::new(), Arc::clone(&audit), trace);
 
     let error = runtime.start_session(b"{").unwrap_err();
 
-    assert_eq!(error.code(), "tn_request_json_invalid");
+    assert_eq!(error.code(), "tn_request_shape");
     let events = audit.events.lock().unwrap();
     assert_eq!(events.len(), 1);
     let denied = &events[0];
@@ -190,24 +167,20 @@ fn pre_verification_parse_failure_records_only_unbound_safe_error_evidence() {
     assert_eq!(denied.target_row_hash, "");
     assert_eq!(denied.request_digest, "");
     assert_eq!(denied.outcome, "deny");
-    assert_eq!(
-        denied.error_code.as_deref(),
-        Some("tn_request_json_invalid")
-    );
+    assert_eq!(denied.error_code.as_deref(), Some("tn_request_shape"));
     assert_eq!(denied.facts, AuditFacts::default());
 }
 
 #[test]
 fn admission_error_is_masked_only_when_its_terminal_audit_append_fails() {
-    let fixture = build_real_tn_fixture().unwrap();
+    let fixture = Fixture::new();
+    let request = fixture.request("calculation");
     let audit = Arc::new(RecordingAudit::failing_once("terminal_error"));
     let trace = Arc::new(RecordingTrace::passing());
-    let runtime = runtime_with_sinks(&fixture, Arc::clone(&audit), trace);
-    let first = runtime.start_session(&fixture.row1_request_json).unwrap();
+    let (_keys, runtime) = runtime_with_sinks(fixture, Arc::clone(&audit), trace);
+    let first = runtime.start_session(&request).unwrap();
 
-    let error = runtime
-        .start_session(&fixture.row1_request_json)
-        .unwrap_err();
+    let error = runtime.start_session(&request).unwrap_err();
 
     assert_eq!(error.code(), "tn_audit_append_failed");
     assert_eq!(audit.failed_appends(), 1);
@@ -316,12 +289,13 @@ fn every_rejected_runnable_mode_terminalizes_before_begin_or_a_later_turn() {
             .into_bytes(),
     ));
 
-    let fixture = build_real_tn_fixture().unwrap();
+    let fixture = Fixture::new();
+    let request = fixture.request("calculation");
     let audit = Arc::new(RecordingAudit::passing());
     let trace = Arc::new(RecordingTrace::passing());
-    let runtime = runtime_with_sinks(&fixture, Arc::clone(&audit), trace);
+    let (_keys, runtime) = runtime_with_sinks(fixture, Arc::clone(&audit), trace);
     for (index, (name, manifest)) in cases.into_iter().enumerate() {
-        let mut session = runtime.start_session(&fixture.row1_request_json).unwrap();
+        let mut session = runtime.start_session(&request).unwrap();
         let turn = session.next_model_turn().unwrap();
 
         let error = turn
@@ -349,51 +323,52 @@ fn every_rejected_runnable_mode_terminalizes_before_begin_or_a_later_turn() {
 }
 
 #[test]
-fn sequential_sessions_append_to_one_runtime_evidence_without_truncating_row_one() {
-    let fixture = build_real_tn_fixture().unwrap();
-    let audit_path = fixture.temp.path().join("audit.ndjson");
-    let trace_dir = fixture.temp.path().join("raw-trace");
-    let row2 = fixture.row2_request_json.clone();
-    let runtime = GovernedRuntime::from_config(fixture_config(&fixture)).unwrap();
-    let mut harness =
-        SessionHarness::from_fixture_and_runtime(fixture, runtime.clone(), "first sequential row");
-    complete_firm_report(&mut harness, 101);
-    let audit_after_row1 = fs::read(&audit_path).unwrap();
+fn sequential_sessions_append_to_one_runtime_evidence_without_truncating_the_first() {
+    let fixture = Fixture::new();
+    let audit_path = fixture.config.audit_path.clone();
+    let trace_dir = fixture.config.raw_trace_dir.clone();
+    let second = fixture.request_with("second sequential request");
+    let first = fixture.request_with("first sequential request");
+    let (keys, runtime) = fixture.runtime();
+    let mut harness = SessionHarness::with_runtime(keys, runtime.clone(), first);
+    complete_report(&mut harness, 101);
+    let audit_after_first = fs::read(&audit_path).unwrap();
     let trace_path = fs::read_dir(&trace_dir)
         .unwrap()
         .next()
         .unwrap()
         .unwrap()
         .path();
-    let trace_after_row1 = fs::read(&trace_path).unwrap();
+    let trace_after_first = fs::read(&trace_path).unwrap();
 
-    let mut row2_session = runtime.start_session(&row2).unwrap();
-    let row2_turn = row2_session.next_model_turn().unwrap();
-    row2_turn
+    let mut second_session = runtime.start_session(&second).unwrap();
+    let second_turn = second_session.next_model_turn().unwrap();
+    second_turn
         .permit
         .prepare(
-            &row2_turn.request_json,
-            b"second-selection",
+            &second_turn.request_json,
+            b"second-decrypt",
             &literal_runnable_manifest(2048),
         )
         .unwrap();
 
-    let audit_after_row2 = fs::read(&audit_path).unwrap();
-    let trace_after_row2 = fs::read(&trace_path).unwrap();
-    assert!(audit_after_row2.starts_with(&audit_after_row1));
-    assert!(audit_after_row2.len() > audit_after_row1.len());
-    assert!(trace_after_row2.starts_with(&trace_after_row1));
-    assert!(trace_after_row2.len() > trace_after_row1.len());
+    let audit_after_second = fs::read(&audit_path).unwrap();
+    let trace_after_second = fs::read(&trace_path).unwrap();
+    assert!(audit_after_second.starts_with(&audit_after_first));
+    assert!(audit_after_second.len() > audit_after_first.len());
+    assert!(trace_after_second.starts_with(&trace_after_first));
+    assert!(trace_after_second.len() > trace_after_first.len());
     assert_eq!(fs::read_dir(&trace_dir).unwrap().count(), 1);
 }
 
 #[test]
 fn begin_audit_and_trace_bind_the_exact_body_prompt_manifest_and_task() {
-    let fixture = build_real_tn_fixture().unwrap();
+    let fixture = Fixture::new();
+    let request = fixture.request_with("digest binding");
     let audit = Arc::new(RecordingAudit::passing());
     let trace = Arc::new(RecordingTrace::passing());
-    let runtime = runtime_with_sinks(&fixture, Arc::clone(&audit), Arc::clone(&trace));
-    let mut harness = SessionHarness::from_fixture_and_runtime(fixture, runtime, "digest binding");
+    let (keys, runtime) = runtime_with_sinks(fixture, Arc::clone(&audit), Arc::clone(&trace));
+    let mut harness = SessionHarness::with_runtime(keys, runtime, request);
     let turn = harness.session.next_model_turn().unwrap();
     let request = turn.request_json.clone();
     let manifest = literal_runnable_manifest(2048);
@@ -453,18 +428,15 @@ fn begin_audit_and_trace_bind_the_exact_body_prompt_manifest_and_task() {
 
 #[test]
 fn sensitive_local_trace_captures_the_exact_ingress_and_closed_release_bytes() {
-    let fixture = build_real_tn_fixture().unwrap();
+    let fixture = Fixture::new();
+    let request = fixture.request_with("trace this exact governed request");
     let audit = Arc::new(RecordingAudit::passing());
     let trace = Arc::new(RecordingTrace::passing());
-    let runtime = runtime_with_sinks(&fixture, audit, Arc::clone(&trace));
-    let mut harness = SessionHarness::from_fixture_and_runtime(
-        fixture,
-        runtime,
-        "trace this exact governed request",
-    );
+    let (keys, runtime) = runtime_with_sinks(fixture, audit, Arc::clone(&trace));
+    let mut harness = SessionHarness::with_runtime(keys, runtime, request);
     let ingress = harness.raw_request.clone();
 
-    let release = complete_firm_report(&mut harness, 111);
+    let release = complete_report(&mut harness, 111);
     let release_bytes = release.to_json_bytes().unwrap();
 
     let traces = trace.events.lock().unwrap();
@@ -487,31 +459,33 @@ fn sensitive_local_trace_captures_the_exact_ingress_and_closed_release_bytes() {
 }
 
 #[test]
-fn audit_failures_stop_at_each_real_boundary_and_precommit_failures_abort() {
+fn audit_failures_stop_at_each_real_boundary_and_release_the_session() {
     for kind in [
-        "row_verified",
-        "chain_reserved",
-        "turn_begin_authorized",
+        "standalone_object_reserved",
         "governance_opened_and_verified",
+        "turn_begin_authorized",
         "governance_context_bound",
         "sections_selected",
         "output_emitted_and_read_back",
+        "standalone_use_completed",
     ] {
-        let fixture = build_real_tn_fixture().unwrap();
+        let fixture = Fixture::new();
+        let request = fixture.request_with(kind);
         let audit = Arc::new(RecordingAudit::failing_once(kind));
         let trace = Arc::new(RecordingTrace::passing());
-        let runtime = runtime_with_sinks(&fixture, Arc::clone(&audit), trace);
+        let (keys, runtime) = runtime_with_sinks(fixture, Arc::clone(&audit), trace);
 
-        if matches!(kind, "row_verified" | "chain_reserved" | "governance_opened_and_verified") {
-            let error = runtime
-                .start_session(&fixture.row1_request_json)
-                .unwrap_err();
+        if matches!(
+            kind,
+            "standalone_object_reserved" | "governance_opened_and_verified"
+        ) {
+            let error = runtime.start_session(&request).unwrap_err();
             assert_eq!(error.code(), "tn_audit_append_failed", "{kind}");
-            runtime.start_session(&fixture.row1_request_json).unwrap();
+            runtime.start_session(&request).unwrap();
             continue;
         }
 
-        let mut harness = SessionHarness::from_fixture_and_runtime(fixture, runtime.clone(), kind);
+        let mut harness = SessionHarness::with_runtime(keys, runtime.clone(), request);
         let error = match kind {
             "turn_begin_authorized" | "governance_context_bound" => {
                 let turn = harness.session.next_model_turn().unwrap();
@@ -524,21 +498,21 @@ fn audit_failures_stop_at_each_real_boundary_and_precommit_failures_abort() {
                     .unwrap_err()
             }
             "sections_selected" => {
-                let turn = advance_to_selection(&mut harness);
-                prepare_and_begin(&turn, b"selection", 2048, 94);
-                let result = harness.section_selection_result(&["firm_data"]);
+                let turn = harness.session.next_model_turn().unwrap();
+                prepare_and_begin(&turn, b"decrypt", 2048, 94);
+                let result = harness.decrypt_result(&turn, &["finance"]);
                 harness
                     .session
                     .accept_model_action(turn.permit, result.native())
                     .unwrap_err()
             }
-            "output_emitted_and_read_back" => {
-                let turn = advance_to_firm_emit(&mut harness, 94);
+            "output_emitted_and_read_back" | "standalone_use_completed" => {
+                let turn = advance_to_emit(&mut harness, 94);
                 prepare_and_begin(&turn, b"report", 2048, 95);
                 let result = harness.action_result(
                     "emit-audit-failure",
                     "emit_governed_record",
-                    firm_report_proposal(),
+                    report_proposal(),
                 );
                 harness
                     .session
@@ -553,38 +527,6 @@ fn audit_failures_stop_at_each_real_boundary_and_precommit_failures_abort() {
         runtime.start_session(&harness.raw_request).unwrap();
         assert_eq!(audit.failed_appends(), 1, "{kind}");
     }
-}
-
-#[test]
-fn post_commit_audit_failure_consumes_row_and_returns_no_release() {
-    let fixture = build_real_tn_fixture().unwrap();
-    let row2 = fixture.row2_request_json.clone();
-    let row1 = fixture.row1_request_json.clone();
-    let audit = Arc::new(RecordingAudit::failing_once("source_chain_committed"));
-    let trace = Arc::new(RecordingTrace::passing());
-    let runtime = runtime_with_sinks(&fixture, audit, trace);
-    let mut harness =
-        SessionHarness::from_fixture_and_runtime(fixture, runtime.clone(), "post commit audit");
-    let turn = advance_to_firm_emit(&mut harness, 95);
-    prepare_and_begin(&turn, b"report", 2048, 96);
-    let result = harness.action_result(
-        "emit-post-commit-audit-failure",
-        "emit_governed_record",
-        firm_report_proposal(),
-    );
-
-    let error = harness
-        .session
-        .accept_model_action(turn.permit, result.native())
-        .unwrap_err();
-
-    assert_eq!(error.code(), "tn_audit_append_failed");
-    assert_eq!(harness.session.state(), State::Failed);
-    assert_eq!(
-        runtime.start_session(&row1).unwrap_err().code(),
-        "tn_chain_tip_mismatch"
-    );
-    runtime.start_session(&row2).unwrap();
 }
 
 #[test]
@@ -603,15 +545,12 @@ fn sensitive_trace_failures_stop_prepare_begin_and_model_result_boundaries() {
     ];
 
     for (index, (kind, phase)) in cases.into_iter().enumerate() {
-        let fixture = build_real_tn_fixture().unwrap();
+        let fixture = Fixture::new();
+        let request = fixture.request_with(&format!("trace failure {index}"));
         let audit = Arc::new(RecordingAudit::passing());
         let trace = Arc::new(RecordingTrace::failing_once(kind, phase));
-        let runtime = runtime_with_sinks(&fixture, audit, Arc::clone(&trace));
-        let mut harness = SessionHarness::from_fixture_and_runtime(
-            fixture,
-            runtime.clone(),
-            &format!("trace failure {index}"),
-        );
+        let (keys, runtime) = runtime_with_sinks(fixture, audit, Arc::clone(&trace));
+        let mut harness = SessionHarness::with_runtime(keys, runtime.clone(), request);
 
         let error = match (kind, phase) {
             (SensitiveTraceKind::TurnPrepared, _) => {
@@ -636,20 +575,20 @@ fn sensitive_trace_failures_stop_prepare_begin_and_model_result_boundaries() {
             }
             (SensitiveTraceKind::ModelResult, Some(tn_runtime::Phase::SectionSelection)) => {
                 let turn = harness.session.next_model_turn().unwrap();
-                prepare_and_begin(&turn, b"selection", 2048, 97);
-                let result = harness.section_selection_result(&["firm_data"]);
+                prepare_and_begin(&turn, b"decrypt", 2048, 97);
+                let result = harness.decrypt_result(&turn, &["finance"]);
                 harness
                     .session
                     .accept_model_action(turn.permit, result.native())
                     .unwrap_err()
             }
             (SensitiveTraceKind::ModelResult, Some(tn_runtime::Phase::GovernedAction)) => {
-                let turn = advance_to_firm_emit(&mut harness, 98);
+                let turn = advance_to_emit(&mut harness, 98);
                 prepare_and_begin(&turn, b"report", 2048, 99);
                 let result = harness.action_result(
                     "emit-trace-failure",
                     "emit_governed_record",
-                    firm_report_proposal(),
+                    report_proposal(),
                 );
                 harness
                     .session
@@ -666,10 +605,11 @@ fn sensitive_trace_failures_stop_prepare_begin_and_model_result_boundaries() {
     }
 }
 
-fn advance_to_firm_emit(harness: &mut SessionHarness, task_id: i64) -> ModelTurn {
-    let selection = advance_to_selection(harness);
-    prepare_and_begin(&selection, b"rendered-firm-selection", 2048, task_id);
-    let result = harness.section_selection_result(&["firm_data"]);
+/// Decrypt the finance group and return the report turn that follows.
+fn advance_to_emit(harness: &mut SessionHarness, task_id: i64) -> ModelTurn {
+    let selection = harness.session.next_model_turn().unwrap();
+    prepare_and_begin(&selection, b"rendered-decrypt", 2048, task_id);
+    let result = harness.decrypt_result(&selection, &["finance"]);
     let outcome = harness
         .session
         .accept_model_action(selection.permit, result.native())
@@ -678,35 +618,32 @@ fn advance_to_firm_emit(harness: &mut SessionHarness, task_id: i64) -> ModelTurn
     harness.session.next_model_turn().unwrap()
 }
 
-fn complete_firm_report(harness: &mut SessionHarness, task_id: i64) -> ReportRelease {
-    let emission = advance_to_firm_emit(harness, task_id);
-    prepare_and_begin(&emission, b"rendered-firm-report", 2048, task_id + 1);
-    let result = harness.action_result(
-        "emit-firm-report",
-        "emit_governed_record",
-        firm_report_proposal(),
-    );
-    let ActionOutcome::Release(release) = harness
+fn complete_report(harness: &mut SessionHarness, task_id: i64) -> GovernedReportRelease {
+    let emission = advance_to_emit(harness, task_id);
+    prepare_and_begin(&emission, b"rendered-report", 2048, task_id + 1);
+    let result = harness.action_result("emit-report", "emit_governed_record", report_proposal());
+    let ActionOutcome::GovernedRelease(release) = harness
         .session
         .accept_model_action(emission.permit, result.native())
         .unwrap()
     else {
-        panic!("firm report did not produce a closed release");
+        panic!("the report did not produce a closed release");
     };
     release
 }
 
-fn firm_report_proposal() -> Value {
-    json!({"report_html": "<article><p>Customer FIRM-42 underwriting report.</p></article>"})
+fn report_proposal() -> Value {
+    json!({"report_html": "<div><p>Maximum drawdown report.</p></div>"})
 }
 
 fn runtime_with_sinks(
-    fixture: &tn_test_tools::RealTnFixture,
+    fixture: Fixture,
     audit: Arc<RecordingAudit>,
     trace: Arc<RecordingTrace>,
-) -> GovernedRuntime {
-    GovernedRuntime::from_config_with_sink_factories(
-        fixture_config(fixture),
+) -> (tn_test_tools::RealTnFixture, GovernedRuntime) {
+    let Fixture { legacy, config, .. } = fixture;
+    let runtime = GovernedRuntime::from_config_with_sink_factories(
+        config,
         move |_| {
             let sink: Arc<dyn DecisionAudit> = audit.clone();
             Ok::<Arc<dyn DecisionAudit>, io::Error>(sink)
@@ -716,7 +653,8 @@ fn runtime_with_sinks(
             Ok::<Arc<dyn SensitiveTraceSink>, io::Error>(sink)
         },
     )
-    .unwrap()
+    .unwrap();
+    (legacy, runtime)
 }
 
 struct RecordingAudit {

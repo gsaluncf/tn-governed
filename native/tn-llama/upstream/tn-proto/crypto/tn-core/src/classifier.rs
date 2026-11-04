@@ -1,8 +1,12 @@
-//! Field routing to configured cipher groups.
-//! [`crate::Runtime`] uses this classifier when writing events.
+//! Field → group classifier — decides which cipher group a field lands in.
+//! Internal primitive: most readers want the high-level API instead — see
+//! [`crate::Runtime`], which routes fields through this classifier as it
+//! writes events (behind `tn.info()` / `tn log`). Reach here directly only
+//! to resolve a field's group by hand.
 //!
-//! Returns the configured `fields[<name>].group` if set, otherwise
+//! Stub: returns the configured `fields[<name>].group` if set, otherwise
 //! `"default"` (or the first group alphabetically if no `default` group exists).
+//! Production LLM classification stays Python-side — see RFC §6 Q3.
 
 use crate::config::Config;
 

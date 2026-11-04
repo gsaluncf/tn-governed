@@ -7,15 +7,16 @@
 //!
 //! ## Leaf assignment policy
 //!
-//! Leaves are assigned sequentially from 0 and are not reused within an
-//! epoch. Once the tree is exhausted, mint returns [`Error::TreeExhausted`].
-//! Rotating the epoch resets leaf allocation under a fresh master seed.
+//! v0.1 assigns leaves sequentially from 0 and never reuses. A revoked
+//! leaf leaves a "hole" — [`PublisherState::mint`] does not fill it.
+//! Once the tree is exhausted, mint returns [`Error::TreeExhausted`];
+//! growing capacity requires rotating the epoch (shipping later).
 //!
 //! Why no reuse: the NNL label scheme is deterministic in
 //! `(master_seed, leaf)`, so a newly-minted kit at a previously-revoked
 //! leaf would derive identical keys to the revoked reader. Reusing
 //! the leaf and then un-revoking would silently restore the old
-//! reader's access.
+//! reader's access. We sidestep the footgun entirely.
 
 use crate::ciphertext::{Ciphertext, CoverEntry};
 use crate::config::{Config, TREE_HEIGHT};

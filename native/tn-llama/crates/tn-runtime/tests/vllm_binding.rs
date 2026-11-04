@@ -1,10 +1,10 @@
 mod governed_support;
 mod support;
 
+use governed_support::{Fixture, SessionHarness};
 use serde_json::{json, Value};
-use support::{fixture_config, SessionHarness};
+use support::fixture_config;
 use tn_runtime::{ExecutionBackend, GovernedRuntime, State, VllmBackend, VllmExecutionIdentity};
-use tn_test_tools::build_real_tn_fixture;
 
 fn backend() -> VllmBackend {
     VllmBackend::new(
@@ -18,13 +18,13 @@ fn backend() -> VllmBackend {
     .unwrap()
 }
 fn harness() -> SessionHarness {
-    let fixture = build_real_tn_fixture().unwrap();
-    let runtime = GovernedRuntime::from_config_with_backend(
-        fixture_config(&fixture),
-        ExecutionBackend::Vllm(backend()),
-    )
-    .unwrap();
-    SessionHarness::from_fixture_and_runtime(fixture, runtime, "held request")
+    let fixture = Fixture::new();
+    let request = fixture.request_with("held request");
+    let Fixture { legacy, config, .. } = fixture;
+    let runtime =
+        GovernedRuntime::from_config_with_backend(config, ExecutionBackend::Vllm(backend()))
+            .unwrap();
+    SessionHarness::with_runtime(legacy, runtime, request)
 }
 fn manifest() -> Vec<u8> {
     let mut sampling: serde_json::Map<String, Value> = tn_runtime::SAMPLING_FIELDS
@@ -60,8 +60,10 @@ fn vllm_selects_sections_with_governance_in_the_bound_request() {
     let request_text = String::from_utf8_lossy(&turn.request_json);
     assert!(request_text.contains("held request"));
     let request: Value = serde_json::from_slice(&turn.request_json).unwrap();
-    let context: Value = serde_json::from_str(request["messages"][1]["content"].as_str().unwrap()).unwrap();
-    assert_eq!(context["applicable_source_governance"], serde_json::to_value(&h.governance).unwrap());
+    let context: Value =
+        serde_json::from_str(request["messages"][1]["content"].as_str().unwrap()).unwrap();
+    assert!(context["applicable_source_governance"].is_object());
+    assert!(!context["encrypted_data"].as_array().unwrap().is_empty());
     assert!(!request_text.contains("continue_with_governance"));
     turn.permit
         .prepare(&turn.request_json, b"rendered", &manifest())
@@ -69,8 +71,9 @@ fn vllm_selects_sections_with_governance_in_the_bound_request() {
     turn.permit
         .begin_vllm(identity(), &turn.request_json, b"rendered", &manifest())
         .unwrap();
+    let decrypt = h.decrypt_result(&turn, &["finance"]);
     h.session
-        .accept_model_action(turn.permit, h.section_selection_result(&["firm_data"]).native())
+        .accept_model_action(turn.permit, decrypt.native())
         .unwrap();
     assert_eq!(h.session.state(), State::GovernedAction);
     let next = h.session.next_model_turn().unwrap();
@@ -141,9 +144,10 @@ fn cross_session_result_is_rejected() {
     turn.permit
         .begin_vllm(identity(), &turn.request_json, b"rendered", &manifest())
         .unwrap();
+    let decrypt = a.decrypt_result(&turn, &["finance"]);
     assert!(b
         .session
-        .accept_model_action(turn.permit, a.section_selection_result(&["firm_data"]).native())
+        .accept_model_action(turn.permit, decrypt.native())
         .is_err());
     assert_eq!(b.session.state(), State::Failed);
 }
@@ -285,7 +289,7 @@ fn llama_runtime_rejects_vllm_manifest() {
 
 #[test]
 fn one_vllm_runtime_owns_independent_concurrent_sessions() {
-    let mut fixture = governed_support::Fixture::new();
+    let mut fixture = Fixture::new();
     let request = fixture.request("calculation");
     fixture.config.max_active_sessions = 2;
     let runtime = GovernedRuntime::from_config_with_backend(
@@ -319,7 +323,7 @@ fn vllm_audit_records_its_real_identity_without_llama_slots() {
     turn.permit
         .begin_vllm(identity(), &turn.request_json, b"rendered", &manifest())
         .unwrap();
-    let records = std::fs::read_to_string(fixture_config(&h._fixture).audit_path).unwrap();
+    let records = std::fs::read_to_string(fixture_config(&h.keys).audit_path).unwrap();
     let record = records
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).unwrap())

@@ -131,7 +131,7 @@ pub enum Error {
     #[error("btn error: {0}")]
     Btn(#[from] tn_btn::Error),
 
-    /// The requested feature is not implemented.
+    /// Feature exists in the plan but is not yet implemented.
     #[error("feature not implemented: {0}")]
     NotImplemented(&'static str),
 
@@ -141,7 +141,8 @@ pub enum Error {
 
     /// User yaml declared a group whose name starts with `tn.` other than
     /// the auto-injected `tn.agents`. The `tn.*` namespace is reserved
-    /// for protocol-level conventions.
+    /// for protocol-level conventions per the 2026-04-25 read-ergonomics
+    /// spec §2.2.
     #[error("group name {name:?} is reserved (the `tn.*` namespace is for protocol-level conventions; only `tn.agents` is allowed). Rename your group.")]
     ReservedGroupName {
         /// The offending group name.

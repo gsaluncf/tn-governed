@@ -9,10 +9,17 @@ use super::invalid;
 ///
 /// The writer inserts these fields into `tn.agents` and derives every group's
 /// AAD from the same contract. Accessors borrow the original values.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Governance {
     governed_by: String,
     pub(super) fields: Map<String, Value>,
+    selected_object_type: Option<String>,
+}
+
+impl PartialEq for Governance {
+    fn eq(&self, other: &Self) -> bool {
+        self.governed_by == other.governed_by && self.fields == other.fields
+    }
 }
 
 impl Governance {
@@ -45,7 +52,9 @@ impl Governance {
             "policy": format!("{}#{}@{}#{}", template.path, template.event_type, template.version, template.content_hash),
         });
         let fields: Map<String, Value> = serde_json::from_value(fields)?;
-        Self::from_body(governed_by, fields)
+        let mut governance = Self::from_body(governed_by, fields)?;
+        governance.selected_object_type = Some(template.event_type.clone());
+        Ok(governance)
     }
 
     /// The same authority over a contract already validated with this one.
@@ -53,6 +62,7 @@ impl Governance {
         Self {
             governed_by: contract.governed_by.clone(),
             fields,
+            selected_object_type: contract.selected_object_type.clone(),
         }
     }
 
@@ -67,7 +77,15 @@ impl Governance {
         Ok(Self {
             governed_by: governed_by.to_owned(),
             fields,
+            selected_object_type: None,
         })
+    }
+
+    /// Object type selected by the policy loader, including an external authority's policy.
+    /// This local construction hint is not a carried contract field or part of equality.
+    /// Contracts decoded from wire require an explicit output type for new origination.
+    pub fn selected_object_type(&self) -> Option<&str> {
+        self.selected_object_type.as_deref()
     }
 
     /// Governing authority declared by this contract.
@@ -92,9 +110,11 @@ impl Governance {
         self.fields.get("policy_revision").and_then(Value::as_str)
     }
 
-    /// Compare authority, policy reference, selected revision, and all five
-    /// effective rules. Carried extensions such as source lineage are ignored.
-    /// Applications evaluate source context and any attached policies separately.
+    /// The five-rule matcher: authority, policy reference, selected revision, and
+    /// the five effective rules. It is not complete-contract equality: machine rules,
+    /// source lineage, and other carried fields are ignored. Applications evaluate
+    /// source context and any attached policies separately; dataset verification
+    /// compares complete normalized contracts.
     pub fn matches_contract(&self, expected: &Governance) -> bool {
         self.governed_by == expected.governed_by
             && self.policy_ref() == expected.policy_ref()
@@ -114,9 +134,6 @@ impl Governance {
         self.fields.get(name)
     }
 
-    pub(super) fn marker(&self) -> Value {
-        json!({"governed_by": self.governed_by, "policy": self.policy_ref()})
-    }
 }
 
 pub(super) fn string_field<'a>(fields: &'a Map<String, Value>, name: &str) -> Result<&'a str> {

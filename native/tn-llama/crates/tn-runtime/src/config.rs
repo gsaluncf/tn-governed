@@ -5,8 +5,6 @@ use serde::{Deserialize, Deserializer};
 
 use crate::contract::ReportContract;
 
-pub const TEST_DEVICE_IDENTITY: &str = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
-
 pub(crate) fn default_lineage_max_objects() -> usize {
     1024
 }
@@ -46,29 +44,8 @@ where
 pub struct RequestLimits {
     pub max_request_bytes: usize,
     pub max_message_bytes: usize,
-    pub expected_device_identity: Option<String>,
     pub expected_event_type: String,
     pub allowed_input_groups: BTreeSet<String>,
-    pub require_signature: bool,
-    pub max_active_sessions: usize,
-    pub max_chain_namespaces: usize,
-}
-
-impl RequestLimits {
-    #[doc(hidden)]
-    #[must_use]
-    pub fn test() -> Self {
-        Self {
-            max_request_bytes: 1024 * 1024,
-            max_message_bytes: 16 * 1024,
-            expected_device_identity: Some(TEST_DEVICE_IDENTITY.to_string()),
-            expected_event_type: "tn.llama.request".to_string(),
-            allowed_input_groups: BTreeSet::new(),
-            require_signature: false,
-            max_active_sessions: 1,
-            max_chain_namespaces: 1,
-        }
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -81,7 +58,6 @@ pub struct RuntimeConfig {
     pub expected_event_type: String,
     pub allowed_input_groups: BTreeSet<String>,
     pub report_contract: ReportContract,
-    pub reader_key_dir: PathBuf,
     pub input_index_key_path: PathBuf,
     pub ceremony_id: String,
     pub governance_group: String,
@@ -123,13 +99,12 @@ pub(crate) fn output_state_is_separate(config: &RuntimeConfig) -> bool {
     let output_log_path =
         tn_core::handlers::spec::resolve_path(&writer_config.logs.path, output_yaml_dir);
     let paths = [
-        &config.reader_key_dir,
         &config.input_index_key_path,
         &config.output_reader_key_dir,
         &config.output_index_key_path,
     ]
     .map(std::fs::canonicalize);
-    let [Ok(source_reader), Ok(source_index), Ok(output_reader), Ok(output_index)] = paths else {
+    let [Ok(source_index), Ok(output_reader), Ok(output_index)] = paths else {
         return false;
     };
     let Some(output_keystore) = canonical_state_path(&output_keystore_path) else {
@@ -139,7 +114,8 @@ pub(crate) fn output_state_is_separate(config: &RuntimeConfig) -> bool {
         return false;
     };
 
-    let mut source_paths = vec![source_reader, source_index];
+    // The input kits live in the native reader's own keystore, added below.
+    let mut source_paths = vec![source_index];
     if let Some(profile) = &config.governed_objects {
         let Ok(native_config) = tn_core::config::load(&profile.native_reader_config_path) else {
             return false;

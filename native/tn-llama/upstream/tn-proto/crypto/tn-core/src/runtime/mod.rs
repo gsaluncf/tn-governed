@@ -50,6 +50,7 @@ mod init;
 mod log_rotation;
 mod material;
 mod objects;
+mod session;
 mod object_registers;
 mod read;
 mod seal;
@@ -58,6 +59,7 @@ mod util;
 
 pub use admin::{EnsureGroupResult, GrantReaderResult, RotateIdPathResult};
 pub use objects::Objects;
+pub use session::{Publication, ReleasePlan, Session, Workflow};
 pub use object_registers::ObjectRegisters;
 pub use seal::{unseal_as_recipient, SealOptions, SealedGroupInfo, UnsealOptions, UnsealOutcome};
 pub use types::{
@@ -182,7 +184,7 @@ pub struct Runtime {
     /// filters don't pick up entries from prior runs.
     /// Mirrors Python's per-process `_run_id` and TS's per-client run id.
     pub(crate) run_id: String,
-    /// Field-routing table cached at init.
+    /// Field-routing table cached at init (0.4.2a7 perf fix).
     ///
     /// `field_to_groups()` walks the config and builds a routing map
     /// from scratch — that's O(groups × fields_per_group) of allocation
@@ -192,7 +194,10 @@ pub struct Runtime {
     /// of this `Runtime`. Rebuilt only on `Runtime::reload`/re-init
     /// after admin verbs mutate the yaml (e.g. `ensure_group`).
     pub(crate) field_to_groups: BTreeMap<String, Vec<String>>,
-    /// Public field names cached for membership checks during emission.
+    /// `public_fields` rendered as a HashSet for O(1) membership
+    /// tests (0.4.2a7 perf fix). Was previously built every emit
+    /// from the `Vec<String>` in the config; that's wasted
+    /// allocation when the result is invariant per runtime.
     pub(crate) public_set: std::collections::HashSet<String>,
     /// Group names whose `policy == "public"` — fields routed to
     /// these groups skip the cipher and land in the envelope as
@@ -225,7 +230,7 @@ impl std::fmt::Debug for Runtime {
 }
 
 /// Standard log-level numeric values, mirroring stdlib Python `logging`.
-/// Used by [`Runtime::set_level`] / [`Runtime::is_enabled_for`].
+/// Used by [`Runtime::set_level`] / [`Runtime::is_enabled_for`] (AVL J3.2).
 pub mod log_level {
     /// DEBUG threshold (10). Lowest level; floor default — emits everything.
     pub const DEBUG: i32 = 10;
@@ -239,7 +244,7 @@ pub mod log_level {
 
 /// Process-wide level threshold. Verbs whose level is below this value
 /// short-circuit before any work happens — no canonicalize, no sign, no
-/// I/O. Defaults to 10 (DEBUG);
+/// I/O. Default 10 (DEBUG, the floor) so callers see prior behavior;
 /// raise via [`Runtime::set_level`]. Static so the early-exit gate is a
 /// single atomic load. Mirrors Python's `_log_level_threshold` and TS's
 /// `TNClient._logLevelThreshold`.

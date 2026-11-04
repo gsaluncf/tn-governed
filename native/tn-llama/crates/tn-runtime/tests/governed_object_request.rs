@@ -1,7 +1,5 @@
 use serde_json::{json, Value};
-use tn_runtime::{
-    parse_and_verify_request, parse_governed_object_request, GovernedInputConfig, RequestLimits,
-};
+use tn_runtime::{parse_governed_object_request, GovernedInputConfig, RequestLimits};
 
 fn fixture() -> (Value, GovernedInputConfig, RequestLimits) {
     let manifest: Value =
@@ -11,9 +9,12 @@ fn fixture() -> (Value, GovernedInputConfig, RequestLimits) {
         "use_context":manifest["uses"]["model"], "destinations":["internal-client"],
         "trusted_writers":[manifest["writer"]], "authority_writers":[manifest["writer"]], "contracts":[]
     })).unwrap();
-    let mut limits = RequestLimits::test();
-    limits.expected_event_type = "calculation.result".into();
-    limits.allowed_input_groups = ["finance".into(), "audit".into()].into();
+    let limits = RequestLimits {
+        max_request_bytes: 1024 * 1024,
+        max_message_bytes: 16 * 1024,
+        expected_event_type: "calculation.result".into(),
+        allowed_input_groups: ["finance".into(), "audit".into()].into(),
+    };
     let request = json!({"protocol":"tn.llama.request.v2", "tn_object":manifest["publications"]["calculation"]["wire"],
         "use":manifest["uses"]["model"],"destination":"internal-client","messages":[{"role":"user","content":"Explain the result."}],"stream":false});
     (request, config, limits)
@@ -37,7 +38,6 @@ fn exact_wire_and_native_identity_survive_transport() {
             .as_str()
             .unwrap()
     );
-    assert!(parse_and_verify_request(&serde_json::to_vec(&request).unwrap(), &limits).is_err());
 }
 
 #[test]

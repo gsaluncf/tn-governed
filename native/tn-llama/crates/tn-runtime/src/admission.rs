@@ -1,112 +1,86 @@
-use std::sync::Arc;
+//! Admission capacity: each governed session holds one active-session reservation while it runs.
 
-use crate::chain_store::{
-    reserve, reserve_active, ActiveSessionReservation, ChainReservation, SharedAdmissionState,
-    SourceNamespace,
-};
-use crate::envelope::AcceptedRequest;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex, MutexGuard};
+
 use crate::error::{AdmissionStage, TnLlamaError};
+
+#[derive(Debug)]
+struct ActiveSessions {
+    max: usize,
+    ids: HashSet<String>,
+}
 
 #[derive(Clone, Debug)]
 pub struct AdmissionController {
-    state: Arc<SharedAdmissionState>,
+    state: Arc<Mutex<ActiveSessions>>,
 }
 
 impl AdmissionController {
+    #[must_use]
+    pub fn new(max_active_sessions: usize) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(ActiveSessions {
+                max: max_active_sessions,
+                ids: HashSet::new(),
+            })),
+        }
+    }
+
     pub(crate) fn admit_governed(
         &self,
         request: crate::AcceptedGovernedRequest,
         session_id: &str,
     ) -> Result<AdmittedGovernedRequest, TnLlamaError> {
+        let mut state = self.state.lock().map_err(|_| {
+            TnLlamaError::new(
+                "tn_admission_state_poisoned",
+                AdmissionStage::Admission,
+                "admission state lock is poisoned",
+            )
+        })?;
+        if session_id.is_empty() || state.ids.contains(session_id) || state.ids.len() >= state.max {
+            return Err(TnLlamaError::new(
+                "tn_active_session_limit",
+                AdmissionStage::Admission,
+                "active session limit reached or session identity already reserved",
+            ));
+        }
+        state.ids.insert(session_id.to_owned());
         Ok(AdmittedGovernedRequest {
             request,
-            _reservation: reserve_active(&self.state, session_id)?,
-        })
-    }
-    #[must_use]
-    pub fn new(
-        configured_namespace: SourceNamespace,
-        max_active_sessions: usize,
-        max_chain_namespaces: usize,
-    ) -> Self {
-        Self {
-            state: Arc::new(SharedAdmissionState::new(
-                configured_namespace,
-                max_active_sessions,
-                max_chain_namespaces,
-            )),
-        }
-    }
-
-    pub fn admit(
-        &self,
-        request: AcceptedRequest,
-        session_id: &str,
-    ) -> Result<AdmittedRequest, TnLlamaError> {
-        let reservation = reserve(&self.state, &request.row, session_id, true)?;
-        Ok(AdmittedRequest {
-            request,
-            reservation: Some(reservation),
+            _reservation: ActiveSessionReservation {
+                state: Arc::clone(&self.state),
+                session_id: session_id.to_owned(),
+            },
         })
     }
 
     #[must_use]
     pub fn active_sessions(&self) -> usize {
-        self.state.active_sessions()
-    }
-
-    #[must_use]
-    pub fn chain_namespaces(&self) -> usize {
-        self.state.chain_namespaces()
+        lock_recover(&self.state).ids.len()
     }
 }
 
+/// An admitted request; dropping it releases its active-session capacity.
 pub(crate) struct AdmittedGovernedRequest {
     pub request: crate::AcceptedGovernedRequest,
     _reservation: ActiveSessionReservation,
 }
 
-pub(crate) enum AdmittedInput {
-    LegacyChained(AdmittedRequest),
-    GovernedObject(AdmittedGovernedRequest),
-}
-impl AdmittedInput {
-    pub fn abort(self) -> Result<(), TnLlamaError> {
-        match self {
-            Self::LegacyChained(request) => request.abort(),
-            Self::GovernedObject(_) => Ok(()),
-        }
-    }
-    pub fn commit(self) -> Result<(), TnLlamaError> {
-        match self {
-            Self::LegacyChained(request) => request.commit(),
-            Self::GovernedObject(_) => Ok(()),
-        }
-    }
-}
-
 #[derive(Debug)]
-pub struct AdmittedRequest {
-    pub request: AcceptedRequest,
-    reservation: Option<ChainReservation>,
+struct ActiveSessionReservation {
+    state: Arc<Mutex<ActiveSessions>>,
+    session_id: String,
 }
 
-impl AdmittedRequest {
-    pub fn commit(mut self) -> Result<(), TnLlamaError> {
-        self.take_reservation()?.commit()
+impl Drop for ActiveSessionReservation {
+    fn drop(&mut self) {
+        lock_recover(&self.state).ids.remove(&self.session_id);
     }
+}
 
-    pub fn abort(mut self) -> Result<(), TnLlamaError> {
-        self.take_reservation()?.abort()
-    }
-
-    fn take_reservation(&mut self) -> Result<ChainReservation, TnLlamaError> {
-        self.reservation.take().ok_or_else(|| {
-            TnLlamaError::new(
-                "tn_admission_finalized",
-                AdmissionStage::Admission,
-                "admitted request no longer owns a reservation",
-            )
-        })
-    }
+fn lock_recover(lock: &Mutex<ActiveSessions>) -> MutexGuard<'_, ActiveSessions> {
+    lock.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }

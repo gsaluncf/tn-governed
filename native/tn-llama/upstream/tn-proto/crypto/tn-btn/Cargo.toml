@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 description = "Broadcast-Transaction encryption: NNL subset-difference with selective revocation."
 license.workspace = true
+readme = "README.md"
 keywords = ["cryptography", "broadcast", "encryption", "revocation", "nnl"]
 categories = ["cryptography"]
 

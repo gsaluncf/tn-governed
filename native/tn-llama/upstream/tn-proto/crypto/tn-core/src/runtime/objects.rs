@@ -11,11 +11,13 @@ use crate::{DeviceKey, Error, Result};
 use super::material::Material;
 use super::{GroupState, ObjectRegisters, Runtime};
 use crate::governed::{
-    AdmissionContext, AttachmentContext, DataObject, DatasetSelection, ReleaseContext, UseContext,
+    AdmissionContext, AttachmentContext, DataObject, DatasetSelection, Incoming, ReleaseContext,
+    UseContext,
 };
 
 enum Identity<'a> {
     Owned(Box<DeviceKey>),
+    Shared(Arc<DeviceKey>),
     Borrowed(&'a DeviceKey),
 }
 
@@ -32,9 +34,46 @@ pub struct Objects<'a> {
     private_groups: BTreeSet<String>,
     policies: Option<PolicyDocument>,
     registers: ObjectRegisters,
+    register_provider: Option<Arc<dyn crate::providers::RegisterProvider>>,
 }
 
 impl Objects<'static> {
+    /// Construct an independent object context from assigned native capabilities.
+    pub fn from_capabilities(
+        identity: crate::providers::ApplicationIdentity,
+        keys: crate::providers::KeySet,
+        register_provider: Option<Arc<dyn crate::providers::RegisterProvider>>,
+    ) -> Result<Self> {
+        if keys.owner() != identity.did() {
+            return Err(Error::InvalidConfig(
+                "capabilities belong to another identity".into(),
+            ));
+        }
+        let mut groups = BTreeMap::new();
+        for capability in keys.groups {
+            groups.insert(
+                capability.group,
+                Arc::new(RwLock::new(GroupState {
+                    cipher: capability.cipher,
+                    hmac_template: crate::indexing::build_hmac_template(&capability.index)?,
+                    aad_default: serde_json::Map::new(),
+                })),
+            );
+        }
+        Ok(Self {
+            identity: Identity::Shared(identity.signer),
+            private_groups: groups.keys().cloned().collect(),
+            groups,
+            policies: None,
+            registers: if register_provider.is_some() {
+                ObjectRegisters::default()
+            } else {
+                ObjectRegisters::from_env()?
+            },
+            register_provider,
+        })
+    }
+
     /// Create an independent in-memory identity, policy, and BTN group context.
     /// The governance group is supplied automatically. No files are created.
     pub fn ephemeral(policy: &str, policy_id: &str, business_groups: &[&str]) -> Result<Self> {
@@ -77,6 +116,7 @@ impl Objects<'static> {
             private_groups: names,
             policies: Some(policies),
             registers: ObjectRegisters::from_env()?,
+            register_provider: None,
         })
     }
 
@@ -111,11 +151,52 @@ impl Objects<'static> {
             private_groups,
             policies,
             registers: ObjectRegisters::from_env()?,
+            register_provider: None,
         })
     }
 }
 
 impl Objects<'_> {
+    /// Resolve the type chosen by a policy loader or a matching local template.
+    pub fn selected_type(&self, policy: &Governance) -> Result<String> {
+        if let Some(name) = policy.selected_object_type() {
+            return Ok(name.to_owned());
+        }
+        if let Some(document) = &self.policies {
+            for (name, template) in &document.templates {
+                if &Governance::from_template(self.did(), template)? == policy {
+                    return Ok(name.clone());
+                }
+            }
+        }
+        Err(Error::InvalidConfig(
+            "object_type is required for a contract without a selected type".into(),
+        ))
+    }
+    /// Create signed data using the policy loader's selected object type.
+    pub fn create_selected(
+        &self,
+        fields: impl serde::Serialize,
+        policy: Governance,
+        group: &str,
+    ) -> Result<DataObject> {
+        let name = self.selected_type(&policy)?;
+        self.create_obj(&name, policy, group, fields)
+    }
+    /// Create all initial groups in one signed object using a selected policy.
+    pub fn create_selected_groups<I, S, V>(
+        &self,
+        groups: I,
+        policy: Governance,
+    ) -> Result<DataObject>
+    where
+        I: IntoIterator<Item = (S, V)>,
+        S: AsRef<str>,
+        V: serde::Serialize,
+    {
+        let name = self.selected_type(&policy)?;
+        self.create_obj_with_groups(&name, policy, groups)
+    }
     /// Originate governed data and its initial signed snapshot from a required policy.
     pub fn create_obj(
         &self,
@@ -146,9 +227,9 @@ impl Objects<'_> {
     }
     /// Legacy operation-only receipt into a mutable governed object. Use
     /// [`Self::receive_for`] for complete use and selected-group admission.
-    pub fn receive<I, S, F>(
+    pub fn receive<'a, I, S, F>(
         &self,
-        wire: &str,
+        source: impl Into<Incoming<'a>>,
         operation: &str,
         groups: I,
         decide: F,
@@ -158,24 +239,43 @@ impl Objects<'_> {
         S: AsRef<str>,
         F: FnOnce(&AdmissionContext<'_>) -> Result<bool>,
     {
-        self.reader()?.receive(wire, operation, groups, decide)
+        self.reader()?.receive(source, operation, groups, decide)
     }
-    /// Admit a complete use and optional exact edition before opening selected data.
-    pub fn receive_for<I, S, F>(
+    /// Admit a complete use and any exact editions before opening selected data.
+    /// Groups the source carries open from their holders; see [`GovernedReader::receive_for`].
+    pub fn receive_for<'a, 's, I, S, F>(
         &self,
-        wire: &str,
+        source: impl Into<Incoming<'a>>,
         use_context: &UseContext,
         groups: I,
-        selection: Option<&DatasetSelection>,
+        selections: impl IntoIterator<Item = &'s DatasetSelection>,
         decide: F,
     ) -> Result<DataObject>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
-        F: FnOnce(&AdmissionContext<'_>) -> Result<bool>,
+        F: FnMut(&AdmissionContext<'_>) -> Result<bool>,
     {
         self.reader()?
-            .receive_for(wire, use_context, groups, selection, decide)
+            .receive_for(source, use_context, groups, selections, decide)
+    }
+    /// Decide a strict receipt without opening anything; returns the policies the
+    /// received working copy would hold. See [`GovernedReader::admit_for`].
+    pub fn admit_for<'a, 's, I, S, F>(
+        &self,
+        source: impl Into<Incoming<'a>>,
+        use_context: &UseContext,
+        groups: I,
+        selections: impl IntoIterator<Item = &'s DatasetSelection>,
+        decide: F,
+    ) -> Result<Vec<Governance>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+        F: FnMut(&AdmissionContext<'_>) -> Result<bool>,
+    {
+        self.reader()?
+            .admit_for(source, use_context, groups, selections, decide)
     }
     /// Add an authority-approved policy while retaining the existing policy set.
     pub fn attach<F>(&self, data: &mut DataObject, policy: Governance, decide: F) -> Result<()>
@@ -223,6 +323,7 @@ impl Objects<'_> {
     /// Choose this service's optional creation and release registers explicitly.
     pub fn with_registers(mut self, registers: ObjectRegisters) -> Self {
         self.registers = registers;
+        self.register_provider = None;
         self
     }
     fn record(&self, data: &mut DataObject, action: &str, purpose: &str, destination: &str) {
@@ -231,8 +332,20 @@ impl Objects<'_> {
                 .iter()
                 .map(|policy| policy.policy_ref().to_owned())
                 .collect::<Vec<_>>();
-            match data.snapshot() {
-                Some(object) => self.registers.record(
+            match (data.snapshot(), self.register_provider.as_ref()) {
+                (Some(object), Some(provider)) => provider
+                    .record(
+                        self.device(),
+                        &crate::providers::RegisterEvent {
+                            action: action.into(),
+                            publication: object.clone(),
+                            purpose: purpose.into(),
+                            destination: destination.into(),
+                            policy_refs: refs,
+                        },
+                    )
+                    .map(|_| true),
+                (Some(object), None) => self.registers.record(
                     self.device(),
                     action,
                     object,
@@ -240,7 +353,7 @@ impl Objects<'_> {
                     destination,
                     &refs,
                 ),
-                None => Err(Error::InvalidConfig(
+                (None, _) => Err(Error::InvalidConfig(
                     "registration requires a sealed snapshot".into(),
                 )),
             }
@@ -266,6 +379,7 @@ impl Objects<'_> {
     fn device(&self) -> &DeviceKey {
         match &self.identity {
             Identity::Owned(key) => key,
+            Identity::Shared(key) => key,
             Identity::Borrowed(key) => key,
         }
     }
@@ -342,7 +456,9 @@ impl Objects<'_> {
                 let state = group
                     .read()
                     .map_err(|_| Error::InvalidConfig("group state lock poisoned".into()))?;
-                reader = reader.with_group(name, Arc::clone(&state.cipher))?;
+                reader = reader
+                    .with_group(name, Arc::clone(&state.cipher))?
+                    .with_group_index(name, state.hmac_template.clone())?;
             }
         }
         Ok(reader)
@@ -364,6 +480,7 @@ impl Runtime {
                 .collect(),
             policies: self.agent_policies.clone(),
             registers: ObjectRegisters::from_env().unwrap_or_default(),
+            register_provider: None,
         }
     }
 }

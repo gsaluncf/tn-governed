@@ -66,7 +66,7 @@ fn ingest_use() -> UseContext {
 }
 
 fn calculation_use() -> UseContext {
-    UseContext::new("calculation", "portfolio_analysis", "calculate").unwrap()
+    UseContext::new("deepvest", "portfolio_analysis", "calculate").unwrap()
 }
 
 struct Fixture {
@@ -97,7 +97,7 @@ impl Fixture {
             .unwrap()
     }
     fn reader(&self) -> GovernedReader {
-        GovernedReader::new()
+        GovernedReader::new().with_governance_index_key(&[1; 32]).unwrap()
             .with_group("tn.agents", self.governance.clone())
             .unwrap()
             .with_group(POLICY_REVISION_GROUP, self.metadata.clone())
@@ -249,6 +249,17 @@ impl Fixture {
             "ciphertext": base64::engine::general_purpose::STANDARD.encode(ciphertext),
             "field_hashes": tokens,
         });
+        // Bound data groups only open under the governance they were sealed with,
+        // so a rewritten governance needs each data group sealed again under it.
+        let governance = tn_core::canonical::canonical_bytes(&json!(fields)).unwrap();
+        let binding_id = envelope["event_id"].as_str().unwrap().to_owned();
+        for (group, plaintext) in self.business_plaintext(object) {
+            let aad = bound_data_aad(&aad[&group], &binding_id, &governance);
+            let plaintext = tn_core::canonical::canonical_bytes(&plaintext).unwrap();
+            let ciphertext = self.business.encrypt_with_aad(&plaintext, &aad).unwrap();
+            envelope[&group]["ciphertext"] =
+                json!(base64::engine::general_purpose::STANDARD.encode(ciphertext));
+        }
         let blocks = extract_group_blocks(&envelope).unwrap();
         let public = envelope
             .iter()
@@ -285,6 +296,40 @@ impl Fixture {
         envelope["row_hash"] = json!(row_hash);
         GovernedObject::parse(&serde_json::to_string(&envelope).unwrap()).unwrap()
     }
+
+    fn business_plaintext(&self, object: &GovernedObject) -> Vec<(String, Value)> {
+        let reader = self.reader();
+        let groups: Vec<_> = object.group_names().into_iter().filter(|g| *g != "tn.agents").collect();
+        let admitted = reader
+            .governance(object)
+            .unwrap()
+            .authorize("inspect", |_, _| Ok(true))
+            .unwrap();
+        reader.open(&admitted, &groups).unwrap().into_groups().into_iter().collect()
+    }
+}
+
+/// The bound data AAD, recomputed from the wire specification without tn-core's code.
+fn bound_data_aad(label: &Value, binding_id: &str, governance: &[u8]) -> Vec<u8> {
+    use hmac::{Hmac, Mac};
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(b"tn.binding.v2.digest\0");
+    hasher.update(governance);
+    let digest = hex::encode(hasher.finalize());
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&[1; 32]).unwrap();
+    let parts: [&[u8]; 5] = [
+        b"tn.binding.v2.governance-hash-key\0",
+        binding_id.as_bytes(),
+        b"\0",
+        digest.as_bytes(),
+        b"\0",
+    ];
+    for part in parts {
+        mac.update(part);
+    }
+    let key = format!("hmac-sha256:v1:{}", hex::encode(mac.finalize().into_bytes()));
+    tn_core::canonical::canonical_bytes(&json!({"label": label, "governance_hash_key": key})).unwrap()
 }
 
 struct Workflow {
@@ -342,7 +387,7 @@ impl Workflow {
                 &mut output,
                 "finance.joined",
                 &ingest_use(),
-                "calculation",
+                "deepvest",
                 |_| Ok(true),
             )
             .unwrap();

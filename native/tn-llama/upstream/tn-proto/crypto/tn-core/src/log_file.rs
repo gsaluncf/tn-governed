@@ -89,7 +89,7 @@ impl LogFileWriter {
         if let Some(p) = path.parent() {
             storage.create_dir_all(p)?;
         }
-        // terminate a partial trailing line if present. A
+        // 0.4.2a9: terminate a partial trailing line if present. A
         // process killed mid-emit leaves the log ending with a
         // truncated JSON fragment and no `\n`. The next emit
         // appending to that file would concatenate its envelope
@@ -341,8 +341,13 @@ impl LogFileWriter {
 /// Writer dispatcher for emit: literal `logs.path` → one shared
 /// writer; templated `logs.path` → lazy pool keyed by rendered path.
 ///
-/// A ceremony with `logs: {path: ./.tn/{event_class}.ndjson}` routes each
-/// event to its rendered file. Literal and templated paths share this writer.
+/// The Runtime swaps `Mutex<LogFileWriter>` for `LogWriters` so a
+/// ceremony with `logs: {path: ./.tn/{event_class}.ndjson}` routes
+/// each emit to its rendered file — same Rust-accelerated path that
+/// non-templated ceremonies use. Before 0.4.2a7 the dispatch layer
+/// fell back to the legacy Python emit for templated ceremonies,
+/// paying an 18× perf tax. With `LogWriters::Templated`, both
+/// shapes run through the same hot path.
 pub enum LogWriters {
     /// Single literal path — no templating, one shared writer.
     /// Path is cached separately from the writer so

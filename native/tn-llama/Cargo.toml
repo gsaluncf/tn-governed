@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/tn-runtime", "crates/tn-test-tools"]
+members = ["crates/tn-runtime", "crates/tn-test-tools", "crates/tn-runtime-py"]
 exclude = ["upstream/tn-proto"]
 
 [workspace.package]

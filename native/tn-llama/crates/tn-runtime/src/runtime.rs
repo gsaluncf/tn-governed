@@ -4,21 +4,19 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
-use crate::admission::{AdmissionController, AdmittedInput};
+use crate::admission::AdmissionController;
 use crate::audit::{AuditEvent, AuditFacts, AuditLog, DecisionAudit};
 use crate::config::{output_state_is_separate, RequestLimits, RuntimeConfig};
 use crate::contract::ReportContract;
-use crate::envelope::parse_and_verify_request;
-use crate::governance::{GovernanceKeyProvenance, GovernanceReader};
 use crate::governed_input::{parse_governed_object_request, GovernedInputRuntime};
 use crate::model_protocol::session_error;
-use crate::output_tn::{GovernedOutputPublisher, OutputPublisher};
+use crate::output_tn::GovernedOutputPublisher;
 use crate::sensitive_trace::{
     BuildMetadata, SensitiveTrace, SensitiveTraceEvent, SensitiveTraceKind, SensitiveTraceSink,
 };
 use crate::session::Session;
 use crate::tools::ToolDispatcher;
-use crate::{SourceNamespace, TnLlamaError};
+use crate::TnLlamaError;
 
 #[derive(Clone)]
 pub struct GovernedRuntime {
@@ -30,13 +28,11 @@ pub(crate) struct RuntimeInner {
     pub(crate) run_id: String,
     pub(crate) limits: RequestLimits,
     pub(crate) admission: AdmissionController,
-    pub(crate) governance_reader: Arc<GovernanceReader>,
     pub(crate) audit: Arc<dyn DecisionAudit>,
     pub(crate) trace: Arc<dyn SensitiveTraceSink>,
     pub(crate) report_contract: Arc<ReportContract>,
-    pub(crate) output_publisher: Option<Arc<OutputPublisher>>,
-    pub(crate) governed_input: Option<Arc<GovernedInputRuntime>>,
-    pub(crate) governed_output: Option<Arc<GovernedOutputPublisher>>,
+    pub(crate) governed_input: Arc<GovernedInputRuntime>,
+    pub(crate) governed_output: Arc<GovernedOutputPublisher>,
     pub(crate) tool_dispatcher: Arc<ToolDispatcher>,
     pub(crate) final_max_tokens: u32,
 }
@@ -100,70 +96,19 @@ impl GovernedRuntime {
         let limits = RequestLimits {
             max_request_bytes: config.max_request_bytes,
             max_message_bytes: config.max_message_bytes,
-            expected_device_identity: None,
             expected_event_type: config.expected_event_type.clone(),
             allowed_input_groups: config.allowed_input_groups.clone(),
-            require_signature: true,
-            max_active_sessions: config.max_active_sessions,
-            max_chain_namespaces: config.max_chain_namespaces,
         };
-        let namespace = SourceNamespace::new("*", config.expected_event_type.clone());
         let report_contract = Arc::new(config.report_contract.clone());
-        let output_publisher = if config.governed_objects.is_none() {
-            Some(Arc::new(OutputPublisher::from_config(&config)?))
-        } else {
-            None
-        };
-        let governed_output = if config.governed_objects.is_some() {
-            Some(Arc::new(GovernedOutputPublisher::from_config(&config)?))
-        } else {
-            None
-        };
-        let configured_tools = report_contract
-            .section_rules
-            .values()
-            .filter_map(|rule| rule.required_tool.as_ref())
-            .collect::<std::collections::BTreeSet<_>>();
-        let tool_dispatcher = match configured_tools.len() {
-            0 => ToolDispatcher::empty(),
-            1 => {
-                let name = configured_tools
-                    .first()
-                    .expect("one configured tool")
-                    .as_str();
-                if let Some(publisher) = &governed_output {
-                    ToolDispatcher::native(Arc::clone(publisher), name)?
-                } else {
-                    ToolDispatcher::new(
-                        Arc::clone(output_publisher.as_ref().expect("legacy publisher")),
-                        name,
-                    )?
-                }
-            }
-            _ => {
-                return Err(session_error(
-                    "tn_tool_registration_invalid",
-                    "runtime config names more governed tools than this registry provides",
-                ));
-            }
-        };
-        let governance_reader = GovernanceReader::from_paths(
-            &config.reader_key_dir,
-            &config.input_index_key_path,
-            GovernanceKeyProvenance::new(
-                config.ceremony_id.clone(),
-                config.governance_group.clone(),
-                config.input_index_epoch,
-            ),
-        )?;
-        let governance_reader = Arc::new(governance_reader);
-        let governed_input = config
-            .governed_objects
-            .clone()
-            .map(|profile| {
-                GovernedInputRuntime::load(profile, Arc::clone(&governance_reader)).map(Arc::new)
-            })
-            .transpose()?;
+        let governed_output = Arc::new(GovernedOutputPublisher::from_config(&config)?);
+        let tool_dispatcher = configured_tools(&report_contract, &governed_output)?;
+        let profile = config.governed_objects.clone().ok_or_else(|| {
+            session_error(
+                "tn_session_state",
+                "runtime configuration lacks the governed object profile",
+            )
+        })?;
+        let governed_input = Arc::new(GovernedInputRuntime::load(profile)?);
         let run_id = Uuid::now_v7().to_string();
         let audit = audit_factory(&run_id).map_err(|_| {
             session_error(
@@ -182,16 +127,10 @@ impl GovernedRuntime {
                 execution_backend: backend,
                 run_id,
                 limits,
-                admission: AdmissionController::new(
-                    namespace,
-                    config.max_active_sessions,
-                    config.max_chain_namespaces,
-                ),
-                governance_reader,
+                admission: AdmissionController::new(config.max_active_sessions),
                 audit,
                 trace,
                 report_contract,
-                output_publisher,
                 governed_input,
                 governed_output,
                 tool_dispatcher: Arc::new(tool_dispatcher),
@@ -229,196 +168,82 @@ impl GovernedRuntime {
                 "request ingress trace append failed",
             ));
         }
-        if let Some(input) = &self.inner.governed_input {
-            let accepted =
-                match parse_governed_object_request(raw, &self.inner.limits, &input.config) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        append_runtime_terminal_audit(
-                            audit.as_ref(),
-                            "received",
-                            "",
-                            "",
-                            error.code(),
-                        )
-                        .map_err(|_| {
-                            session_error(
-                                "tn_audit_append_failed",
-                                "request rejection audit append failed",
-                            )
-                        })?;
-                        return Err(error);
-                    }
-                };
-            let object_id = accepted.object.id().to_owned();
-            let request_digest = accepted.request_digest.clone();
-            let admitted = match self
-                .inner
-                .admission
-                .admit_governed(accepted, &reservation_id)
-            {
-                Ok(admitted) => admitted,
-                Err(error) => {
-                    append_runtime_terminal_audit(
-                        audit.as_ref(),
-                        "received",
-                        &object_id,
-                        &request_digest,
-                        error.code(),
-                    )
+        let input = &self.inner.governed_input;
+        let accepted = match parse_governed_object_request(raw, &self.inner.limits, &input.config) {
+            Ok(value) => value,
+            Err(error) => {
+                append_runtime_terminal_audit(audit.as_ref(), "received", "", "", error.code())
                     .map_err(|_| {
                         session_error(
                             "tn_audit_append_failed",
-                            "standalone refusal audit append failed",
+                            "request rejection audit append failed",
                         )
                     })?;
-                    return Err(error);
-                }
-            };
-            append_runtime_audit(
-                audit.as_ref(),
-                "standalone_object_reserved",
-                "received",
-                "governance_admission",
-                &object_id,
-                &request_digest,
-                AuditFacts {
-                    hashes_verified: Some(true),
-                    signature_verified: Some(true),
-                    ..AuditFacts::default()
-                },
-            )
-            .map_err(|_| {
-                session_error(
-                    "tn_audit_append_failed",
-                    "object admission audit append failed",
-                )
-            })?;
-            return Session::new(
-                run_id.clone(),
-                self.inner.execution_backend.clone(),
-                AdmittedInput::GovernedObject(admitted),
-                Arc::clone(&self.inner.governance_reader),
-                audit,
-                trace,
-                Arc::clone(&self.inner.report_contract),
-                None,
-                Arc::clone(&self.inner.tool_dispatcher),
-                self.inner.final_max_tokens,
-                Some(crate::session::GovernedSessionState {
-                    input: Arc::clone(input),
-                    output: Arc::clone(
-                        self.inner
-                            .governed_output
-                            .as_ref()
-                            .expect("governed output"),
-                    ),
-                    view: None,
-                    data: None,
-                    tools: Vec::new(),
-                    context: None,
-                }),
-            );
-        }
-        let accepted = match parse_and_verify_request(raw, &self.inner.limits) {
-            Ok(accepted) => accepted,
-            Err(error) => {
-                if append_runtime_terminal_audit(audit.as_ref(), "received", "", "", error.code())
-                    .is_err()
-                {
-                    return Err(session_error(
-                        "tn_audit_append_failed",
-                        "request rejection audit append failed",
-                    ));
-                }
                 return Err(error);
             }
         };
-        let row_hash = accepted.row.row_hash().to_string();
-        let signature_verified = accepted.row.signature_verified();
+        let object_id = accepted.object.id().to_owned();
         let request_digest = accepted.request_digest.clone();
+        let admitted = match self
+            .inner
+            .admission
+            .admit_governed(accepted, &reservation_id)
+        {
+            Ok(admitted) => admitted,
+            Err(error) => {
+                append_runtime_terminal_audit(
+                    audit.as_ref(),
+                    "received",
+                    &object_id,
+                    &request_digest,
+                    error.code(),
+                )
+                .map_err(|_| {
+                    session_error(
+                        "tn_audit_append_failed",
+                        "standalone refusal audit append failed",
+                    )
+                })?;
+                return Err(error);
+            }
+        };
         append_runtime_audit(
             audit.as_ref(),
-            "row_verified",
+            "standalone_object_reserved",
             "received",
-            "row_verified",
-            &row_hash,
+            "governance_admission",
+            &object_id,
             &request_digest,
             AuditFacts {
                 hashes_verified: Some(true),
-                signature_verified: Some(signature_verified),
+                signature_verified: Some(true),
                 ..AuditFacts::default()
             },
         )
         .map_err(|_| {
             session_error(
                 "tn_audit_append_failed",
-                "row verification audit append failed",
+                "object admission audit append failed",
             )
         })?;
-
-        let admitted = match self.inner.admission.admit(accepted, &reservation_id) {
-            Ok(admitted) => admitted,
-            Err(error) => {
-                if append_runtime_terminal_audit(
-                    audit.as_ref(),
-                    "row_verified",
-                    &row_hash,
-                    &request_digest,
-                    error.code(),
-                )
-                .is_err()
-                {
-                    return Err(session_error(
-                        "tn_audit_append_failed",
-                        "admission rejection audit append failed",
-                    ));
-                }
-                return Err(error);
-            }
-        };
-        if append_runtime_audit(
-            audit.as_ref(),
-            "chain_reserved",
-            "row_verified",
-            "governance_admission",
-            &row_hash,
-            &request_digest,
-            AuditFacts::default(),
-        )
-        .is_err()
-        {
-            let _ = admitted.abort();
-            let _ = trace.append(SensitiveTraceEvent {
-                run_id,
-                phase: None,
-                kind: SensitiveTraceKind::Error,
-                task_id: None,
-                slot_id: None,
-                request_json: None,
-                rendered_prompt: None,
-                runnable_manifest: None,
-                raw_model_output: None,
-                parsed_content: None,
-                error_code: Some("tn_audit_append_failed"),
-            });
-            return Err(session_error(
-                "tn_audit_append_failed",
-                "chain reservation audit append failed",
-            ));
-        }
         Session::new(
             run_id.clone(),
             self.inner.execution_backend.clone(),
-            AdmittedInput::LegacyChained(admitted),
-            Arc::clone(&self.inner.governance_reader),
+            admitted,
             audit,
             trace,
             Arc::clone(&self.inner.report_contract),
-            self.inner.output_publisher.as_ref().map(Arc::clone),
             Arc::clone(&self.inner.tool_dispatcher),
             self.inner.final_max_tokens,
-            None,
+            crate::session::GovernedSessionState {
+                input: Arc::clone(input),
+                output: Arc::clone(&self.inner.governed_output),
+                view: None,
+                route: None,
+                data: None,
+                tools: Vec::new(),
+                context: None,
+            },
         )
     }
 }
@@ -428,7 +253,6 @@ fn validate_config(
     backend: &crate::ExecutionBackend,
 ) -> Result<(), TnLlamaError> {
     let absolute_paths = [
-        config.reader_key_dir.as_path(),
         config.input_index_key_path.as_path(),
         config.output_tn_config_path.as_path(),
         config.output_reader_key_dir.as_path(),
@@ -452,7 +276,6 @@ fn validate_config(
             crate::ExecutionBackend::Llama => config.max_active_sessions == 1,
             crate::ExecutionBackend::Vllm(_) => config.max_active_sessions > 0,
         }
-        && config.max_chain_namespaces > 0
         && config.final_max_tokens > 0;
     if valid {
         Ok(())
@@ -466,7 +289,7 @@ fn validate_config(
 
 fn valid_report_contract(config: &RuntimeConfig) -> bool {
     let contract = &config.report_contract;
-    config.governed_objects.as_ref().is_none_or(|profile| {
+    config.governed_objects.as_ref().is_some_and(|profile| {
         contract.operation == profile.use_context.operation()
             && contract
                 .section_rules
@@ -510,6 +333,29 @@ fn valid_report_contract(config: &RuntimeConfig) -> bool {
         ]
         .into_iter()
         .all(|value| nonempty(value))
+}
+
+/// The one protected tool the report contract names, published through the governed output.
+fn configured_tools(
+    contract: &ReportContract,
+    publisher: &Arc<GovernedOutputPublisher>,
+) -> Result<ToolDispatcher, TnLlamaError> {
+    let configured = contract
+        .section_rules
+        .values()
+        .filter_map(|rule| rule.required_tool.as_ref())
+        .collect::<std::collections::BTreeSet<_>>();
+    match configured.len() {
+        0 => Ok(ToolDispatcher::empty()),
+        1 => ToolDispatcher::native(
+            Arc::clone(publisher),
+            configured.first().expect("one configured tool"),
+        ),
+        _ => Err(session_error(
+            "tn_tool_registration_invalid",
+            "runtime config names more governed tools than this registry provides",
+        )),
+    }
 }
 
 fn nonempty(value: &str) -> bool {

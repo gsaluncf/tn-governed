@@ -4,7 +4,7 @@ use base64::Engine as _;
 use serde_json::{json, Value};
 use tn_core::cipher::{btn::BtnPublisherCipher, GroupCipher};
 use tn_core::governed::{
-    Governance, GovernedDraft, GovernedObject, GovernedReader, GovernedWriter, OpenedObject,
+    DataObject, Governance, GovernedDraft, GovernedObject, GovernedReader, GovernedWriter, OpenedObject,
     PolicyDag, PolicyRelation, PolicyRevision, PolicyRevisionDraft, POLICY_REVISION_GROUP,
     POLICY_REVISION_TYPE,
 };
@@ -53,7 +53,7 @@ impl Fixture {
     }
 
     fn reader(&self) -> GovernedReader {
-        GovernedReader::new()
+        GovernedReader::new().with_governance_index_key(&[1; 32]).unwrap()
             .with_group("tn.agents", self.rules.clone())
             .unwrap()
             .with_group(POLICY_REVISION_GROUP, self.data.clone())
@@ -462,15 +462,13 @@ fn revision_binding_and_data_lineage_survive_a_policy_update() {
     );
     dag.admit(update.clone(), |_, _| Ok(true)).unwrap();
     let selected = dag.select(update.id(), "research", |_| Ok(true)).unwrap();
+    // The successor's primary contract is the new revision; the source's stays attached.
+    let mut successor =
+        DataObject::new("research.aggregate", selected, "observations", json!({"total": 30})).unwrap();
+    successor.include(&DataObject::from_opened(opened.clone()).unwrap()).unwrap();
     let result = f
         .writer()
-        .seal(
-            opened
-                .derive_under("research.aggregate", selected)
-                .unwrap()
-                .group("observations", json!({"total": 30}))
-                .unwrap(),
-        )
+        .release(&mut successor, "research.aggregate", "research", "report", |_| Ok(true))
         .unwrap();
     let result = f.open(&result, "observations");
     assert_eq!(result.governance().revision_id(), Some(update.id()));
@@ -486,8 +484,10 @@ fn revision_binding_and_data_lineage_survive_a_policy_update() {
         f.open(&source, "observations").groups()["observations"]["count"],
         30
     );
+    // The revision travels inside encrypted, signed tn.agents, not in the public label.
     let aad: Value = serde_json::from_str(source.envelope()["tn_aad"].as_str().unwrap()).unwrap();
-    assert_eq!(aad["tn.agents"].as_object().unwrap().len(), 2);
+    assert_eq!(aad["tn.agents"]["binding"], 2);
+    assert!(!aad["tn.agents"].as_object().unwrap().contains_key("policy_revision"));
 }
 
 #[test]
@@ -587,7 +587,7 @@ fn revision_pointer_requires_valid_shape_and_an_accepted_exact_identity() {
 fn decoding_a_revision_requires_its_assigned_group_access() {
     let f = Fixture::new();
     let root = f.revision(f.draft(POLICY, "research"));
-    let reader = GovernedReader::new()
+    let reader = GovernedReader::new().with_governance_index_key(&[1; 32]).unwrap()
         .with_group("tn.agents", f.rules.clone())
         .unwrap();
     let admitted = reader

@@ -149,11 +149,28 @@ fn projection_validates_before_removing_plaintext_or_hidden_groups() {
     let released = objects
         .release(&mut data, "account", "archive", "internal", |_| Ok(true))
         .unwrap();
-    assert_eq!(released.group_names(), ["private", "tn.agents"]);
-    assert_eq!(
-        released.envelope()["private"],
-        original.envelope()["private"]
-    );
+    // A group this reader never opened stays bound to the original's governance,
+    // so the release carries the whole original instead of copying its ciphertext.
+    assert_eq!(released.group_names(), ["tn.agents"]);
+    assert_eq!(released.carried().len(), 1);
+    assert_eq!(released.carried()[0].wire(), original.wire());
+    // A reader holding the key opens the group from the carried original, under its governance.
+    let carried = objects
+        .receive(released.carried()[0].wire(), "analysis", ["private"], |_| Ok(true))
+        .unwrap();
+    assert_eq!(carried.group("private").unwrap()["owner"], "Ada");
+    // A successor of the successor still carries the original whole. Carrying is
+    // per object: the original's signature covers all its groups, so its `data`
+    // travels too even though the first successor dropped it from its own output.
+    let mut relay = objects
+        .receive(released.wire(), "analysis", Vec::<&str>::new(), |_| Ok(true))
+        .unwrap();
+    assert_eq!(relay.hidden_groups(), ["data", "private"]);
+    let second = objects
+        .release(&mut relay, "account", "archive", "internal", |_| Ok(true))
+        .unwrap();
+    assert_eq!(second.carried().len(), 1);
+    assert_eq!(second.carried()[0].wire(), original.wire());
     assert_eq!(data.history()[0].wire(), original.wire());
     assert!(data.governance().matches_contract(&policy));
 }

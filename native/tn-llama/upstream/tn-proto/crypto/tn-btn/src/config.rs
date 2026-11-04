@@ -1,12 +1,19 @@
-//! Runtime configuration with a fixed tree height of 8 (256 leaves).
+//! Runtime configuration.
+//!
+//! v0.1 fixes the tree height at 8 (256 leaves), keeping serialized
+//! reader kits under 2 KB. Geometry tests exhaustively enumerate
+//! revocation sets in smaller trees and sample height-eight trees.
 
 use crate::error::{Error, Result};
 
-/// Fixed tree height.
+/// Fixed tree height for v0.1.
 ///
-/// 2^8 = 256 leaves. Each reader has h(h+1)/2 = 36 path keys,
-/// totaling 36 × 32 = 1152 bytes of path-key material, plus the
-/// full-tree key and metadata.
+/// 2^8 = 256 leaves. Per-user storage (naive NNL-SD) is
+/// h(h+1)/2 = 36 path keys × 32 bytes = 1152 bytes, plus overhead —
+/// reader kit wire size around 1.9 KB. Publisher-side cache is 255
+/// internal nodes × 32 bytes = ~8 KB, trivial. The 256-leaf cap
+/// covers realistic broadcast groups; deployments past that roll a
+/// new ceremony (rotate the master seed).
 pub const TREE_HEIGHT: u8 = 8;
 
 /// Maximum number of leaves (2^TREE_HEIGHT).
@@ -18,26 +25,34 @@ pub const PATH_KEYS_PER_READER: usize = (TREE_HEIGHT as usize) * (TREE_HEIGHT as
 
 /// Configuration for a `PublisherState`.
 ///
-/// This configuration has no tunable fields. Tree height, AEAD, and PRG
-/// are fixed by the implementation.
+/// v0.1 has no runtime-tunable fields — the tree height is fixed and
+/// the AEAD / PRG choices are fixed. The struct is reserved for
+/// forward compatibility so callers' code continues to compile when
+/// real options get added later.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Config;
 
 impl Config {
-    /// Validate the fixed configuration. Returns `Ok(())`.
+    /// Validate the configuration. In v0.1 this always succeeds; it
+    /// exists so callers' code is ready when real options get added.
+    ///
+    /// # Errors
+    /// In v0.1, never. The return type is reserved for forward
+    /// compatibility; it will return [`Error::InvalidConfig`] once
+    /// runtime-tunable fields are re-introduced.
     #[inline]
     pub fn validate(self) -> Result<()> {
-        let _unused: Error;
+        let _unused: Error; // keep the error import live for the future
         Ok(())
     }
 
-    /// Tree height, equal to [`TREE_HEIGHT`].
+    /// Tree height. Always equal to [`TREE_HEIGHT`] in v0.1.
     #[inline]
     pub fn tree_height(self) -> u8 {
         TREE_HEIGHT
     }
 
-    /// Maximum number of leaves, equal to [`MAX_LEAVES`].
+    /// Maximum number of leaves. Always equal to [`MAX_LEAVES`] in v0.1.
     #[inline]
     pub fn max_leaves(self) -> u64 {
         MAX_LEAVES
@@ -58,7 +73,7 @@ mod tests {
     }
 
     #[test]
-    fn fixed_configuration_is_valid() {
+    fn validate_always_ok_in_v0_1() {
         assert!(Config.validate().is_ok());
     }
 }

@@ -67,7 +67,7 @@ fn assert_canonical_admin_state(manifest: &Manifest) {
     let mut alice_status: Option<&str> = None;
     let mut bob_status: Option<&str> = None;
     for r in recipients {
-        // AdminState's per-recipient identity key flipped from
+        // 0.4.3a1: AdminState's per-recipient identity key flipped from
         // `recipient_did` → `recipient_identity` (matches the canonical
         // role-based naming across all SDKs).
         let did = r.get("recipient_identity").and_then(Value::as_str);
@@ -87,7 +87,7 @@ fn assert_canonical_admin_state(manifest: &Manifest) {
         .expect("state.vault_links must be an array");
     assert_eq!(vault_links.len(), 1, "expected 1 vault link");
     let link = &vault_links[0];
-    // vault links carry `vault_identity`, not `vault_did`.
+    // 0.4.3a1: vault links carry `vault_identity`, not `vault_did`.
     assert_eq!(
         link.get("vault_identity").and_then(Value::as_str),
         Some("did:web:vault.example")

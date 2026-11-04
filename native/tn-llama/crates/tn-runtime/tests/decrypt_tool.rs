@@ -33,7 +33,10 @@ fn decrypt_turn_shows_governance_and_hash_keys_without_values() {
     assert_eq!(body["tools"].as_array().unwrap().len(), 1);
     assert_eq!(body["tools"][0]["function"]["name"], "decrypt_value");
     let control = control(&turn);
-    assert_eq!(
+    // The key names this object's exact governance, not the policy every object shares.
+    let key = control["governance_hash"].as_str().unwrap();
+    assert!(key.starts_with("hmac-sha256:v1:") && key.len() == "hmac-sha256:v1:".len() + 64);
+    assert_ne!(
         control["governance_hash"],
         wire["tn.agents"]["field_hashes"]["policy"]
     );
@@ -44,10 +47,12 @@ fn decrypt_turn_shows_governance_and_hash_keys_without_values() {
         .map(|(field, hash)| json!({"group":"finance","field":field,"data_hash":hash}))
         .collect::<Vec<_>>();
     assert_eq!(control["encrypted_data"], json!(offered));
-    assert!(!control["applicable_source_governance"]["sources"][0]["governance"]
-        .as_object()
-        .unwrap()
-        .is_empty());
+    assert!(
+        !control["applicable_source_governance"]["sources"][0]["governance"]
+            .as_object()
+            .unwrap()
+            .is_empty()
+    );
     assert!(control.get("selected_values").is_none());
     assert!(control["output_instruction"]
         .as_str()
@@ -71,7 +76,6 @@ fn second_turn_values(session: &mut Session, turn: ModelTurn) -> Value {
 fn decrypted_values_arrive_as_the_result_of_the_models_call() {
     let fixture = Fixture::new();
     let request = fixture.request("calculation");
-    let wire = wire(&fixture);
     let (_keys, runtime) = fixture.runtime();
     let mut session = runtime.start_session(&request).unwrap();
     let decrypt = session.next_model_turn().unwrap();
@@ -92,12 +96,12 @@ fn decrypted_values_arrive_as_the_result_of_the_models_call() {
     assert_eq!(messages[3]["role"], "tool");
     assert_eq!(messages[3]["tool_call_id"], call["id"]);
     let result: Value = serde_json::from_str(messages[3]["content"].as_str().unwrap()).unwrap();
-    assert_eq!(result["data"]["finance"]["calculation"]["result"], json!(0.25));
-    assert!(result["data"].get("audit").is_none());
     assert_eq!(
-        result["governance_hash"],
-        wire["tn.agents"]["field_hashes"]["policy"]
+        result["data"]["finance"]["calculation"]["result"],
+        json!(0.25)
     );
+    assert!(result["data"].get("audit").is_none());
+    assert_eq!(result["governance_hash"], presented["governance_hash"]);
 }
 
 #[test]
@@ -109,7 +113,7 @@ fn decrypt_returns_only_the_fields_whose_hash_keys_were_presented() {
     let mut session = runtime.start_session(&request).unwrap();
     let turn = session.next_model_turn().unwrap();
     let presented = json!({
-        "governance_hash": wire["tn.agents"]["field_hashes"]["policy"],
+        "governance_hash": control(&turn)["governance_hash"],
         "data_hashes": [wire["finance"]["field_hashes"]["calculation"]],
     });
     accept(&mut session, turn, "decrypt_value", presented).unwrap();
@@ -121,7 +125,7 @@ fn decrypt_returns_only_the_fields_whose_hash_keys_were_presented() {
 }
 
 #[test]
-fn decrypt_opens_only_the_groups_whose_hash_keys_were_presented() {
+fn a_carried_group_outside_its_holders_edition_refuses_the_session() {
     let mut fixture = Fixture::new();
     fixture
         .config
@@ -130,16 +134,25 @@ fn decrypt_opens_only_the_groups_whose_hash_keys_were_presented() {
         .insert("audit".into());
     let request = fixture.request("calculation");
     let (_keys, runtime) = fixture.runtime();
-    let mut session = runtime.start_session(&request).unwrap();
-    let turn = session.next_model_turn().unwrap();
-    assert!(control(&turn)["encrypted_data"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|entry| entry["group"] == "audit"));
-    let data = second_turn_values(&mut session, turn);
-    assert!(data["finance"].is_object());
-    assert!(data.get("audit").is_none());
+    // The calculation carries its source whole. `audit` stays under the source's
+    // governance and dataset edition, which selects `finance` only, so offering it
+    // to the model is refused before any turn.
+    let error = runtime
+        .start_session(&request)
+        .err()
+        .expect("audit is outside the edition");
+    assert_eq!(error.code(), "tn_governed_use_denied");
+}
+
+/// The signed `audit` block of the source the calculation carries whole.
+fn carried_audit(fixture: &Fixture) -> Value {
+    let source: Value = serde_json::from_str(
+        fixture.manifest["publications"]["source_earlier"]["wire"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    source["audit"].clone()
 }
 
 #[test]
@@ -148,12 +161,21 @@ fn decrypt_refuses_keys_that_do_not_belong_to_this_object() {
     let other = fixture.manifest["publications"]["policy_earlier"]["wire"].clone();
     let other: Value = serde_json::from_str(other.as_str().unwrap()).unwrap();
     let foreign_policy = other["tn.agents"]["field_hashes"]["policy"].clone();
-    assert_ne!(foreign_policy, wire(&fixture)["tn.agents"]["field_hashes"]["policy"]);
+    assert_ne!(
+        foreign_policy,
+        wire(&fixture)["tn.agents"]["field_hashes"]["policy"]
+    );
     type Change = fn(&mut Value, &Value, &Value);
-    let cases: [(&str, Change); 11] = [
+    let cases: [(&str, Change); 12] = [
         ("hash key of another governance", |arguments, _, foreign| {
             arguments["governance_hash"] = foreign.clone();
         }),
+        (
+            "the policy field hash every object shares",
+            |arguments, wire, _| {
+                arguments["governance_hash"] = wire["tn.agents"]["field_hashes"]["policy"].clone();
+            },
+        ),
         ("data hash as governance hash", |arguments, _, _| {
             arguments["governance_hash"] = arguments["data_hashes"][0].clone();
         }),
@@ -192,7 +214,9 @@ fn decrypt_refuses_keys_that_do_not_belong_to_this_object() {
     for (name, change) in cases {
         let fixture = Fixture::new();
         let request = fixture.request("calculation");
-        let wire = wire(&fixture);
+        let mut wire = wire(&fixture);
+        // `audit` travels in the carried source; its signed field hashes are the source's.
+        wire["audit"] = carried_audit(&fixture);
         let (_keys, runtime) = fixture.runtime();
         let mut session = runtime.start_session(&request).unwrap();
         let turn = session.next_model_turn().unwrap();

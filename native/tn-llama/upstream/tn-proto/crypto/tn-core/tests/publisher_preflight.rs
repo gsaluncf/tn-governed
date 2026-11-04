@@ -158,7 +158,7 @@ fn unknown_external_cipher_remains_usable_by_the_existing_seal_api() {
         .unwrap();
     assert_eq!(legacy.encryptions.load(Ordering::SeqCst), 2);
     let reader = Arc::new(reader);
-    let reader = GovernedReader::new()
+    let reader = GovernedReader::new().with_governance_index_key(&[1; 32]).unwrap()
         .with_group("tn.agents", reader.clone())
         .unwrap()
         .with_group("reply", reader)

@@ -72,10 +72,7 @@ fn native_action_request_binds_source_and_action_without_model_arguments() {
             serde_json::from_str(body["messages"][1]["content"].as_str().unwrap()).unwrap();
         assert_eq!(context["source_object_id"], current.id());
         assert_eq!(context["operation"], "generate_report");
-        assert_eq!(
-            context["required_tools"],
-            json!([])
-        );
+        assert_eq!(context["required_tools"], json!([]));
         assert_eq!(
             context["applicable_source_governance"]["sources"][0]["governance"]["source_lineage"]
                 [0]["object_id"],
@@ -213,17 +210,34 @@ fn native_tool_executes_once_and_signed_result_reenters_before_report() {
 #[test]
 fn runtime_completed_tool_cannot_be_replayed_or_replaced_by_model_output() {
     for (name, arguments, expected) in [
-        ("log_compliance_creation", json!({}), "tn_tool_already_executed"),
-        ("log_compliance_creation", json!({"source_object_id":"forged"}), "tn_tool_already_executed"),
+        (
+            "log_compliance_creation",
+            json!({}),
+            "tn_tool_already_executed",
+        ),
+        (
+            "log_compliance_creation",
+            json!({"source_object_id":"forged"}),
+            "tn_tool_already_executed",
+        ),
         ("shell", json!({}), "tn_action_not_allowed"),
-        ("emit_governed_record", json!({"report_html":"<p>25%</p>", "compliance_evidence":{"done":true}}), "tn_report_proposal_invalid"),
+        (
+            "emit_governed_record",
+            json!({"report_html":"<p>25%</p>", "compliance_evidence":{"done":true}}),
+            "tn_report_proposal_invalid",
+        ),
     ] {
         let fixture = fixture();
         let request = fixture.request("calculation");
         let (_keys, runtime) = fixture.runtime();
         let mut session = runtime.start_session(&request).unwrap();
         let turn = report_turn(&mut session);
-        assert_eq!(accept(&mut session, turn, name, arguments).unwrap_err().code(), expected);
+        assert_eq!(
+            accept(&mut session, turn, name, arguments)
+                .unwrap_err()
+                .code(),
+            expected
+        );
         assert_eq!(session.state(), State::Failed);
         assert!(runtime.start_session(&request).is_ok());
     }
@@ -234,7 +248,7 @@ fn native_tool_readback_failure_never_reinserts_a_receipt_or_releases_report() {
     let fixture = fixture();
     let request = fixture.request("calculation");
     std::fs::copy(
-        fixture.config.reader_key_dir.join("tn.agents.btn.mykit"),
+        fixture.input_kit("tn.agents"),
         fixture
             .config
             .output_reader_key_dir

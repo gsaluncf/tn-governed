@@ -87,7 +87,8 @@ impl PolicyDag {
     /// The application approves applicability using its current accepted state
     /// and operation requirements. No timestamp, highest version, or branch tip
     /// is selected implicitly. The returned contract carries `policy_revision`
-    /// inside encrypted, signed `tn.agents`; the existing AAD remains unchanged.
+    /// inside encrypted, signed `tn.agents`. The public label omits it, but the exact
+    /// governance bytes feed the governance digest, so a bound object's data AAD changes.
     pub fn select<F>(&self, revision_id: &str, scope: &str, applicable: F) -> Result<Governance>
     where
         F: FnOnce(&PolicyRevision) -> Result<bool>,

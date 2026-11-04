@@ -13,8 +13,8 @@ const ED25519_MULTICODEC: [u8; 2] = [0xed, 0x01];
 
 /// Stable machine-readable reasons for trust-boundary rejection.
 ///
-/// The wire strings ([`TrustReason::as_str`]) are shared with the
-/// Python, TypeScript, and C# SDKs.
+/// The wire strings ([`TrustReason::as_str`]) are shared with the Python,
+/// TypeScript, and C# SDKs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TrustReason {
     /// Malformed canonical JSON, an unsupported version, or an unknown field

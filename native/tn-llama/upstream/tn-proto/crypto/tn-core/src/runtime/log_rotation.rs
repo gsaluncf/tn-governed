@@ -167,7 +167,7 @@ pub(crate) fn seed_chain_from_log(
     }
     let mut latest: HashMap<String, (u64, String)> = HashMap::new();
     let mut saw_ceremony_init = false;
-    // tolerate malformed lines during the chain-seed scan.
+    // 0.4.2a9: tolerate malformed lines during the chain-seed scan.
     // A process killed mid-emit leaves a partial JSON line at the
     // file tail; the prior version propagated that parse error and
     // crashed `tn.init` on every subsequent run, leaving the
@@ -212,7 +212,7 @@ pub(crate) fn seed_chain_from_log(
 /// corrupts chain verification. Mirrors `python/tn/logger.py::
 /// _seed_chain_from_logs` which scanned the log directory file-by-
 /// file before chain=T templated ceremonies got Rust support
-///.
+/// (0.4.2a7).
 ///
 /// Resolves the parent directory from the template's static prefix
 /// (everything before the first wildcard) and walks it
@@ -341,8 +341,10 @@ pub(crate) fn resolve_pel_static(
         .replace("{yaml_dir}", &yaml_dir_s)
         .replace("{ceremony_id}", ceremony_id)
         .replace("{did}", did);
-    // Resolve relative templates against the YAML directory, as in
-    // Runtime::resolve_pel, so reinitialization checks the same admin log.
+    // Anchor relative templates at the yaml dir — same fix as
+    // ``Runtime::resolve_pel``. Without it, fresh-detection scans the
+    // wrong file (process cwd) and we end up emitting tn.ceremony.init
+    // twice on a re-init.
     let p = PathBuf::from(filled);
     if is_absolute_xplat_path(&p) {
         p

@@ -6,14 +6,15 @@ use std::sync::{Arc, Mutex};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use tn_core::governed::{
-    AdmissionContext, DataObject, DatasetCatalog, DatasetEdition, GovernanceView, GovernedObject,
-    GovernedReader, LineageVerifier, PolicyDag, PolicyRevision, UseContext,
+    AdmissionContext, AdmittedObject, AdmittedRoute, DataObject, DatasetCatalog, DatasetEdition,
+    GovernanceView, GovernedObject, GovernedReader, LineageVerifier, PolicyDag, PolicyRevision,
+    UseContext,
 };
 
 use crate::config::RequestLimits;
-use crate::envelope::{parse_duplicate_safe_json, UserMessage};
-use crate::governance::{GovernanceReader, VerifiedGovernance};
+use crate::governance::{field_hashes, VerifiedGovernance, GOVERNANCE_GROUP};
 use crate::model_protocol::{digest_bytes, session_error};
+use crate::strict_json::parse_duplicate_safe_json;
 use crate::TnLlamaError;
 
 pub const GOVERNED_REQUEST_PROTOCOL: &str = "tn.llama.request.v2";
@@ -64,6 +65,12 @@ impl GovernedInputConfig {
     pub fn lineage_verifier(&self) -> tn_core::Result<LineageVerifier> {
         LineageVerifier::new(self.lineage_max_objects, self.lineage_max_depth)
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UserMessage {
+    pub role: String,
+    pub content: String,
 }
 
 #[derive(Debug)]
@@ -160,7 +167,6 @@ struct MetadataStore {
 pub(crate) struct GovernedInputRuntime {
     pub config: GovernedInputConfig,
     pub(crate) reader: GovernedReader,
-    pub verifier: Arc<GovernanceReader>,
     pub report_policy: Option<tn_core::governed::Governance>,
     pub(crate) dag: PolicyDag,
     pub(crate) catalog: DatasetCatalog,
@@ -175,10 +181,7 @@ pub(crate) type OpenedManifests =
     BTreeMap<(String, tn_core::governed::UseContext), Option<Arc<Map<String, Value>>>>;
 
 impl GovernedInputRuntime {
-    pub fn load(
-        config: GovernedInputConfig,
-        verifier: Arc<GovernanceReader>,
-    ) -> Result<Self, TnLlamaError> {
+    pub fn load(config: GovernedInputConfig) -> Result<Self, TnLlamaError> {
         let lineage = config
             .lineage_verifier()
             .map_err(|_| refused("tn_governed_config_invalid"))?;
@@ -212,7 +215,6 @@ impl GovernedInputRuntime {
             let view = reader
                 .governance(&object)
                 .map_err(|_| refused("tn_governed_metadata_invalid"))?;
-            verifier.verify_native_group(&object, "tn.agents", view.governance().fields())?;
             let admitted = view
                 .accept(
                     UseContext::new("tn-llama.catalog", "administration", "inspect")
@@ -226,17 +228,9 @@ impl GovernedInputRuntime {
                     },
                 )
                 .map_err(|_| refused("tn_governed_authority_denied"))?;
-            let opened = reader
+            reader
                 .open(&admitted, [group])
-                .map_err(|_| refused("tn_governed_metadata_invalid"))?;
-            verifier.verify_native_group(
-                &object,
-                group,
-                opened.groups()[group]
-                    .as_object()
-                    .expect("native group object"),
-            )?;
-            Ok(opened)
+                .map_err(|_| refused("tn_governed_metadata_invalid"))
         };
         for wire in &metadata.policy_revisions {
             let revision = PolicyRevision::from_opened(&open_metadata(wire, "policy_revision")?)
@@ -279,7 +273,6 @@ impl GovernedInputRuntime {
             let view = reader
                 .governance(&object)
                 .map_err(|_| refused("tn_governed_metadata_invalid"))?;
-            verifier.verify_native_group(&object, "tn.agents", view.governance().fields())?;
             if retained.insert(object.id().to_owned(), view).is_some() {
                 return Err(refused("tn_governed_store_invalid"));
             }
@@ -302,7 +295,6 @@ impl GovernedInputRuntime {
         Ok(Self {
             config,
             reader,
-            verifier,
             report_policy,
             dag,
             catalog,
@@ -396,59 +388,89 @@ impl GovernedInputRuntime {
         Ok(true)
     }
 
+    /// Verify the request's governance and admit its route: the request object and,
+    /// for each offered group it carries, every object on the path to the holder.
     pub fn governance(
         &self,
         request: &AcceptedGovernedRequest,
         groups: &BTreeSet<String>,
-    ) -> Result<(GovernanceView, VerifiedGovernance), TnLlamaError> {
+    ) -> Result<(GovernanceView, VerifiedGovernance, AdmittedRoute), TnLlamaError> {
         let view = self
             .reader
             .governance(&request.object)
             .map_err(|_| refused("tn_governed_governance_invalid"))?;
-        let checked = self.verifier.verify_native_group(
-            &request.object,
-            "tn.agents",
-            view.governance().fields(),
-        )?;
+        // The reader recomputed the governance field hashes when it opened them.
+        let checked = VerifiedGovernance {
+            plaintext: view.governance().fields().clone().into_iter().collect(),
+            commitments: field_hashes(&request.object, GOVERNANCE_GROUP)?,
+        };
         // Strict group-bound acceptance before any contract content reaches inference.
-        view.clone()
-            .accept(request.use_context.clone(), groups, |ctx| {
-                self.accepts(ctx, &view)
+        let route = self
+            .reader
+            .admit_route(&request.object, &request.use_context, groups, None, |ctx| {
+                self.accepts_on_route(ctx, &view)
             })
             .map_err(|_| refused("tn_governed_use_denied"))?;
-        Ok((
-            view,
-            VerifiedGovernance {
-                plaintext: checked.plaintext,
-                commitments: checked.commitments,
-            },
-        ))
+        Ok((view, checked, route))
     }
 
+    /// Admission of one object on the request's route, its lineage checked on its own view.
+    fn accepts_on_route(
+        &self,
+        context: &AdmissionContext<'_>,
+        request_view: &GovernanceView,
+    ) -> tn_core::Result<bool> {
+        let id = context.object().id();
+        if id == request_view.object().id() {
+            return self.accepts(context, request_view);
+        }
+        let view = match self.retained.get(id) {
+            Some(view) => view.clone(),
+            None => self.reader.governance(context.object())?,
+        };
+        self.accepts(context, &view)
+    }
+
+    /// The per-object governance hash key the model is shown and passes back to decrypt.
+    pub fn governance_hash_key(&self, view: &GovernanceView) -> Result<String, TnLlamaError> {
+        self.reader
+            .governance_hash_key(view)
+            .map_err(|_| refused("tn_governed_governance_invalid"))
+    }
+
+    /// The governance hash key of the object that supplies a routed group.
+    pub fn supplier_hash_key(&self, supplier: &AdmittedObject) -> Result<String, TnLlamaError> {
+        self.governance_hash_key(supplier.view())
+    }
+
+    /// Open the selected groups, all supplied by one object on the route, under the
+    /// governance hash key the model passed, and assemble them under the request object.
     pub fn open(
         &self,
-        request: &AcceptedGovernedRequest,
-        view: &GovernanceView,
+        route: &AdmittedRoute,
         groups: &BTreeSet<String>,
+        governance_hash: &str,
     ) -> Result<DataObject, TnLlamaError> {
-        let admitted = view
-            .clone()
-            .accept(request.use_context.clone(), groups, |ctx| {
-                self.accepts(ctx, view)
+        let supplier = groups
+            .iter()
+            .next()
+            .and_then(|group| route.supplier(group))
+            .filter(|supplier| {
+                groups.iter().all(|group| {
+                    route
+                        .supplier(group)
+                        .is_some_and(|other| other.object().id() == supplier.object().id())
+                })
             })
-            .map_err(|_| refused("tn_governed_use_denied"))?;
+            .ok_or_else(|| refused("tn_governed_group_open_failed"))?;
+        // The reader checks each group's field hashes against the object that holds it.
         let opened = self
             .reader
-            .open(&admitted, groups)
+            .open_with_hash_key(supplier, groups, governance_hash)
             .map_err(|_| refused("tn_governed_group_open_failed"))?;
-        for (name, value) in opened.groups() {
-            self.verifier.verify_native_group(
-                &request.object,
-                name,
-                value.as_object().expect("native group object"),
-            )?;
-        }
-        DataObject::from_opened(opened).map_err(|_| refused("tn_governed_group_open_failed"))
+        self.reader
+            .assemble(route, vec![opened])
+            .map_err(|_| refused("tn_governed_group_open_failed"))
     }
 }
 

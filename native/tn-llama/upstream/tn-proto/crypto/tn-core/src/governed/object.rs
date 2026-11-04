@@ -2,15 +2,19 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-use serde::de::{Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Value};
 
 use crate::canonical::canonical_bytes;
 use crate::sealed_object::{extract_group_blocks, verify_sealed, GroupBlock, ENVELOPE_RESERVED};
 use crate::{Error, Result};
 
+use super::binding::{self, Binding, CARRIED_FIELD};
+pub(super) use super::object_json::parse_json;
 use super::policy::{string_field, validate_marker};
 use super::{invalid, validate_group, validate_name, GOVERNANCE_GROUP};
+
+/// Nesting limit for whole objects carried inside one another.
+const MAX_CARRIED_DEPTH: usize = 32;
 
 /// An integrity-verified governed envelope with its exact transport bytes.
 ///
@@ -23,89 +27,101 @@ pub struct GovernedObject {
     envelope: Arc<Map<String, Value>>,
     pub(super) groups: Arc<BTreeMap<String, GroupBlock>>,
     pub(super) marker: Arc<Map<String, Value>>,
+    pub(super) binding: Option<Arc<Binding>>,
+    carried: Arc<Vec<GovernedObject>>,
 }
 
 impl GovernedObject {
+    /// Read and integrity-verify an exact publication from a byte stream.
+    pub fn read(mut source: impl std::io::Read) -> Result<Self> {
+        let mut wire = String::new();
+        source.read_to_string(&mut wire)?;
+        Self::parse(&wire)
+    }
+    /// Write the retained signed bytes without resealing or serialization.
+    pub fn write(&self, mut destination: impl std::io::Write) -> Result<()> {
+        destination.write_all(self.forward())?;
+        Ok(())
+    }
+    /// Exact signed bytes for the application's transport.
+    pub fn forward(&self) -> &[u8] {
+        self.wire.as_bytes()
+    }
+    /// Inspect authenticated envelope metadata and encrypted group blocks.
+    pub fn inspect(&self) -> &Map<String, Value> {
+        self.envelope()
+    }
     /// Verify a standalone object or signed emitted row and its governance AAD.
     /// The source is retained unchanged for subsequent forwarding.
     pub fn parse(wire: &str) -> Result<Self> {
+        Self::parse_at(wire, 0)
+    }
+
+    fn parse_at(wire: &str, depth: usize) -> Result<Self> {
+        if depth > MAX_CARRIED_DEPTH {
+            return Err(invalid("carried objects are nested too deeply"));
+        }
         let value = parse_json(wire)?;
         let env = value
             .as_object()
             .ok_or_else(|| invalid("envelope must be a JSON object"))?;
-        for key in [
-            "device_identity",
-            "timestamp",
-            "event_id",
-            "event_type",
-            "row_hash",
-            "signature",
-        ] {
-            string_field(env, key)?;
-        }
-        validate_name(string_field(env, "event_type")?)?;
-        for key in ["prev_hash", "level"] {
-            if !env.get(key).is_some_and(Value::is_string) {
-                return Err(invalid(format!("required string {key:?}")));
-            }
-        }
-        let sequence = env
-            .get("sequence")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| invalid("sequence requires an unsigned integer"))?;
+        let sequence = validate_header(env)?;
         let groups = extract_group_blocks(env)?;
         validate_public_shape(env, &groups)?;
         validate_groups(env, &groups)?;
-        let valid = verify_sealed(env, &groups);
-        if !valid.signature || !valid.row_hash {
-            let mut failed_checks = Vec::new();
-            if !valid.signature {
-                failed_checks.push("signature".into());
-            }
-            if !valid.row_hash {
-                failed_checks.push("row_hash".into());
-            }
-            return Err(Error::SealedObjectVerify {
-                failed_checks,
-                sequence,
-                event_type: string_field(env, "event_type")?.to_owned(),
-            });
-        }
-        let aad = string_field(env, "tn_aad")?;
-        let aad_value = parse_json(aad)?;
-        if canonical_bytes(&aad_value)? != aad.as_bytes() {
-            return Err(invalid("tn_aad requires canonical JSON bytes"));
-        }
-        let aad_groups = aad_value
-            .as_object()
-            .ok_or_else(|| invalid("tn_aad requires a group map"))?;
-        if aad_groups.len() != groups.len() || !groups.keys().all(|g| aad_groups.contains_key(g)) {
-            return Err(invalid("tn_aad must bind every encrypted group"));
-        }
-        let marker = aad_groups[GOVERNANCE_GROUP]
-            .as_object()
-            .ok_or_else(|| invalid("governance marker requires an object"))?;
-        if marker.len() != 2 {
-            return Err(invalid("governance marker requires governed_by and policy"));
-        }
-        validate_marker(
-            string_field(marker, "governed_by")?,
-            string_field(marker, "policy")?,
-        )?;
-        if !aad_groups
-            .values()
-            .all(|value| value.as_object() == Some(marker))
-        {
-            return Err(invalid(
-                "all encrypted groups must carry the same governance marker",
-            ));
-        }
+        verify_envelope(env, &groups, sequence)?;
+        let (binding, marker) = parse_labels(env, &groups)?;
         Ok(Self {
             wire: Arc::from(wire),
             envelope: Arc::new(env.clone()),
             groups: Arc::new(groups),
-            marker: Arc::new(marker.clone()),
+            marker: Arc::new(marker),
+            binding: binding.map(Arc::new),
+            carried: Arc::new(carried_objects(env, depth)?),
         })
+    }
+
+    /// Whether this object's labels are validated version 2 binding labels. This is
+    /// structural: decrypting a group is what shows it is bound to this exact
+    /// governance. Unbound objects carry only the label-only form written before binding.
+    pub fn bound(&self) -> bool {
+        self.binding.is_some()
+    }
+
+    /// Whole input objects this object carries because its writer could not open them.
+    pub fn carried(&self) -> &[GovernedObject] {
+        &self.carried
+    }
+
+    /// The nearest object holding `group`: this one, then the objects it carries,
+    /// breadth first. Receipt opens the group from this object, so its public
+    /// envelope holds the group's ciphertext and signed field hashes.
+    pub fn holder(&self, group: &str) -> Option<&GovernedObject> {
+        let mut pending = std::collections::VecDeque::from([self]);
+        while let Some(object) = pending.pop_front() {
+            if object.groups.contains_key(group) {
+                return Some(object);
+            }
+            pending.extend(object.carried.iter());
+        }
+        None
+    }
+
+    /// Business groups this object or any object it carries holds, which a
+    /// routed receipt can open.
+    pub fn held_groups(&self) -> std::collections::BTreeSet<&str> {
+        let mut held = std::collections::BTreeSet::new();
+        let mut pending = vec![self];
+        while let Some(object) = pending.pop() {
+            held.extend(object.group_names().into_iter().filter(|name| *name != GOVERNANCE_GROUP));
+            pending.extend(object.carried.iter());
+        }
+        held
+    }
+
+    /// The manifest group every data group of a bound object is bound to, if any.
+    pub fn manifest_group(&self) -> Option<&str> {
+        self.binding.as_ref().and_then(|b| b.manifest.as_deref())
     }
 
     /// Exact verified input, ready for transport or retention as exhaust.
@@ -139,6 +155,123 @@ impl GovernedObject {
     pub fn group_names(&self) -> Vec<&str> {
         self.groups.keys().map(String::as_str).collect()
     }
+}
+
+/// Required header strings, a valid event type, and the unsigned sequence.
+fn validate_header(env: &Map<String, Value>) -> Result<u64> {
+    for key in [
+        "device_identity",
+        "timestamp",
+        "event_id",
+        "event_type",
+        "row_hash",
+        "signature",
+    ] {
+        string_field(env, key)?;
+    }
+    validate_name(string_field(env, "event_type")?)?;
+    for key in ["prev_hash", "level"] {
+        if !env.get(key).is_some_and(Value::is_string) {
+            return Err(invalid(format!("required string {key:?}")));
+        }
+    }
+    env.get("sequence")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| invalid("sequence requires an unsigned integer"))
+}
+
+/// The row hash and signature over the exact envelope; a refusal names each failed check.
+fn verify_envelope(
+    env: &Map<String, Value>,
+    groups: &BTreeMap<String, GroupBlock>,
+    sequence: u64,
+) -> Result<()> {
+    let valid = verify_sealed(env, groups);
+    if valid.signature && valid.row_hash {
+        return Ok(());
+    }
+    let mut failed_checks = Vec::new();
+    if !valid.signature {
+        failed_checks.push("signature".into());
+    }
+    if !valid.row_hash {
+        failed_checks.push("row_hash".into());
+    }
+    Err(Error::SealedObjectVerify {
+        failed_checks,
+        sequence,
+        event_type: string_field(env, "event_type")?.to_owned(),
+    })
+}
+
+/// The canonical `tn_aad` labels, which must name every encrypted group, read as a
+/// binding and its governance marker, or as the label-only form written before binding.
+fn parse_labels(
+    env: &Map<String, Value>,
+    groups: &BTreeMap<String, GroupBlock>,
+) -> Result<(Option<Binding>, Map<String, Value>)> {
+    let aad = string_field(env, "tn_aad")?;
+    let aad_value = parse_json(aad)?;
+    if canonical_bytes(&aad_value)? != aad.as_bytes() {
+        return Err(invalid("tn_aad requires canonical JSON bytes"));
+    }
+    let labels = aad_value
+        .as_object()
+        .ok_or_else(|| invalid("tn_aad requires a group map"))?;
+    if labels.len() != groups.len() || !groups.keys().all(|g| labels.contains_key(g)) {
+        return Err(invalid("tn_aad must bind every encrypted group"));
+    }
+    let binding = binding::from_labels(env, labels)?;
+    let marker = match &binding {
+        Some(bound) => {
+            let mut marker = Map::new();
+            marker.insert("governed_by".into(), Value::from(bound.governed_by.as_str()));
+            marker.insert("policy".into(), Value::from(bound.policy.as_str()));
+            marker
+        }
+        None => unbound_marker(labels)?,
+    };
+    Ok((binding, marker))
+}
+
+/// The label-only form: one identical `{governed_by, policy}` marker on every group.
+fn unbound_marker(labels: &Map<String, Value>) -> Result<Map<String, Value>> {
+    let marker = labels[GOVERNANCE_GROUP]
+        .as_object()
+        .ok_or_else(|| invalid("governance marker requires an object"))?;
+    if marker.len() != 2 {
+        return Err(invalid("governance marker requires governed_by and policy"));
+    }
+    validate_marker(string_field(marker, "governed_by")?, string_field(marker, "policy")?)?;
+    if !labels.values().all(|value| value.as_object() == Some(marker)) {
+        return Err(invalid("all encrypted groups must carry the same governance marker"));
+    }
+    Ok(marker.clone())
+}
+
+/// Parse and verify every whole object carried in the signed public metadata.
+fn carried_objects(env: &Map<String, Value>, depth: usize) -> Result<Vec<GovernedObject>> {
+    let Some(field) = env.get(CARRIED_FIELD) else {
+        return Ok(Vec::new());
+    };
+    let text = field
+        .as_str()
+        .ok_or_else(|| invalid("tn_carried requires a string"))?;
+    let value = parse_json(text)?;
+    if canonical_bytes(&value)? != text.as_bytes() {
+        return Err(invalid("tn_carried requires canonical JSON bytes"));
+    }
+    let wires = value
+        .as_array()
+        .filter(|wires| !wires.is_empty())
+        .ok_or_else(|| invalid("tn_carried requires a nonempty list"))?;
+    wires
+        .iter()
+        .map(|wire| {
+            let wire = wire.as_str().ok_or_else(|| invalid("carried objects are wire strings"))?;
+            GovernedObject::parse_at(wire, depth + 1)
+        })
+        .collect()
 }
 
 fn validate_groups(env: &Map<String, Value>, groups: &BTreeMap<String, GroupBlock>) -> Result<()> {
@@ -217,78 +350,5 @@ impl fmt::Debug for GovernedObject {
 impl fmt::Display for GovernedObject {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.wire())
-    }
-}
-
-// A single interpretation of every JSON object, including AAD and decrypted
-// policy values, is part of admission. serde_json::Value alone keeps the last
-// duplicate member; this visitor requires each name to occur once.
-pub(super) fn parse_json(source: &str) -> Result<Value> {
-    let mut deserializer = serde_json::Deserializer::from_str(source);
-    let value = UniqueValue::deserialize(&mut deserializer)
-        .map_err(|e| invalid(format!("invalid JSON: {e}")))?;
-    deserializer
-        .end()
-        .map_err(|e| invalid(format!("invalid JSON: {e}")))?;
-    Ok(value.0)
-}
-
-struct UniqueValue(Value);
-impl<'de> Deserialize<'de> for UniqueValue {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
-        struct UniqueVisitor;
-        impl<'de> Visitor<'de> for UniqueVisitor {
-            type Value = UniqueValue;
-            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("JSON with unique object keys")
-            }
-            fn visit_bool<E>(self, v: bool) -> std::result::Result<Self::Value, E> {
-                Ok(UniqueValue(Value::Bool(v)))
-            }
-            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E> {
-                Ok(UniqueValue(v.into()))
-            }
-            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E> {
-                Ok(UniqueValue(v.into()))
-            }
-            fn visit_f64<E: serde::de::Error>(self, v: f64) -> std::result::Result<Self::Value, E> {
-                serde_json::Number::from_f64(v)
-                    .map(|n| UniqueValue(Value::Number(n)))
-                    .ok_or_else(|| E::custom("nonfinite number"))
-            }
-            fn visit_str<E>(self, v: &str) -> std::result::Result<Self::Value, E> {
-                Ok(UniqueValue(v.into()))
-            }
-            fn visit_string<E>(self, v: String) -> std::result::Result<Self::Value, E> {
-                Ok(UniqueValue(v.into()))
-            }
-            fn visit_unit<E>(self) -> std::result::Result<Self::Value, E> {
-                Ok(UniqueValue(Value::Null))
-            }
-            fn visit_seq<A: SeqAccess<'de>>(
-                self,
-                mut a: A,
-            ) -> std::result::Result<Self::Value, A::Error> {
-                let mut values = Vec::new();
-                while let Some(value) = a.next_element::<UniqueValue>()? {
-                    values.push(value.0);
-                }
-                Ok(UniqueValue(Value::Array(values)))
-            }
-            fn visit_map<A: MapAccess<'de>>(
-                self,
-                mut a: A,
-            ) -> std::result::Result<Self::Value, A::Error> {
-                let mut values = Map::new();
-                while let Some(key) = a.next_key::<String>()? {
-                    if values.contains_key(&key) {
-                        return Err(serde::de::Error::custom(format!("duplicate key {key:?}")));
-                    }
-                    values.insert(key, a.next_value::<UniqueValue>()?.0);
-                }
-                Ok(UniqueValue(Value::Object(values)))
-            }
-        }
-        deserializer.deserialize_any(UniqueVisitor)
     }
 }

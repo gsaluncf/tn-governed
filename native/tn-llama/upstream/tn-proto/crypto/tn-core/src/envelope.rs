@@ -58,9 +58,12 @@ pub struct EnvelopeInput<'a> {
     pub signature_b64: &'a str,
     /// Public fields (inserted in iteration order into envelope JSON).
     pub public_fields: Map<String, Value>,
-    /// Per-group payloads, pre-rendered as JSON snippets.
-    /// The runtime serializes each `GroupPayload` during encryption;
-    /// envelope construction inserts that JSON without serializing it again.
+    /// Per-group payloads, pre-rendered as JSON snippets (0.4.2a7).
+    /// Was `Map<String, Value>` — that paid for a `to_value` tree
+    /// alloc inside the encrypt loop AND a re-serialize inside
+    /// envelope_build (double-walk). The runtime now serializes
+    /// each `GroupPayload` straight to a JSON string at encrypt
+    /// time; envelope_build splices the string in verbatim.
     pub group_payloads: BTreeMap<String, String>,
 }
 
@@ -85,7 +88,11 @@ const MANDATORY_KEYS: [&str; 9] = [
 /// insertion order (skipping any that collide with a mandatory key), then
 /// group payloads in insertion order.
 ///
-/// Writes JSON directly into the output
+/// Direct string-builder shape (0.4.2a7 perf fix). The prior version
+/// constructed a `Map<String, Value>` intermediate and ran
+/// `serde_json::to_string` over the tree — that paid for 9-12 hash
+/// inserts + key/value allocations + a second walk during
+/// serialization. This version writes JSON straight into the output
 /// buffer for the mandatory fields (whose values are runtime-trusted
 /// strings: identities, ISO timestamps, hex/base64 hashes, signatures —
 /// none contain JSON-special characters) and delegates only the

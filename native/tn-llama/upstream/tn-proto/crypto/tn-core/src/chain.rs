@@ -287,9 +287,13 @@ impl Default for ChainState {
 }
 
 /// Walk an ndjson log line-by-line and return the latest `(seq, row_hash)`
-/// observed for each `event_type`. The cross-process emit lock uses this
-/// to refresh chain state from disk before advancing. Each process has its
-/// own in-memory state; reseeding under the lock prevents conflicting tips.
+/// observed for each `event_type`. Used by the cross-process emit lock
+/// (DX review 0.4.2a3) to refresh chain state from disk truth before
+/// advancing — the in-memory `ChainState` is per-process, so two
+/// workers racing on `tn.info("evt", …)` previously both started from
+/// the same stale view and emitted rows with conflicting `prev_hash`
+/// values. This helper produces the authoritative tip; `ChainState`
+/// is then re-seeded under the file lock before `advance` runs.
 ///
 /// Lines that don't parse, or that lack `event_type`/`sequence`/
 /// `row_hash`, are silently skipped. The intent is to find the
@@ -333,8 +337,8 @@ pub fn chain_tips_from_ndjson(bytes: &[u8]) -> HashMap<String, (u64, String)> {
 /// most-recent matching row is found. The forward-scan equivalent
 /// (`chain_tips_from_ndjson`) reads the whole file to build a tips map
 /// for every event_type; for a single emit we only care about one
-/// event_type and stop early, avoiding an O(N) forward scan per emit
-/// and O(N²) scanning over a session.
+/// event_type and stop early, which is the perf fix S11 surfaced
+/// (forward scan was O(N) per emit, O(N²) over a session).
 ///
 /// Returns `None` when no row in `bytes` carries the target
 /// `event_type` (caller treats this as ZERO_HASH / seq=0, matching
@@ -381,11 +385,12 @@ pub fn chain_tip_from_log_tail_reverse(bytes: &[u8], event_type: &str) -> Option
 /// active log first, then walk into rotated backups (newest first)
 /// until a row for `event_type` is found.
 ///
-/// The runtime emits into a single active file. Rotation shifts that
-/// file to `<log>.1` and starts a fresh active file. When the first
-/// emit of an event_type after a rotation needs to chain off the
-/// pre-rotation tip, the active file is empty for that event_type and
-/// we have to peek into `.1`.
+/// The runtime emits into a single active file; rotation (today,
+/// session-start; in a later release, size-triggered with commit
+/// envelopes) shifts the active file to `<log>.1` and starts a fresh
+/// active. When the very first emit of an event_type after a
+/// rotation needs to chain off the pre-rotation tip, the active file
+/// is empty for that event_type and we have to peek into `.1`.
 ///
 /// Caller supplies the byte slices in newest-first order (active,
 /// `.1`, `.2`, …). Returns on the first match; `None` when no file
@@ -407,9 +412,10 @@ mod python_repr_tests {
     use super::python_repr_value;
     use serde_json::json;
 
-    // Oracle: CPython `str(value)` output captured from a live
-    // interpreter. Python hashes public field values as `str(value)`,
-    // so a Rust verifier must reproduce these renderings byte-for-byte.
+    // Oracle: CPython `str(value)` output, captured from a live
+    // interpreter (see the R1 task of the sealed-objects-core-port
+    // plan). Python hashes public field values as `str(value)`, so a
+    // Rust verifier must reproduce these renderings byte-for-byte.
 
     #[test]
     fn render_value_python_list() {
@@ -471,10 +477,11 @@ mod python_repr_tests {
         );
     }
 
-    /// A container public value hashes as its Python repr, which is
-    /// also what a top-level STRING of that repr hashes. This matches
-    /// Python's behavior (str of a str is raw) and gives an end-to-end
-    /// row-hash check without a fixture.
+    /// Top-level rendering is UNCHANGED by the container fix: a
+    /// container public value hashes as its Python repr, which is the
+    /// same bytes a top-level STRING of that repr hashes as. This is
+    /// exactly Python's behavior (str of a str is raw) and gives an
+    /// end-to-end row-hash check without a fixture.
     #[test]
     fn row_hash_container_equals_prerendered_string() {
         use super::{compute_row_hash, RowHashInput, ZERO_HASH};

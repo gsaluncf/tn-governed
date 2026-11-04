@@ -7,10 +7,13 @@
 //! ([`signature_b64`] / [`signature_from_b64`]) are the wire codec for the
 //! signature bytes (URL-safe base64, no padding).
 //!
-//! Matches `tn/signing.py` for Ed25519. [`DeviceKey::verify_did`]
-//! returns `Ok(false)` for secp256k1 DIDs.
+//! Matches `tn/signing.py` for Ed25519 (the curve TN signs with). The Python
+//! verify path additionally accepts secp256k1 DIDs for ATProto interop; this
+//! Rust port defers that branch — secp256k1 DIDs return `Ok(false)` from
+//! [`DeviceKey::verify_did`] without erroring. Will be added when a fixture
+//! requires it.
 //!
-//! This module exposes a boolean signature-verification API.
+//! This module deliberately keeps its legacy multi-curve, boolean verify API.
 //! Trust-boundary code (enrollment ceremonies, package signer checks) uses
 //! the strict [`crate::trust`] module instead: only canonical Ed25519
 //! `did:key` identifiers are accepted there, and every rejection carries a
@@ -170,8 +173,8 @@ impl DeviceKey {
     /// cryptographic mismatch.
     ///
     /// Non-Ed25519 DIDs are not an error: a DID that is not `did:key:z…`, or one
-    /// whose multicodec is not Ed25519 (e.g. a secp256k1 ATProto DID),
-    /// returns `Ok(false)`.
+    /// whose multicodec is not Ed25519 (e.g. a secp256k1 ATProto DID, whose
+    /// verify path is deferred), returns `Ok(false)`.
     ///
     /// This is the legacy compatibility verifier. Trust decisions (enrollment
     /// statements, package signer identity) go through the strict

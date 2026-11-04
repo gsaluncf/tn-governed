@@ -99,7 +99,7 @@ impl std::fmt::Display for ValidateError {
 
 impl std::error::Error for ValidateError {}
 
-/// Catalog of admin event kinds.
+/// Catalog of all admin event kinds. See spec §2.1.
 pub const CATALOG: &[AdminEventKind] = &[
     AdminEventKind {
         event_type: "tn.ceremony.init",
@@ -225,16 +225,22 @@ pub const CATALOG: &[AdminEventKind] = &[
         sign: true,
         sync: true,
     },
+    // --- 2026-04-25 read-ergonomics + agents-group spec ----------------
+    //
     // `tn.agents.policy_published` records the active `.tn/config/agents.md`
-    // policy text and content_hash for replay. The reducer does not act on it.
+    // policy text + content_hash so an auditor replaying the log knows
+    // which policy was active at any timestamp. Reducer doesn't act on
+    // it — replayable provenance only (per spec §2.7).
     AdminEventKind {
         event_type: "tn.agents.policy_published",
         schema: &[
             ("policy_uri", FieldType::String),
             ("version", FieldType::String),
             ("content_hash", FieldType::String),
-            // Array-valued fields such as event_types_covered are omitted
-            // because this catalog validates only scalar field types.
+            // event_types_covered is a JSON array of strings; the catalog
+            // doesn't validate array shape today, so we don't list it
+            // here. Same call as the existing `signature`-of-array fields
+            // already in the catalog.
             ("policy_text", FieldType::String),
         ],
         sign: true,
@@ -242,7 +248,7 @@ pub const CATALOG: &[AdminEventKind] = &[
     },
     // `tn.read.tampered_row_skipped` is emitted by `secure_read()` under
     // `on_invalid="skip"` when an envelope fails (sig|row_hash|chain).
-    // Public fields only; the rejected row's payload is not exposed.
+    // Public fields only — the bad row's payload is NOT exposed. Per spec §3.3.
     AdminEventKind {
         event_type: "tn.read.tampered_row_skipped",
         schema: &[

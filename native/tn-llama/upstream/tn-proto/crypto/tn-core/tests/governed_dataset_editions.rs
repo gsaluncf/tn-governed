@@ -67,7 +67,7 @@ fn approved_use() -> UseContext {
     UseContext::new("analytics", "portfolio_analysis", "join_prices").unwrap()
 }
 fn later_use() -> UseContext {
-    UseContext::new("calculation", "portfolio_analysis", "calculate").unwrap()
+    UseContext::new("deepvest", "portfolio_analysis", "calculate").unwrap()
 }
 
 struct Fixture {
@@ -105,7 +105,7 @@ impl Fixture {
         self.writer_with(&self.device)
     }
     fn reader(&self) -> GovernedReader {
-        GovernedReader::new()
+        GovernedReader::new().with_governance_index_key(&[1; 32]).unwrap()
             .with_group("tn.agents", self.rules.clone())
             .unwrap()
             .with_group(POLICY_REVISION_GROUP, self.metadata.clone())
@@ -471,6 +471,33 @@ fn source_writer_type_groups_and_complete_use_are_checked_before_business_openin
 }
 
 #[test]
+fn a_prepared_edition_commits_only_into_the_catalog_state_it_was_prepared_against() {
+    let fixture = Fixture::new();
+    let (dag, first, _) = history(&fixture);
+    let source = fixture.source(fixture.policy(&dag, &first));
+    let record = fixture.edition("explicit", &source, &[first.clone()]);
+    let other = fixture.edition("other", &source, &[first]);
+
+    let catalog = DatasetCatalog::new();
+    let mut foreign = DatasetCatalog::new();
+    let prepared = catalog.prepare(record.clone(), &dag, |_| Ok(true)).unwrap();
+    assert!(foreign.commit(prepared).is_err(), "another catalog");
+    assert!(foreign.is_empty());
+
+    let mut catalog = catalog;
+    let first_try = catalog.prepare(record.clone(), &dag, |_| Ok(true)).unwrap();
+    let second_try = catalog.prepare(record.clone(), &dag, |_| Ok(true)).unwrap();
+    let stale = catalog.prepare(other.clone(), &dag, |_| Ok(true)).unwrap();
+    catalog.commit(first_try).unwrap();
+    assert!(catalog.commit(second_try).is_err(), "duplicate commit");
+    assert!(catalog.commit(stale).is_err(), "prepared before the catalog changed");
+    assert_eq!(catalog.len(), 1);
+    let fresh = catalog.prepare(other, &dag, |_| Ok(true)).unwrap();
+    catalog.commit(fresh).unwrap();
+    assert_eq!(catalog.len(), 2);
+}
+
+#[test]
 fn catalog_requires_authority_every_revision_and_exact_eligible_tuples() {
     let fixture = Fixture::new();
     let (dag, first, _) = history(&fixture);
@@ -629,7 +656,7 @@ fn native_callback_editions_explicitly_omit_external_evaluators() {
     let released = fixture
         .writer()
         .release_for(
-            &mut data, "market.result", &approved_use(), "calculation", |_| Ok(true),
+            &mut data, "market.result", &approved_use(), "deepvest", |_| Ok(true),
         )
         .unwrap();
     fixture
@@ -749,7 +776,7 @@ fn derived_receipt_checks_current_use_every_binding_and_additional_contracts() {
             &mut data,
             "market.result",
             &approved_use(),
-            "calculation",
+            "deepvest",
             |_| Ok(true),
         )
         .unwrap();

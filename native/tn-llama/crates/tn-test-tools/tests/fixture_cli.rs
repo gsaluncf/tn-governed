@@ -193,10 +193,7 @@ fn installed_group_kits_strictly_open_each_group_and_match_complete_commitment_n
     let manifest: Value =
         serde_json::from_slice(&fs::read(out.join("manifest.json")).unwrap()).unwrap();
     let manifest = manifest.as_object().unwrap();
-    let config: Value =
-        serde_json::from_slice(&fs::read(manifest_path(manifest, "runtime_config_path")).unwrap())
-            .unwrap();
-    let reader = PathBuf::from(config["reader_key_dir"].as_str().unwrap());
+    let reader = out.join("receiver");
     let row = request_row(manifest_path(manifest, "row1_request_path"));
 
     let default = open_group(&row, &reader, "default");
@@ -505,9 +502,10 @@ fn fixture_runtime_config_uses_group_capability_authority_and_exact_governance_p
     assert_eq!(config["output_governance_group"], "tn.agents");
     assert_eq!(config["output_index_epoch"], 0);
     assert_eq!(config["max_chain_namespaces"], 8);
+    // The runtime decrypts input with the native reader's own keystore; no input reader directory exists.
+    assert!(config.get("reader_key_dir").is_none());
     let canonical_out = out.canonicalize().unwrap();
     for field in [
-        "reader_key_dir",
         "input_index_key_path",
         "output_tn_config_path",
         "output_reader_key_dir",
@@ -522,7 +520,7 @@ fn fixture_runtime_config_uses_group_capability_authority_and_exact_governance_p
     assert_eq!(config["model_sha256"], MODEL_SHA256);
     assert_eq!(config["binary_sha256"], BINARY_SHA256);
 
-    let reader = PathBuf::from(config["reader_key_dir"].as_str().unwrap());
+    let reader = out.join("receiver");
     for group in ["default", "firm_data", "precisely", "tn.agents"] {
         assert!(reader.join(format!("{group}.btn.mykit")).is_file());
     }

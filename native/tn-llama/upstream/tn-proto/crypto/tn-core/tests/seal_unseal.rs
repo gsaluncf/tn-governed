@@ -83,7 +83,7 @@ fn read_ndjson(path: &Path) -> Vec<Value> {
 }
 
 // ---------------------------------------------------------------------------
-// Runtime::seal
+// R3 — Runtime::seal
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -319,7 +319,7 @@ fn seal_wire_string_has_no_trailing_newline_and_reparses_identically() {
 }
 
 // ---------------------------------------------------------------------------
-// Runtime::unseal and reader-key selection
+// R4 — Runtime::unseal + key-bag walk
 // ---------------------------------------------------------------------------
 
 fn assert_verify_err(err: Error) -> (Vec<String>, u64, String) {

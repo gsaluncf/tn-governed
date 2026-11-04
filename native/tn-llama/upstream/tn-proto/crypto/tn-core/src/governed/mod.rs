@@ -6,19 +6,29 @@
 //! These operations use no logger, receipt sink, ceremony, or filesystem.
 
 mod admission;
+mod binding;
+mod carried;
+mod contracts;
 mod data;
 mod dataset;
 mod lineage;
 mod object;
+mod object_json;
 mod policy;
 mod policy_dag;
 mod reader;
 mod revision;
+mod route;
 mod source;
+#[cfg(test)]
+mod testing;
 mod use_context;
 mod writer;
 
-pub use admission::{AdmissionContext, AttachmentContext, OwnedAdmissionContext, ReleaseContext};
+pub use admission::{
+    AdmissionContext, AttachmentContext, OwnedAdmissionContext, OwnedAttachmentContext,
+    OwnedReleaseContext, ReleaseContext,
+};
 pub use data::{DataObject, Inclusion};
 pub use dataset::{
     ContractBinding, DatasetBinding, DatasetCatalog, DatasetEdition, DatasetEditionDraft,
@@ -29,7 +39,8 @@ pub use lineage::{LineageVerifier, VerifiedLineage};
 pub use object::GovernedObject;
 pub use policy::Governance;
 pub use policy_dag::PolicyDag;
-pub use reader::{AdmittedObject, GovernanceView, GovernedReader, OpenedObject};
+pub use reader::{AdmittedObject, GovernanceView, GovernedReader, Incoming, OpenedObject};
+pub use route::AdmittedRoute;
 pub use revision::{
     PolicyParent, PolicyRelation, PolicyRevision, PolicyRevisionDraft, POLICY_REVISION_GROUP,
     POLICY_REVISION_TYPE,
@@ -64,7 +75,7 @@ pub(crate) fn validate_name(name: &str) -> crate::Result<()> {
 pub(crate) fn validate_group(name: &str) -> crate::Result<()> {
     validate_name(name)?;
     if crate::sealed_object::ENVELOPE_RESERVED.contains(&name)
-        || matches!(name, "tn_aad" | "tn_sealed")
+        || matches!(name, "tn_aad" | "tn_sealed" | "tn_carried")
         || (name.starts_with("tn.") && name != GOVERNANCE_GROUP)
     {
         return Err(invalid(format!("reserved envelope/group name {name:?}")));
@@ -72,7 +83,7 @@ pub(crate) fn validate_group(name: &str) -> crate::Result<()> {
     Ok(())
 }
 
-fn validate_field(name: &str) -> crate::Result<()> {
+pub(crate) fn validate_field(name: &str) -> crate::Result<()> {
     if name.is_empty() || name.contains(['\0', '=']) {
         return Err(invalid(
             "field names must be nonempty and exclude NUL and '=' delimiters",

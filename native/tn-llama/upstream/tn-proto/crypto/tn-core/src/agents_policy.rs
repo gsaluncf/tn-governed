@@ -10,7 +10,8 @@
 //! `do_not_use_for`, `consequences`, `on_violation_or_error`).
 //!
 //! A YAML-frontmatter block at the top carries `version` and `schema`.
-//! The parser recognizes heading prefixes without a Markdown dependency.
+//! The loader is intentionally tiny — split-on-line-prefix is enough.
+//! No markdown crate; the parser is hand-rolled.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

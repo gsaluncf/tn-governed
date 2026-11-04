@@ -1,6 +1,9 @@
 //! Binary wire format for [`Ciphertext`] and [`ReaderKit`].
 //!
-//! Versioned, length-prefixed encoding with explicit field order and sizes.
+//! Format philosophy: small, versioned, length-prefixed. No `serde`,
+//! no JSON, no dynamic strings. Every byte is accounted for. The goal
+//! is that a reference implementation in another language can match
+//! this format by reading just the type definitions in this file.
 //!
 //! ## Header
 //!

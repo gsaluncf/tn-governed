@@ -1,7 +1,18 @@
 //! BBG HIBE on BLS12-381 — our own Apache-2.0/MIT reimplementation.
 //!
-//! This crate implements the BBG scheme used by `tn-hibe`, with canonical
-//! byte encodings and the identity mapping `I_i = SHA-256(label) mod p`.
+//! This crate is the BBG scheme behind `tn-hibe`. It replaced the
+//! previously-vendored LGPL `hohibe` crate (now deleted), implementing the
+//! same construction (Boneh-Boyen-Goh 2005, "Hierarchical Identity Based
+//! Encryption with Constant Size Ciphertext", eprint 2005/015) on the same
+//! curve (BLS12-381 via `bls12_381_plus`), with the same element placement,
+//! the same identity mapping (`I_i = SHA-256(label) mod p`), and the same
+//! canonical byte encodings and KEM wire format. Result: the on-wire bytes
+//! are unchanged — the swap carried zero wire difference (proven by the
+//! interop gate in `tests/interop.rs`, which opens the frozen golden
+//! vectors that were generated under hohibe).
+//!
+//! `tn-hibe` is now a thin re-export of this crate's high-level HIBE surface,
+//! so its consumers (tn-hibe-py, tn-wasm, tn-core) are unchanged.
 //!
 //! # Provenance / licensing
 //!

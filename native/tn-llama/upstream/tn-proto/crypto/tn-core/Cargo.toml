@@ -5,9 +5,15 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 description = "TN governed data protocol: encrypted contracts, signed envelopes, selected opening, derivation, and event chains."
+readme = "README.md"
 
 [dependencies]
 tn-btn = { path = "../tn-btn" }
+# tn-hibe (→ the Apache-2.0/MIT tn-bbg scheme) backs the native hibe cipher.
+# Gated behind the default-on `hibe` feature purely as a BUILD-WEIGHT knob:
+# it pulls the pairing stack (bls12_381_plus), which a btn-only embedder can
+# skip by disabling the feature. No license consideration — the whole tree
+# is permissive since hohibe was removed.
 tn-hibe = { path = "../tn-hibe", optional = true }
 sha2 = { workspace = true }
 hmac = { workspace = true }
@@ -32,8 +38,30 @@ bs58 = "0.5"
 clap = { version = "4", features = ["derive"], optional = true }
 log = "0.4"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# tempfile is used by Runtime::ephemeral(); gated to the `fs` feature so a
+# `no_std`/wasm consumer that disables `fs` doesn't pull it in.
 tempfile = { version = "3", optional = true }
+# fs4 provides cross-platform advisory file locks (flock on Unix,
+# LockFileEx on Windows). Split out behind a separate `fs-locking`
+# feature because fs4 → rustix → errno hard-`compile_error!`s on
+# `wasm32-unknown-unknown`. Native builds enable it via the `fs`
+# default feature; wasm builds opt out and use a no-op lock (safe —
+# single-process, single-threaded wasm has no other writer to race).
 fs4 = { version = "0.13", optional = true }
+
+# On wasm32, uuid's v4 generator needs the `js` feature so its
+# `getrandom`-backed RNG can pull entropy from `crypto.getRandomValues`.
+# Native targets get entropy via libc/std and don't need this. The
+# `getrandom = "js"` line in `tn-wasm/Cargo.toml` is the actual source
+# of entropy; this target-specific feature gate just lets the uuid
+# crate's wasm32 cfg branch find a getrandom impl at compile time.
+#
+# The `time` crate's `wasm-bindgen` feature swaps its
+# `OffsetDateTime::now_utc()` impl from one backed by `SystemTime::now()`
+# (which is `unreachable!()` on `wasm32-unknown-unknown` and traps at
+# runtime) to one backed by `js_sys::Date::now()`. Native builds keep
+# the std-backed path. Without this, every `Runtime::emit` from
+# `WasmRuntime` traps the moment it tries to stamp a timestamp.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 uuid = { version = "1", features = ["v4", "v7", "js"] }
 time = { version = "0.3", features = ["formatting", "parsing", "macros", "wasm-bindgen"] }
@@ -44,9 +72,25 @@ tempfile = "3"
 
 [features]
 default = ["fs", "fs-locking", "hibe", "native-jwe"]
+# `hibe` wires the BBG HIBE cipher into the native runtime (cipher dispatch,
+# emit, read) via the tn-hibe crate. Default-on so the shipped wheel and
+# wasm bundle run hibe groups natively. Turning it OFF drops the tn-hibe
+# dependency (and its pairing stack) for a lighter btn-only tn-core in which
+# hibe groups fall back to a NotImplemented dispatch arm.
 hibe = ["dep:tn-hibe"]
+# Compatibility gate for the native RFC 7516 JWE runtime.
 native-jwe = []
+# `fs` enables filesystem-backed modules (log_file, identity,
+# FsStorage, Runtime, CLI bin). On its own it does NOT pull in
+# `fs4`, so wasm consumers can opt in to `fs` without the
+# advisory-lock dep that won't compile for wasm32-unknown-unknown.
 fs = ["dep:clap", "dep:tempfile"]
+# `fs-locking` adds cross-process advisory file locks (flock /
+# LockFileEx) to `FsStorage`'s `with_advisory_lock` + the
+# `keystore_backend::LocalKeystore` write path. Required on native
+# multi-process targets to serialise keystore mutations; safely
+# omitted on single-process wasm where there's no other writer.
+# Requires `fs`.
 fs-locking = ["fs", "dep:fs4"]
 
 [[bench]]

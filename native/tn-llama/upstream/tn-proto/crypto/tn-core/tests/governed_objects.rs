@@ -3,7 +3,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 use tn_core::cipher::{btn::BtnPublisherCipher, GroupCipher};
 use tn_core::governed::{
-    Governance, GovernedDraft, GovernedObject, GovernedReader, GovernedWriter,
+    DataObject, Governance, GovernedDraft, GovernedObject, GovernedReader, GovernedWriter,
 };
 use tn_core::sealed_object::{extract_group_blocks, verify_sealed};
 use tn_core::DeviceKey;
@@ -45,9 +45,15 @@ fn sealing_constructs_the_governance_group_and_binds_every_group() {
     assert!(!env.contains_key("run_id"));
     assert_eq!(object.group_names(), vec!["default", "tn.agents"]);
     let aad: Value = serde_json::from_str(env["tn_aad"].as_str().unwrap()).unwrap();
-    assert_eq!(aad["default"], aad["tn.agents"]);
-    assert_eq!(aad["default"]["governed_by"], device.did());
-    assert_eq!(aad["default"]["policy"], policy.policy_ref());
+    assert!(object.bound());
+    for (group, role) in [("default", "data"), ("tn.agents", "governance")] {
+        assert_eq!(aad[group]["binding"], 2);
+        assert_eq!(aad[group]["binding_id"], env["event_id"]);
+        assert_eq!(aad[group]["group"], group);
+        assert_eq!(aad[group]["role"], role);
+        assert_eq!(aad[group]["governed_by"], device.did());
+        assert_eq!(aad[group]["policy"], policy.policy_ref());
+    }
     let valid = verify_sealed(env, &extract_group_blocks(env).unwrap());
     assert!(valid.signature && valid.row_hash);
     assert_eq!(
@@ -93,7 +99,7 @@ fn an_application_opens_governance_then_approves_selected_data_use() {
                 .unwrap(),
         )
         .unwrap();
-    let reader = GovernedReader::new()
+    let reader = GovernedReader::new().with_governance_index_key(&[1; 32]).unwrap()
         .with_group("tn.agents", rules)
         .unwrap();
     let view = reader.governance(&object).unwrap();
@@ -143,7 +149,7 @@ fn deriving_carries_the_contract_and_references_the_signed_source() {
         )
         .unwrap();
     let original_wire = source.wire().to_owned();
-    let reader = GovernedReader::new()
+    let reader = GovernedReader::new().with_governance_index_key(&[1; 32]).unwrap()
         .with_group("tn.agents", rules)
         .unwrap()
         .with_group("default", data)
@@ -183,20 +189,22 @@ fn deriving_carries_the_contract_and_references_the_signed_source() {
         "research.sample",
     )
     .unwrap();
+    // A successor under another contract is a working copy, which keeps the source's.
+    let mut successor =
+        DataObject::new("report.released", output_policy.clone(), "default", json!({"total": 42})).unwrap();
+    successor.include(&DataObject::from_opened(opened.clone()).unwrap()).unwrap();
     let reissued = writer
-        .seal(
-            opened
-                .derive_under("report.released", output_policy.clone())
-                .unwrap()
-                .group("default", json!({"total": 42}))
-                .unwrap(),
-        )
+        .release(&mut successor, "report.released", "aggregate", "report", |_| Ok(true))
         .unwrap();
     let view = reader.governance(&reissued).unwrap();
     assert_eq!(view.governance().policy_ref(), output_policy.policy_ref());
     assert_eq!(
         view.governance().get("source_lineage").unwrap()[0]["policy"],
         policy.policy_ref()
+    );
+    assert!(
+        view.governance().policies().unwrap().iter().any(|p| p.policy_ref() == policy.policy_ref()),
+        "the source contract stays attached"
     );
 }
 
@@ -293,11 +301,23 @@ fn admission_checks_the_signature_group_binding_and_unique_json() {
     changed.insert("tn_aad".into(), json!(serde_json::to_string(&aad).unwrap()));
     assert!(GovernedObject::parse(&resign(&mut changed, &device)).is_err());
 
-    // Even a valid outer signature cannot rebind existing ciphertext to new AAD.
+    // A label copied from another group does not match the object's binding.
     aad["tn.agents"] = aad["default"].clone();
     changed.insert("tn_aad".into(), json!(serde_json::to_string(&aad).unwrap()));
+    assert!(GovernedObject::parse(&resign(&mut changed, &device)).is_err());
+
+    // Even a valid outer signature over consistent new labels cannot rebind
+    // existing ciphertext to new AAD: the governance no longer decrypts.
+    let mut changed = object.envelope().clone();
+    let mut aad: Value = serde_json::from_str(changed["tn_aad"].as_str().unwrap()).unwrap();
+    let other = DeviceKey::generate().did().to_owned();
+    for group in ["default", "tn.agents"] {
+        aad[group]["governed_by"] = json!(other);
+    }
+    let labels = String::from_utf8(tn_core::canonical::canonical_bytes(&aad).unwrap()).unwrap();
+    changed.insert("tn_aad".into(), json!(labels));
     let rebound = GovernedObject::parse(&resign(&mut changed, &device)).unwrap();
-    let reader = GovernedReader::new()
+    let reader = GovernedReader::new().with_governance_index_key(&[1; 32]).unwrap()
         .with_group("tn.agents", rules)
         .unwrap();
     assert!(reader.governance(&rebound).is_err());
@@ -326,7 +346,7 @@ fn a_reencrypted_policy_must_match_its_authenticated_reference() {
         .unwrap();
     env["tn.agents"]["ciphertext"] = json!(base64::engine::general_purpose::STANDARD.encode(ct));
     let changed = GovernedObject::parse(&resign(&mut env, &device)).unwrap();
-    let reader = GovernedReader::new()
+    let reader = GovernedReader::new().with_governance_index_key(&[1; 32]).unwrap()
         .with_group("tn.agents", rules)
         .unwrap();
     assert!(reader.governance(&changed).is_err());
@@ -356,7 +376,7 @@ fn generations_preserve_historical_exhaust_and_assign_new_access() {
             .unwrap(),
     );
     let current = sample(&device, new_cipher.clone());
-    let old_reader = GovernedReader::new()
+    let old_reader = GovernedReader::new().with_governance_index_key(&[1; 32]).unwrap()
         .with_group("tn.agents", old_cipher.clone())
         .unwrap();
     assert_eq!(
@@ -403,7 +423,7 @@ fn reader_preserves_cipher_failures_and_can_try_another_candidate() {
     env["tn.agents"]["ciphertext"] =
         json!(base64::engine::general_purpose::STANDARD.encode(b"invalid BTN frame"));
     let malformed = GovernedObject::parse(&resign(&mut env, &device)).unwrap();
-    let reader = GovernedReader::new()
+    let reader = GovernedReader::new().with_governance_index_key(&[1; 32]).unwrap()
         .with_group("tn.agents", cipher())
         .unwrap()
         .with_group("tn.agents", rules)
@@ -416,7 +436,7 @@ fn reader_preserves_cipher_failures_and_can_try_another_candidate() {
         !matches!(error, tn_core::Error::NotEntitled { .. }),
         "cipher failure must preserve its meaning: {error}"
     );
-    let reader = GovernedReader::new();
+    let reader = GovernedReader::new().with_governance_index_key(&[1; 32]).unwrap();
     assert!(matches!(
         reader.governance(&object),
         Err(tn_core::Error::NotEntitled { .. })
@@ -438,7 +458,7 @@ fn governed_admission_also_reads_a_signed_chained_envelope() {
     env.insert("level".into(), json!("info"));
     env.insert("run_id".into(), json!("example-run"));
     let row = GovernedObject::parse(&resign(&mut env, &device)).unwrap();
-    assert!(GovernedReader::new()
+    assert!(GovernedReader::new().with_governance_index_key(&[1; 32]).unwrap()
         .with_group("tn.agents", rules)
         .unwrap()
         .governance(&row)
@@ -480,7 +500,7 @@ fn the_same_governed_flow_uses_native_jwe_group_material() {
                 .unwrap(),
         )
         .unwrap();
-    let reader = GovernedReader::new()
+    let reader = GovernedReader::new().with_governance_index_key(&[1; 32]).unwrap()
         .with_group("tn.agents", rules)
         .unwrap()
         .with_group("observations", data)

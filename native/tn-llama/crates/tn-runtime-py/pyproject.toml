@@ -1,0 +1,13 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "tn-runtime-native"
+version = "2026.9.11b1"
+description = "Internal Rust governed inference runtime bridge"
+requires-python = ">=3.10"
+
+[tool.maturin]
+module-name = "tn_runtime_native"
+bindings = "pyo3"

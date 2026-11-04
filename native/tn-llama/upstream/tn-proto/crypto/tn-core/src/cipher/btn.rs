@@ -155,7 +155,7 @@ impl super::GroupCipher for BtnPublisherCipher {
 /// `tn.rotate`, the post-rotation self-kit lives at `<group>.btn.mykit`
 /// and pre-rotation kits live at `<group>.btn.mykit.revoked.<ts>`. The
 /// Runtime loads all of them into a single BtnReaderCipher so
-/// `tn.read()` decrypts using reader material from the matching rotation.
+/// `tn.read()` decrypts seamlessly across rotation boundaries.
 pub struct BtnReaderCipher {
     kits: Vec<ReaderKit>,
 }
@@ -216,6 +216,10 @@ impl super::GroupCipher for BtnReaderCipher {
             reason: "reader-side cipher cannot encrypt; only the publisher holds the master seed"
                 .into(),
         })
+    }
+
+    fn encrypt_with_aad(&self, plaintext: &[u8], _aad: &[u8]) -> Result<Vec<u8>> {
+        self.encrypt(plaintext)
     }
 
     fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {

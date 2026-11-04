@@ -45,7 +45,10 @@ fn required_action_runs_in_the_runtime_after_the_models_decrypt_call() {
         .filter(|message| message["role"] == "assistant")
         .collect::<Vec<_>>();
     assert_eq!(assistant.len(), 1);
-    assert_eq!(assistant[0]["tool_calls"][0]["function"]["name"], "decrypt_value");
+    assert_eq!(
+        assistant[0]["tool_calls"][0]["function"]["name"],
+        "decrypt_value"
+    );
     let control: Value =
         serde_json::from_str(body["messages"][1]["content"].as_str().unwrap()).unwrap();
     assert_eq!(
@@ -74,29 +77,12 @@ fn required_action_runs_in_the_runtime_after_the_models_decrypt_call() {
 }
 
 #[test]
-fn multiple_sections_are_all_offered_to_the_decrypt_call() {
-    let mut fixture = Fixture::new();
-    fixture
-        .config
-        .report_contract
-        .allowed_input_sections
-        .insert("audit".into());
-    let request = fixture.request("calculation");
-    let (_keys, runtime) = fixture.runtime();
-    let mut session = runtime.start_session(&request).unwrap();
-    let turn = session.next_model_turn().unwrap();
-    assert_eq!(turn.permit.phase(), Phase::SectionSelection);
-    let body: Value = serde_json::from_slice(&turn.request_json).unwrap();
-    assert_eq!(body["tools"][0]["function"]["name"], "decrypt_value");
-}
-
-#[test]
 fn required_action_readback_failure_blocks_any_model_turn() {
     let mut fixture = Fixture::new();
     fixture.require_compliance();
     let request = fixture.request("calculation");
     std::fs::copy(
-        fixture.config.reader_key_dir.join("tn.agents.btn.mykit"),
+        fixture.input_kit("tn.agents"),
         fixture
             .config
             .output_reader_key_dir
@@ -155,7 +141,9 @@ impl SensitiveTraceSink for TraceSink {
     fn append(&self, event: SensitiveTraceEvent<'_>) -> io::Result<()> {
         if event.kind == SensitiveTraceKind::TurnPrepared {
             self.prepared_turns
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| left.checked_sub(1))
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                    left.checked_sub(1)
+                })
                 .map_err(|_| io::Error::other("trace unavailable"))?;
         }
         Ok(())

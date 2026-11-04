@@ -69,20 +69,28 @@ fn skip_if_missing(p: &Path, label: &str) -> bool {
 }
 
 // --------------------------------------------------------------------------
-// Sentinel: fail loudly if any cross-language fixture is missing or empty.
+// Sentinel: fail loud if any cross-language fixture is missing or empty.
 // The byte-compare tests above skip individually when a sibling-language
-// fixture is absent; this sentinel makes a missing or empty fixture a hard
-// failure rather than a silent no-op.
+// fixture is absent. This sentinel ensures the full set exists on a
+// healthy `main` so a rename, move, or zero-byte fixture surfaces as a
+// hard failure rather than silent no-op.
 // --------------------------------------------------------------------------
 
 #[test]
 fn required_byte_compare_fixtures_present() {
-    // The per-SDK *_admin_snapshot.tnpkg files are not required by this
-    // sentinel. Their tests skip when the corresponding file is absent.
+    // 0.4.3a1: the per-SDK *_admin_snapshot.tnpkg files are NOT required
+    // here. They're signed-byte cross-language fixtures that were frozen
+    // under the legacy manifest field names (from_did / to_did); the
+    // tnpkg manifest rename in this release changed how manifest
+    // signing bytes canonicalize, so the legacy fixtures can no longer
+    // be verified. They get regenerated via each SDK's
+    // build_admin_snapshot_fixture builder after the maturin/wasm
+    // rebuilds. Until then the {python,ts}_produced_admin_snapshot
+    // tests skip cleanly via their per-test skip_if_missing.
     //
     // The canonical JSON fixtures below (SECURE_READ_NAME, PRE_ENC_NAME,
-    // ADMIN_NAME) are required byte-compare references; missing or
-    // zero-byte content means drift.
+    // ADMIN_NAME) ARE required — they're byte-compare references that
+    // I regenerated this release; missing or zero-byte means drift.
     let expected: Vec<PathBuf> = vec![
         // Python.
         python_fixture(SECURE_READ_NAME),
@@ -226,8 +234,10 @@ fn ts_tn_agents_pre_encryption_byte_compare() {
 // --------------------------------------------------------------------------
 // Admin events canonical-bytes byte-compare. One entry per admin event_type
 // in the catalog. Pins the canonical encoding for every admin event shape
-// across Python, Rust, and TypeScript, including list-valued fields,
-// multiline strings, and optional integers.
+// across Python / Rust / TS — this is the matrix that catches drift on
+// list-valued fields, multiline strings, optional ints, etc., which the
+// pre-2026-04-25 fixtures (covering only `payment.completed` +
+// `order.created`) did not exercise.
 // --------------------------------------------------------------------------
 
 #[test]

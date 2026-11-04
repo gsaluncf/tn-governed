@@ -8,8 +8,10 @@
 //!   JS-host callbacks, then construct `Runtime` via
 //!   [`crate::Runtime::init_with_storage`] passing an `Arc<dyn Storage>`.
 //!
-//! Storage methods are synchronous. Browser adapters must provide
-//! synchronous access to their data.
+//! The trait is **synchronous** by design. Node-side adapters wrap
+//! `fs.readFileSync` / `fs.writeFileSync` / etc.; browser-side
+//! adapters need a synchronous shim (in-memory cache loaded at init
+//! time, or SharedArrayBuffer + Atomics.wait for the future).
 //!
 //! ## Why this exists
 //!
@@ -264,12 +266,15 @@ pub trait Storage: Send + Sync {
 
 /// `std::fs`-backed [`Storage`].
 ///
-/// Absolute paths are used as-is; relative paths resolve against the process
-/// working directory. Runtime configuration resolves paths against its YAML directory.
+/// Stateless: absolute paths are used as-is, relative paths resolve
+/// against the process cwd. The previous "rooted at" variant was
+/// removed when `Runtime::init` started resolving paths against the
+/// yaml dir before they reach storage — having two layers of "where
+/// is this relative to" was just confusing.
 #[cfg(feature = "fs")]
 #[derive(Debug, Default)]
 pub struct FsStorage {
-    /// Per-path lock-file handle cache. On NTFS
+    /// Per-path lock-file handle cache (0.4.2a7 perf fix). On NTFS
     /// the per-emit `OpenOptions::open` + `CloseHandle` round-trip
     /// on the `.emit.lock` sentinel costs ~150 µs even when no
     /// other process contends for the lock. Caching the file
@@ -427,8 +432,11 @@ impl Storage for FsStorage {
     }
 
     fn cas_write(&self, path: &Path, prior: Option<&[u8]>, new: &[u8]) -> io::Result<()> {
-        // Hold the sibling lock while comparing stored bytes and replacing
-        // the file, so another process cannot overwrite an intervening update.
+        // Native CAS: acquire the sibling .lock, re-read, compare,
+        // atomic-write. Mirrors the body of
+        // keystore_backend::LocalKeystore::write_state from before the
+        // Storage abstraction landed — that function now delegates
+        // here so wasm consumers can supply their own primitive.
         let parent = path.parent().unwrap_or(Path::new("."));
         std::fs::create_dir_all(parent)?;
 
@@ -470,7 +478,7 @@ impl Storage for FsStorage {
         f: &mut dyn FnMut() -> io::Result<()>,
     ) -> io::Result<()> {
         use fs4::fs_std::FileExt;
-        // Cached lock-file handle. Open lazily on first
+        // Cached lock-file handle (0.4.2a7). Open lazily on first
         // call per path, then reuse: each subsequent emit just calls
         // `lock_exclusive` + `unlock` on the held handle, skipping
         // the ~150 µs `OpenOptions::open` + `CloseHandle` pair that
@@ -495,7 +503,7 @@ impl Storage for FsStorage {
                 // races: the LogFileWriter's lazy open creates the
                 // dir, but the advisory lock is acquired BEFORE the
                 // writer runs. Creating the dir here makes the lock
-                // open succeed for paths without a parent directory. Cost:
+                // open robust to never-seen rendered paths. Cost:
                 // one create_dir_all per (process, path) — amortized
                 // across all subsequent emits via the cache hit.
                 if let Some(parent) = path.parent() {

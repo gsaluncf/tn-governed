@@ -2,11 +2,9 @@ mod governed_support;
 mod support;
 
 use std::collections::BTreeSet;
-use std::fs;
 use std::ptr::{self, null, null_mut};
 
 use serde_json::{json, Value};
-use tn_test_tools::{build_real_tn_fixture, RealTnFixture};
 
 use support::{canonical_json, literal_runnable_manifest};
 
@@ -303,7 +301,7 @@ fn null_nonempty_views_are_ffi_errors_and_empty_buffers_can_be_freed() {
 
 #[test]
 fn begin_before_prepare_is_precise_and_terminalizes_the_session() {
-    let fixture = build_real_tn_fixture().unwrap();
+    let fixture = governed_support::Fixture::new();
     let (runtime, session) = unsafe { create_runtime_session(&fixture) };
     let (turn, phase, body) = unsafe { next_turn(session) };
     assert_eq!(phase, TN_TURN_SECTION_SELECTION);
@@ -367,7 +365,7 @@ fn begin_rejects_changed_body_prompt_and_manifest_bindings() {
     }
 
     for mutation in [Mutation::Body, Mutation::Prompt, Mutation::Manifest] {
-        let fixture = build_real_tn_fixture().unwrap();
+        let fixture = governed_support::Fixture::new();
         let (runtime, session) = unsafe { create_runtime_session(&fixture) };
         let (turn, _, body) = unsafe { next_turn(session) };
         let prompt = b"prepared-binding".to_vec();
@@ -420,7 +418,7 @@ fn begin_rejects_changed_body_prompt_and_manifest_bindings() {
 
 #[test]
 fn abort_export_takes_no_reason_and_returns_an_empty_error() {
-    let fixture = build_real_tn_fixture().unwrap();
+    let fixture = governed_support::Fixture::new();
     let (runtime, session) = unsafe { create_runtime_session(&fixture) };
     let mut error = empty_owned();
 
@@ -437,9 +435,10 @@ fn abort_export_takes_no_reason_and_returns_an_empty_error() {
 }
 
 unsafe fn create_runtime_session(
-    fixture: &RealTnFixture,
+    fixture: &governed_support::Fixture,
 ) -> (*mut RuntimeHandle, *mut SessionHandle) {
-    let config = fs::read(fixture.temp.path().join("runtime-config.json")).unwrap();
+    let config = fixture.runtime_json.clone();
+    let request = fixture.request("calculation");
     let mut runtime = null_mut();
     let mut error = empty_owned();
     assert_eq!(
@@ -451,12 +450,7 @@ unsafe fn create_runtime_session(
 
     let mut session = null_mut();
     assert_eq!(
-        tn_session_create(
-            runtime,
-            view(&fixture.row1_request_json),
-            &mut session,
-            &mut error,
-        ),
+        tn_session_create(runtime, view(&request), &mut session, &mut error,),
         TN_STATUS_OK
     );
     assert!(!session.is_null());

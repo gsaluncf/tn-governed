@@ -6,7 +6,8 @@
 //! streams) carry `extends: ../default/tn.yaml` so they inherit identity,
 //! keystore, groups, recipients, etc. from the parent — only their
 //! per-stream overrides (ceremony.profile, logs.path, handlers) live in
-//! the child file.
+//! the child file. Before this resolver landed, the Rust loader rejected
+//! such yamls with `"missing field cipher"`. Issues §11 Blocker 1.
 
 #![cfg(feature = "fs")]
 
@@ -337,8 +338,9 @@ handlers:
 
 #[test]
 fn yaml_without_extends_loads_unchanged() {
-    // Without an extends key, both parser entry points must produce
-    // the same configuration.
+    // Regression guard: introducing extends resolution must not change
+    // the behavior of self-contained yamls. A yaml with no `extends:`
+    // key should parse identically to the pre-resolver code path.
     let td = tempfile::tempdir().unwrap();
     let p = td.path().join("plain.yaml");
     write(&p, &parent_btn("cer_plain"));
@@ -349,8 +351,12 @@ fn yaml_without_extends_loads_unchanged() {
 
 #[test]
 fn parity_with_python_via_dispatch_resolved_yaml() {
-    // A stream YAML at ./.tn/payments/tn.yaml inherits from
-    // ../default/tn.yaml, matching the Python dispatch configuration.
+    // Cross-SDK parity canary: simulates the exact fixture shape that
+    // `python/tn/_dispatch.py::_yaml_for_rust` produces today — a stream
+    // yaml at `./.tn/payments/tn.yaml` extending `../default/tn.yaml`.
+    // After this test passes, the Python `_yaml_for_rust` workaround
+    // becomes a backwards-compat layer; Rust no longer needs it to
+    // accept the same input.
     let td = tempfile::tempdir().unwrap();
     let default_dir = td.path().join(".tn").join("default");
     let payments_dir = td.path().join(".tn").join("payments");

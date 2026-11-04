@@ -326,7 +326,7 @@ impl Runtime {
     /// Multi-group routing: a field declared under N groups in yaml
     /// (`groups[<g>].fields: [...]`) is encrypted into all N groups'
     /// payloads. The `field_to_groups` table is precomputed at
-    /// `Runtime::init` and sorted
+    /// `Runtime::init` (0.4.2a7 — was rebuilt every emit) and sorted
     /// alphabetically per field at load time so envelope encoding stays
     /// canonical across SDK implementations.
     ///
@@ -455,7 +455,7 @@ impl Runtime {
         let mut group_inputs_for_hash: BTreeMap<String, GroupInput> = BTreeMap::new();
         // Per-group effective markers actually bound, echoed as `tn_aad`.
         let mut aad_echo: Map<String, Value> = Map::new();
-        // group_payloads: pre-rendered JSON snippets rather
+        // group_payloads (0.4.2a7): pre-rendered JSON snippets rather
         // than serde_json::Value trees. envelope_build splices the
         // raw snippet in verbatim, skipping a `to_value` tree alloc
         // here AND a re-walk inside envelope_build.
@@ -619,9 +619,12 @@ impl Runtime {
     /// re-raises the original error after releasing the lock; a read-tail
     /// failure maps straight to an io error.
     ///
-    /// Scans backward until the first matching event_type, using
-    /// `chain.rs::chain_tip_from_log_tail_reverse`. The work is proportional
-    /// to the bytes scanned between the file end and that row.
+    /// Reverse-scans only the tail window (0.4.2a7 perf fix): we care about
+    /// one event_type's tip, not the full tips map, so stopping at the
+    /// first matching row keeps the hot path O(scan-window) rather than the
+    /// prior O(filesize) forward scan. See
+    /// `chain.rs::chain_tip_from_log_tail_reverse` and the S11 stress
+    /// regression that surfaced the issue.
     ///
     /// # Panics
     ///
@@ -638,7 +641,7 @@ impl Runtime {
         } else {
             None
         };
-        // Tail-byte windowing. The chain
+        // Tail-byte windowing (0.4.2a7 perf fix). The chain
         // tip is always near the end of the log — the row we
         // just emitted last time is right before whatever
         // someone else may have appended since. Reading the
@@ -669,7 +672,7 @@ impl Runtime {
         // place. This is a known, accepted trade-off.
         const TIP_REFRESH_TAIL_WINDOW: usize = 64 * 1024;
         // Pinned-read fast path with single-writer skip
-        //. `read_tail_if_grown` returns None when
+        // (0.4.2a7). `read_tail_if_grown` returns None when
         // the file's current size matches what we wrote
         // ourselves — no other process appended,
         // in-memory chain tip is current, no read needed.
@@ -677,7 +680,7 @@ impl Runtime {
         // full tail read.
         //
         // PEL admin emits use the same pinned-writer pool
-        //, so the tip
+        // (0.4.2a8 PEL pinned-writer fix), so the tip
         // refresh for `pel_routed=true` consults
         // `pel_writer` and gets the same machinery.
         //
@@ -886,13 +889,13 @@ impl Runtime {
         let mut line_out: Option<String> = None;
         let mut deferred_err: Option<Error> = None;
 
-        // Chain gating: `ceremony.chain: false` skips the
+        // Chain gating (0.4.2a7): `ceremony.chain: false` skips the
         // cross-process advisory lock and the per-emit tail-scan.
         // Used by the `telemetry` and `secure_log` profiles where
         // per-row prev_hash linkage isn't part of the audit story
         // and the per-emit lock cost would dominate hot paths.
         //
-        // the unchained path still increments a per-
+        // 0.4.2a9: the unchained path still increments a per-
         // event_type `sequence` counter (no lock, in-memory only —
         // resets to 1 on restart). `prev_hash` stays empty as the
         // "no linkage claim" sentinel. Readers that check chain
@@ -990,7 +993,7 @@ impl Runtime {
             // across processes is acceptable because there's no
             // chain to break.
             //
-            // even unchained profiles increment a per-
+            // 0.4.2a9: even unchained profiles increment a per-
             // event_type sequence counter. `prev_hash` stays empty
             // (sentinel pattern; the verifier knows to skip the
             // linkage check when `ceremony.chain == false`), but
@@ -1051,7 +1054,7 @@ impl Runtime {
             None
         };
 
-        // Drop emits whose level is below
+        // Log-level filter (AVL J3.2). Drop emits whose level is below
         // the active threshold before any work happens. Severity-less
         // ("") always passes — it's an explicit "this is a fact"
         // primitive whose semantics shouldn't depend on the filter.
@@ -1077,7 +1080,8 @@ impl Runtime {
 
         // Splice the `tn.agents` policy text into `fields` for this
         // event_type, if a template is loaded. setdefault semantics — the
-        // caller can override individual fields per emit.
+        // caller can override individual fields per-emit. Per 2026-04-25
+        // spec §2.6.
         self.splice_agent_policy(event_type, &mut fields);
 
         // Catalog check: any tn.* event that's in the catalog must pass schema
@@ -1102,8 +1106,15 @@ impl Runtime {
         let (ts, eid, level_norm) = crate::perf::time_stage("emit:header", || {
             (
                 timestamp.map_or_else(current_timestamp, str::to_string),
-                // UUID v7 stores a 48-bit millisecond timestamp in the high
-                // bits. An explicit event_id takes precedence for replay.
+                // UUID v7 (0.4.2a7): time-sortable event_id with a
+                // 48-bit ms timestamp in the high bits. Sorting log
+                // entries by event_id now puts them in chronological
+                // order — drop-in friendly for DB indexes and binary
+                // tree scans. Older event_ids passed in via the
+                // ``event_id`` override (replay, deterministic test
+                // fixtures) still take precedence verbatim, so the
+                // change is transparent to callers who supply their
+                // own ids.
                 event_id.map_or_else(|| Uuid::now_v7().to_string(), str::to_string),
                 level.to_ascii_lowercase(),
             )
@@ -1112,7 +1123,7 @@ impl Runtime {
         // 1. Classify fields: public vs per-group.
         let (mut public_out, per_group) = self.classify_fields(fields)?;
 
-        // row_hash gating: hoisted up here from below so the
+        // row_hash gating (0.4.2a7): hoisted up here from below so the
         // per-group encrypt loop can skip building `group_inputs_for_hash`
         // when no consumer will read it. The structure only feeds into
         // `compute_row_hash`; when chain=F sign=F (pure-log mode), the
@@ -1142,6 +1153,8 @@ impl Runtime {
             public_out.insert("tn_aad".to_string(), Value::String(s));
         }
 
+        // DX review 0.4.2a3: cross-process emit serialization.
+        //
         // Steps 4–9 (chain advance through chain commit) MUST execute
         // atomically across processes. Otherwise, two workers writing
         // to the same log race on per-process ChainState: both compute
@@ -1150,8 +1163,8 @@ impl Runtime {
         // ``tn.read(verify=True)`` then rejects every branch except
         // the first.
         //
-        // Hold an advisory file lock during steps 4–9, using a
-        // sentinel adjacent to the write target (main log or PEL for
+        // The fix bookends 4–9 with an advisory file lock on a
+        // sentinel adjacent to the write target (main log OR pel for
         // protocol events). Under the lock we refresh ChainState from
         // disk truth for this event_type before advance, then proceed.
         // The lock is released as soon as the row is on disk + chain
@@ -1198,7 +1211,7 @@ impl Runtime {
             PathBuf::from(s)
         };
         // Parent-directory creation moved into `LogFileWriter::open`
-        //. Each rendered path opens
+        // (0.4.2a8 PEL pinned-writer fix). Each rendered path opens
         // its writer lazily on first emit; `LogFileWriter::open`
         // already calls `storage.create_dir_all(parent)` then.
         // Subsequent emits to the same rendered path reuse the pinned

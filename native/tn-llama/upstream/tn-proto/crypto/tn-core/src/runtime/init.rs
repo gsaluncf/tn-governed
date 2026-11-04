@@ -33,7 +33,7 @@ use super::{level_value, log_level, Runtime, RuntimeInitOptions, LOG_LEVEL_THRES
 impl Runtime {
     /// Set the process-wide log-level threshold. Verbs at a lower level
     /// short-circuit before any work happens. Mirrors Python
-    /// `tn.set_level()` and TS `TNClient.setLevel()`.
+    /// `tn.set_level()` and TS `TNClient.setLevel()`. (AVL J3.2.)
     ///
     /// Accepts the four standard names ("debug" / "info" / "warning" /
     /// "error") case-insensitively, plus "warn" as an alias for warning,
@@ -130,8 +130,8 @@ impl Runtime {
     /// a wrong-length master key, or a group that can't be built (e.g. a
     /// btn group with neither state nor kit on disk). [`Error::Yaml`](crate::Error::Yaml)
     /// on a yaml parse failure. [`Error::NotImplemented`](crate::Error::NotImplemented)
-    /// for a JWE group (those run through the Python runtime).
-    /// The ceremony-init / policy-published attestations are
+    /// for a JWE group (those run through the Python runtime in this
+    /// plan). The ceremony-init / policy-published attestations are
     /// best-effort and never fail the load.
     ///
     /// # Examples
@@ -278,8 +278,11 @@ impl Runtime {
         // Seed chain state from the main log and check for a prior
         // ceremony.init. Templated `logs.path` walks every rendered
         // `.ndjson` under the template's parent directory; literal
-        // paths scan one file. Seeding preserves each event type's
-        // sequence and previous hash across restarts.
+        // paths just walk the one file. Wiring the templated seed
+        // closes a silent regression introduced when templated paths
+        // moved off the Python emit path — without it, chained
+        // templated ceremonies reset every event_type's
+        // (sequence, prev_hash) to (1, ZERO) on each restart.
         let mut saw_ceremony_init = if log_path_template.is_templated() {
             seed_chain_from_template(&log_path_template, &chain, &storage)?
         } else {
@@ -375,7 +378,7 @@ impl Runtime {
                 Err(e) => return Err(e),
             };
 
-        // pre-compute the field-routing table, public
+        // 0.4.2a7: pre-compute the field-routing table, public
         // membership set, and the set of groups whose policy is
         // public so emit_inner doesn't rebuild them per call. All
         // three are pure functions of the loaded `Config` —
@@ -470,7 +473,7 @@ impl Runtime {
         //
         //   * ``TN_NO_STDOUT=1`` (env, all sinks)
         //   * yaml ``handlers: [...]`` declared with no ``kind: stdout``
-        //     entry, making YAML the stdout-routing contract. The shipping
+        //     entry — yaml-as-contract per FINDINGS S0.4. The shipping
         //     ``create_fresh`` writes ``handlers: [file.rotating, stdout]``
         //     so the operator can edit/remove the entry to silence stdout
         //     for both admin and user emits without having to set the
@@ -500,7 +503,7 @@ impl Runtime {
         }
 
         // Honor an optional yaml `ceremony.log_level` so operators can
-        // bake the threshold into config. Programmatic
+        // bake the threshold into config (AVL J3.2). Programmatic
         // `Runtime::set_level` calls are sticky across re-inits in the
         // same process, so only apply the yaml value when the threshold
         // is still at the floor default (DEBUG).
@@ -518,7 +521,7 @@ impl Runtime {
         }
 
         // Fresh ceremony: emit tn.ceremony.init as the first attested event.
-        // Reloading a ceremony does not emit this event.
+        // The reload path does not emit this (only fresh creation). See spec §2.1.
         //
         // `opts.skip_ceremony_init_emit` short-circuits the auto-emit even on a
         // fresh ceremony. SDK wrappers that bootstrap the ceremony from
@@ -543,9 +546,9 @@ impl Runtime {
             // the writer hashes it twice (scalar + public) while
             // spec-correct readers exclude the reserved scalar and hash it
             // once — the two disagree and `tn.ceremony.init` fails
-            // row_hash verification across SDKs. The admin catalog omits
-            // device_identity from the event fields; the reducer reads
-            // it from the envelope scalar.
+            // row_hash verify cross-SDK. The admin catalog schema for
+            // tn.ceremony.init was updated to match (no device_identity
+            // field); the reducer reads it from the envelope scalar.
             init_fields.insert("created_at".into(), serde_json::json!(now));
             if let Err(e) = self.emit("info", "tn.ceremony.init", init_fields) {
                 log::warn!(
@@ -639,9 +642,17 @@ impl Runtime {
         self.agent_policies.as_ref()
     }
 
-    /// Flush open log writers and consume `self`.
+    /// Explicit close: flush every open log writer and consume `self`.
     ///
-    /// Flush errors are not returned; this method returns `Ok(())`.
+    /// Dropping a `Runtime` without calling `close` is fine; `File`'s own
+    /// Drop impl flushes OS buffers. Calling `close` gives you a
+    /// `Result` you can surface if flushing errored.
+    ///
+    /// # Errors
+    ///
+    /// Currently always returns `Ok(())` — the underlying flush is
+    /// best-effort. The `Result` is kept so a future fail-on-flush
+    /// tightening is non-breaking.
     pub fn close(self) -> Result<()> {
         // Hand the LogWriters dispatchers off — for literal paths
         // this flushes the single writer; for templated pools it
@@ -654,7 +665,7 @@ impl Runtime {
         Ok(())
     }
 
-    /// Add `tn.agents` policy fields to `fields`.
+    /// Splice `tn.agents` policy fields into `fields` per spec §2.6.
     ///
     /// Looks up `event_type` in the cached policy doc; if a template
     /// exists, fills the six tn.agents fields via `setdefault` semantics

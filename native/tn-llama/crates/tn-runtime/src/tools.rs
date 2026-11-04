@@ -1,69 +1,19 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::envelope::parse_duplicate_safe_json;
 use crate::error::{AdmissionStage, TnLlamaError};
-use crate::output_tn::{ComplianceReceipt, OutputPublisher};
+use crate::strict_json::parse_duplicate_safe_json;
+
+/// Names the governed model protocol reserves for its own decrypt and report calls.
+const RESERVED_TOOL_NAMES: [&str; 2] = ["decrypt_value", "emit_governed_record"];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RegisteredCall {
     pub id: String,
     pub name: String,
     pub arguments: Vec<u8>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ToolContext {
-    pub run_id: String,
-    pub source_device_identity: String,
-    pub source_event_id: String,
-    pub source_event_type: String,
-    pub source_row_hash: String,
-    pub selected_sections: BTreeSet<String>,
-    pub action: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-/// A dispatcher-validated compliance invocation.
-///
-/// Downstream callers cannot construct one or bypass the registered handler:
-///
-/// ```compile_fail
-/// use tn_runtime::{ComplianceInvocation, OutputPublisher};
-///
-/// fn bypass(publisher: &OutputPublisher) {
-///     let invocation = ComplianceInvocation {
-///         run_id: "untrusted-run".to_string(),
-///         tool_name: "unregistered".to_string(),
-///         model_tool_call_id: "untrusted-call".to_string(),
-///         source_device_identity: "did:key:untrusted".to_string(),
-///         source_event_id: "untrusted-event".to_string(),
-///         source_event_type: "untrusted.type".to_string(),
-///         source_row_hash: "sha256:untrusted".to_string(),
-///         selected_sections: vec!["untrusted".to_string()],
-///         action: "untrusted-action".to_string(),
-///     };
-///     let _ = publisher.emit_compliance(&invocation);
-/// }
-/// ```
-pub struct ComplianceInvocation {
-    pub(crate) run_id: String,
-    pub(crate) tool_name: String,
-    pub(crate) model_tool_call_id: String,
-    pub(crate) source_device_identity: String,
-    pub(crate) source_event_id: String,
-    pub(crate) source_event_type: String,
-    pub(crate) source_row_hash: String,
-    pub(crate) selected_sections: Vec<String>,
-    pub(crate) action: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ToolReceipt {
-    Compliance(ComplianceReceipt),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -89,20 +39,12 @@ impl RegisteredToolSpec {
         &self.parameters
     }
 
-    pub(crate) fn model_tool(&self) -> Value {
-        json!({"type":"function", "function":{"name":self.name, "description":self.description,
-            "parameters":{"type":"object","properties":{},"additionalProperties":false}}})
-    }
-}
-
-impl RegisteredToolSpec {
     pub(crate) fn native_model_tool(&self) -> Value {
         json!({"type":"function", "function":{"name":self.name, "description":self.description, "parameters":self.parameters}})
     }
 }
 
 pub struct ToolDispatcher {
-    handlers: BTreeMap<String, Arc<dyn RegisteredToolHandler>>,
     specs: BTreeMap<String, RegisteredToolSpec>,
     native_publisher: Option<Arc<crate::output_tn::GovernedOutputPublisher>>,
 }
@@ -123,57 +65,9 @@ pub(crate) struct NativeToolReceipt {
     pub receipt: Value,
 }
 
-trait RegisteredToolHandler: Send + Sync {
-    fn execute(
-        &self,
-        call: &RegisteredCall,
-        context: &ToolContext,
-    ) -> Result<ToolReceipt, TnLlamaError>;
-}
-
-struct ComplianceCreationTool {
-    publisher: Arc<OutputPublisher>,
-}
-
 impl ToolDispatcher {
-    pub fn new(
-        publisher: Arc<OutputPublisher>,
-        configured_name: impl Into<String>,
-    ) -> Result<Self, TnLlamaError> {
-        let configured_name = configured_name.into();
-        if configured_name.trim().is_empty() {
-            return Err(tool_error(
-                "tn_tool_registration_invalid",
-                "configured governed tool name must be nonempty",
-            ));
-        }
-        let handler: Arc<dyn RegisteredToolHandler> =
-            Arc::new(ComplianceCreationTool { publisher });
-        let spec = RegisteredToolSpec {
-            name: configured_name.clone(),
-            description:
-                "Log creation of a governed derived report and return its canonical TN receipt."
-                    .to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "source_event_id": {"type": "string"},
-                    "action": {"type": "string"}
-                },
-                "required": ["source_event_id", "action"],
-                "additionalProperties": false
-            }),
-        };
-        Ok(Self {
-            handlers: BTreeMap::from([(configured_name.clone(), handler)]),
-            specs: BTreeMap::from([(configured_name, spec)]),
-            native_publisher: None,
-        })
-    }
-
     pub(crate) fn empty() -> Self {
         Self {
-            handlers: BTreeMap::new(),
             specs: BTreeMap::new(),
             native_publisher: None,
         }
@@ -183,7 +77,7 @@ impl ToolDispatcher {
         publisher: Arc<crate::output_tn::GovernedOutputPublisher>,
         configured_name: &str,
     ) -> Result<Self, TnLlamaError> {
-        if configured_name.trim().is_empty() || configured_name == "emit_governed_record" {
+        if configured_name.trim().is_empty() || RESERVED_TOOL_NAMES.contains(&configured_name) {
             return Err(tool_error(
                 "tn_tool_registration_invalid",
                 "protected tool name conflicts with the governed model protocol",
@@ -195,7 +89,6 @@ impl ToolDispatcher {
             parameters: json!({"type":"object", "properties":{}, "additionalProperties":false}),
         };
         Ok(Self {
-            handlers: BTreeMap::new(),
             specs: BTreeMap::from([(configured_name.into(), spec)]),
             native_publisher: Some(publisher),
         })
@@ -260,87 +153,12 @@ impl ToolDispatcher {
     pub fn specifications(&self) -> impl Iterator<Item = &RegisteredToolSpec> {
         self.specs.values()
     }
-
-    pub fn execute(
-        &self,
-        call: &RegisteredCall,
-        context: &ToolContext,
-    ) -> Result<ToolReceipt, TnLlamaError> {
-        self.handlers
-            .get(&call.name)
-            .ok_or_else(|| {
-                tool_error(
-                    "tn_tool_not_registered",
-                    "model requested an unregistered governed tool",
-                )
-            })?
-            .execute(call, context)
-    }
-}
-
-impl RegisteredToolHandler for ComplianceCreationTool {
-    fn execute(
-        &self,
-        call: &RegisteredCall,
-        context: &ToolContext,
-    ) -> Result<ToolReceipt, TnLlamaError> {
-        let invocation = ComplianceInvocation::validate(call, context)?;
-        self.publisher
-            .emit_compliance(&invocation)
-            .map(ToolReceipt::Compliance)
-    }
-}
-
-impl ComplianceInvocation {
-    pub(crate) fn validate(
-        call: &RegisteredCall,
-        context: &ToolContext,
-    ) -> Result<Self, TnLlamaError> {
-        let value = parse_duplicate_safe_json(&call.arguments).map_err(|_| arguments_error())?;
-        let arguments: ComplianceArguments =
-            serde_json::from_value(value).map_err(|_| arguments_error())?;
-        let context_strings = [
-            context.run_id.as_str(),
-            context.source_device_identity.as_str(),
-            context.source_event_id.as_str(),
-            context.source_event_type.as_str(),
-            context.source_row_hash.as_str(),
-            context.action.as_str(),
-        ];
-        if call.id.trim().is_empty()
-            || call.name.trim().is_empty()
-            || context_strings.iter().any(|value| value.trim().is_empty())
-            || arguments.source_event_id != context.source_event_id
-            || arguments.action != context.action
-        {
-            return Err(arguments_error());
-        }
-
-        Ok(Self {
-            run_id: context.run_id.clone(),
-            tool_name: call.name.clone(),
-            model_tool_call_id: call.id.clone(),
-            source_device_identity: context.source_device_identity.clone(),
-            source_event_id: context.source_event_id.clone(),
-            source_event_type: context.source_event_type.clone(),
-            source_row_hash: context.source_row_hash.clone(),
-            selected_sections: context.selected_sections.iter().cloned().collect(),
-            action: context.action.clone(),
-        })
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ComplianceArguments {
-    source_event_id: String,
-    action: String,
 }
 
 fn arguments_error() -> TnLlamaError {
     tool_error(
         "tn_tool_arguments_invalid",
-        "governed tool arguments do not exactly match the trusted source and action",
+        "governed tool arguments must be an empty object bound to the admitted action",
     )
 }
 

@@ -5,8 +5,15 @@
 //! ciphertext) wraps a 32-byte content-encryption key to an identity path
 //! under an authority's master public key. AES-256-GCM seals the body.
 //!
-//! The scheme is provided by [`tn_bbg`], implementing BBG on BLS12-381.
-//! This crate re-exports its HIBE interface.
+//! # Scheme provenance
+//!
+//! The scheme is provided by [`tn_bbg`] — our own **Apache-2.0 / MIT**
+//! reimplementation of BBG on BLS12-381. It replaced the previously-vendored
+//! LGPL `hohibe` crate, which has been removed; the on-wire bytes are
+//! identical (the golden vectors, generated under hohibe, still open — see
+//! `tests/golden.rs`). This crate is now a thin, stable re-export of
+//! `tn_bbg` so its high-level consumers (tn-hibe-py, tn-wasm, tn-core) keep
+//! importing `tn_hibe::*` unchanged.
 //!
 //! What the surface provides:
 //! - [`Identity`]: identity paths and the pinned label→scalar mapping
@@ -38,7 +45,7 @@ pub use tn_bbg::{
     seal_with_aad, setup, Identity, MasterKey, PrivateKey, PublicParams, WRAPPED_CEK_LEN,
 };
 
-/// The scheme error type. Re-exported from [`tn_bbg`] under the public
+/// The scheme error type. Re-exported from [`tn_bbg`] under the historical
 /// `HibeError` name so existing `tn_hibe::HibeError` consumers are unchanged.
 pub use tn_bbg::BbgError as HibeError;
 

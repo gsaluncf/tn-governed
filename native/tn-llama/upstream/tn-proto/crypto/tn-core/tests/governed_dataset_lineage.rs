@@ -1,7 +1,9 @@
 #![cfg(feature = "fs")]
 
 use serde_json::json;
-use tn_core::governed::{DatasetCatalog, Governance, LineageVerifier, PolicyDag, UseContext};
+use tn_core::governed::{
+    DatasetCatalog, Governance, GovernedDraft, LineageVerifier, PolicyDag, UseContext,
+};
 use tn_core::runtime::Objects;
 
 const POLICY: &str = "## finance.input\n### instruction\nCalculate the aggregate.\n### use_for\nPortfolio analysis.\n### do_not_use_for\nIndividual disclosure.\n### consequences\nReview.\n### on_violation_or_error\nRefuse.\n";
@@ -75,7 +77,7 @@ fn release_carries_explicit_use_without_changing_parent_identity() {
             &mut data,
             "finance.result",
             &use_context,
-            "calculation",
+            "deepvest",
             |ctx| {
                 assert_eq!(ctx.use_context(), Some(&use_context));
                 assert_eq!(ctx.purpose(), "portfolio_analysis");
@@ -88,7 +90,7 @@ fn release_carries_explicit_use_without_changing_parent_identity() {
         view.governance().get("release_context"),
         Some(&json!({
             "application": "analytics", "purpose": "portfolio_analysis",
-            "operation": "release_calculation", "destination": "calculation"
+            "operation": "release_calculation", "destination": "deepvest"
         }))
     );
     assert!(view.governance().source_references().unwrap()[0].references(&parent));
@@ -118,7 +120,7 @@ fn refused_release_and_independent_copy_preserve_original_state() {
             &mut original,
             "finance.result",
             &use_context,
-            "calculation",
+            "deepvest",
             |_| Ok(false)
         )
         .is_err());
@@ -135,7 +137,7 @@ fn lineage_follows_exact_parents_and_rejects_contract_loss_and_wrong_resolution(
         .unwrap();
     let parent = data.snapshot().unwrap().clone();
     let output = session
-        .release(&mut data, "finance.result", "analysis", "calculation", |_| {
+        .release(&mut data, "finance.result", "analysis", "deepvest", |_| {
             Ok(true)
         })
         .unwrap();
@@ -177,8 +179,9 @@ fn lineage_follows_exact_parents_and_rejects_contract_loss_and_wrong_resolution(
     .unwrap();
     let lost_contract = session
         .seal(
-            opened
-                .derive_under("finance.result", changed)
+            GovernedDraft::new("finance.result", changed)
+                .unwrap()
+                .with_source_lineage(&[opened.source_reference().unwrap()])
                 .unwrap()
                 .group("finance", json!({"total":12}))
                 .unwrap(),

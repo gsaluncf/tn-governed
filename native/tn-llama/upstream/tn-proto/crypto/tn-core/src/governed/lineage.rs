@@ -3,8 +3,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use super::data::base_contract;
-use super::{invalid, DatasetBinding, DatasetCatalog, GovernanceView, Governance, PolicyDag};
+use super::contracts::base_contract;
+use super::{
+    invalid, DatasetBinding, DatasetCatalog, Governance, GovernanceView, PolicyDag, SourceReference,
+};
 use crate::Result;
 
 /// The exact object identities reached by a successful lineage verification.
@@ -143,14 +145,8 @@ impl<F: FnMut(&str) -> Result<GovernanceView>> Walk<'_, F> {
             return Err(invalid("lineage depth limit exceeded"));
         }
         let id = view.object().id();
-        if self.visiting.contains(id) {
-            return Err(invalid("source lineage contains a cycle"));
-        }
-        if let Some(roots) = self.visited.get(id) {
-            if depth + self.heights[id] > self.limits.max_depth {
-                return Err(invalid("lineage depth limit exceeded"));
-            }
-            return Ok(roots.clone());
+        if let Some(roots) = self.cached_roots(id, depth)? {
+            return Ok(roots);
         }
         if self.views.len() > self.limits.max_objects {
             return Err(invalid("lineage object limit exceeded"));
@@ -164,11 +160,36 @@ impl<F: FnMut(&str) -> Result<GovernanceView>> Walk<'_, F> {
             .collect();
         let bindings = view.governance().dataset_bindings()?;
         self.verify_bindings(&bindings)?;
-
-        let mut roots = BTreeSet::new();
+        let mut roots = self.verify_origins(view, &contracts)?;
         let mut height = 0;
-        // A catalog selection is the explicit traversal boundary. It authenticates
-        // the origin's complete contract without requiring its creation history.
+        if roots.is_empty() {
+            (roots, height) = self.visit_parents(view, &contracts, &bindings, depth)?;
+        }
+        self.visiting.remove(id);
+        self.heights.insert(id.to_owned(), height);
+        self.visited.insert(id.to_owned(), roots.clone());
+        Ok(roots)
+    }
+
+    /// A cycle is refused; a verified subtree is reused while the path stays in depth.
+    fn cached_roots(&self, id: &str, depth: usize) -> Result<Option<BTreeSet<String>>> {
+        if self.visiting.contains(id) {
+            return Err(invalid("source lineage contains a cycle"));
+        }
+        let Some(roots) = self.visited.get(id) else {
+            return Ok(None);
+        };
+        if depth + self.heights[id] > self.limits.max_depth {
+            return Err(invalid("lineage depth limit exceeded"));
+        }
+        Ok(Some(roots.clone()))
+    }
+
+    /// A catalog selection is the explicit traversal boundary. It authenticates
+    /// the origin's complete contract without requiring its creation history.
+    fn verify_origins(&self, view: &GovernanceView, contracts: &[Governance]) -> Result<BTreeSet<String>> {
+        let id = view.object().id();
+        let mut roots = BTreeSet::new();
         for binding in self.origins.get(id).into_iter().flatten() {
             let edition = self
                 .catalog
@@ -198,65 +219,89 @@ impl<F: FnMut(&str) -> Result<GovernanceView>> Walk<'_, F> {
             }
             roots.insert(id.to_owned());
         }
-        if roots.is_empty() {
-            let carried: BTreeMap<&str, &DatasetBinding> = bindings
-                .iter()
-                .map(|binding| (binding.edition_record_id(), binding))
-                .collect();
-            for reference in view.governance().source_references()? {
-                let parent_id = reference.object_id();
-                let parent = match self.views.get(parent_id) {
-                    Some(parent) => Rc::clone(parent),
-                    None => {
-                        if self.views.len() >= self.limits.max_objects {
-                            return Err(invalid("lineage object limit exceeded"));
-                        }
-                        let parent = Rc::new((self.resolve)(parent_id)?);
-                        if parent.object().id() != parent_id {
-                            return Err(invalid(
-                                "lineage resolver returned a different publication",
-                            ));
-                        }
-                        self.views.insert(parent_id.to_owned(), Rc::clone(&parent));
-                        parent
-                    }
-                };
-                if !reference.references_with_policy(parent.object(), parent.governance())
-                    || !reference
-                        .groups()
-                        .iter()
-                        .all(|group| parent.object().group_names().contains(&group.as_str()))
-                {
-                    return Err(invalid(
-                        "source reference must match the exact signed parent",
-                    ));
-                }
-                for inherited in parent.governance().policies()? {
-                    if !contracts.contains(&base_contract(&inherited)) {
-                        return Err(invalid("child must retain every parent contract"));
-                    }
-                }
-                for inherited in parent.governance().dataset_bindings()? {
-                    if carried.get(inherited.edition_record_id()) != Some(&&inherited) {
-                        return Err(invalid("child must retain every parent dataset binding"));
-                    }
-                }
-                roots.extend(self.visit(&parent, depth + 1)?);
-                height = height.max(self.heights[parent_id] + 1);
-            }
-            let declared: BTreeSet<_> = bindings
-                .iter()
-                .map(|b| b.source_object_id().to_owned())
-                .collect();
-            if roots != declared {
-                return Err(invalid(
-                    "dataset bindings must describe the reached origins",
-                ));
-            }
-        }
-        self.visiting.remove(id);
-        self.heights.insert(id.to_owned(), height);
-        self.visited.insert(id.to_owned(), roots.clone());
         Ok(roots)
     }
+
+    /// Follow each signed parent, which the child must retain intact, and return the
+    /// origins reached and the subtree height. The child's bindings must describe them.
+    fn visit_parents(
+        &mut self,
+        view: &GovernanceView,
+        contracts: &[Governance],
+        bindings: &[DatasetBinding],
+        depth: usize,
+    ) -> Result<(BTreeSet<String>, usize)> {
+        let carried: BTreeMap<&str, &DatasetBinding> = bindings
+            .iter()
+            .map(|binding| (binding.edition_record_id(), binding))
+            .collect();
+        let mut roots = BTreeSet::new();
+        let mut height = 0;
+        for reference in view.governance().source_references()? {
+            let parent_id = reference.object_id();
+            let parent = self.resolve_parent(parent_id)?;
+            verify_parent_reference(&reference, &parent, contracts, &carried)?;
+            roots.extend(self.visit(&parent, depth + 1)?);
+            height = height.max(self.heights[parent_id] + 1);
+        }
+        let declared: BTreeSet<_> = bindings
+            .iter()
+            .map(|b| b.source_object_id().to_owned())
+            .collect();
+        if roots != declared {
+            return Err(invalid(
+                "dataset bindings must describe the reached origins",
+            ));
+        }
+        Ok((roots, height))
+    }
+
+    /// The exact parent publication, resolved once per walk.
+    fn resolve_parent(&mut self, parent_id: &str) -> Result<Rc<GovernanceView>> {
+        if let Some(parent) = self.views.get(parent_id) {
+            return Ok(Rc::clone(parent));
+        }
+        if self.views.len() >= self.limits.max_objects {
+            return Err(invalid("lineage object limit exceeded"));
+        }
+        let parent = Rc::new((self.resolve)(parent_id)?);
+        if parent.object().id() != parent_id {
+            return Err(invalid(
+                "lineage resolver returned a different publication",
+            ));
+        }
+        self.views.insert(parent_id.to_owned(), Rc::clone(&parent));
+        Ok(parent)
+    }
+}
+
+/// The signed reference names this exact parent and groups it holds, and the child
+/// retains every parent contract and dataset binding.
+fn verify_parent_reference(
+    reference: &SourceReference,
+    parent: &GovernanceView,
+    contracts: &[Governance],
+    carried: &BTreeMap<&str, &DatasetBinding>,
+) -> Result<()> {
+    if !reference.references_with_policy(parent.object(), parent.governance())
+        || !reference
+            .groups()
+            .iter()
+            .all(|group| parent.object().group_names().contains(&group.as_str()))
+    {
+        return Err(invalid(
+            "source reference must match the exact signed parent",
+        ));
+    }
+    for inherited in parent.governance().policies()? {
+        if !contracts.contains(&base_contract(&inherited)) {
+            return Err(invalid("child must retain every parent contract"));
+        }
+    }
+    for inherited in parent.governance().dataset_bindings()? {
+        if carried.get(inherited.edition_record_id()) != Some(&&inherited) {
+            return Err(invalid("child must retain every parent dataset binding"));
+        }
+    }
+    Ok(())
 }

@@ -12,8 +12,12 @@ use super::{AdminStateCache, ChainConflict};
 impl AdminStateCache {
     /// Apply one admin envelope to the materialised state.
     ///
-    /// Extract identity fields, check coordinate forks and duplicates,
-    /// update the vector clock and head pointer, then dispatch by event type.
+    /// Thin orchestrator: extract identity fields, run cross-cutting
+    /// checks (coordinate-fork detection, dedupe, vector clock,
+    /// head pointer), then dispatch to a per-event-type handler. The
+    /// shape mirrors the Python ``AdminStateCache._apply_envelope``
+    /// refactor (PR #41) — same prelude, same handler set, same
+    /// behaviour.
     pub(super) fn apply_envelope(&mut self, env: &Value) {
         let Some(rh) = env.get("row_hash").and_then(Value::as_str) else {
             return;

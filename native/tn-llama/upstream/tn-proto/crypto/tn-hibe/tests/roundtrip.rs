@@ -1,4 +1,4 @@
-//! BBG round-trips at depths 1-3, delegate-then-decrypt,
+//! Phase 1 test plan: BBG round-trips at depths 1-3, delegate-then-decrypt,
 //! wrong-identity negatives, constant-size ciphertext, KEM round-trip and
 //! tamper checks, and canonical-encoding round-trips.
 //!

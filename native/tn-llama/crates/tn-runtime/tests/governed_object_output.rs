@@ -36,7 +36,7 @@ fn independent_output_reader_failure_releases_no_wire() {
     let fixture = Fixture::new();
     let request = fixture.request("calculation");
     std::fs::copy(
-        fixture.config.reader_key_dir.join("tn.agents.btn.mykit"),
+        fixture.input_kit("tn.agents"),
         fixture
             .config
             .output_reader_key_dir
@@ -66,18 +66,26 @@ fn v2_reuses_visible_and_unselected_attribution_gates() {
         (
             true,
             "<script>Required credit</script>",
-            "tn_required_attribution_missing",
+            "tn_report_markup_invalid",
         ),
         (
             true,
             "<p hidden>Required credit</p>",
-            "tn_required_attribution_missing",
+            "tn_report_markup_invalid",
         ),
         (
-            false,
-            "<p>Required credit</p>",
-            "tn_unselected_attribution_present",
+            true,
+            "<p style=\"opacity:0\">Required credit</p>",
+            "tn_report_markup_invalid",
         ),
+        (
+            true,
+            "<p>Report without the credit</p>",
+            "tn_required_attribution_missing",
+        ),
+        // The unselected-section gate is the same `validate_html_attributions` the v1
+        // path tests. This fixture's only other group, `audit`, travels in the carried
+        // source outside its edition, so the v2 path cannot offer it unselected.
     ] {
         let mut fixture = Fixture::new();
         let request = fixture.request("calculation");

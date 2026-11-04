@@ -116,7 +116,7 @@ fn envelope_matches_python_golden() {
         );
 
         // Build group_payloads as pre-serialized JSON snippets
-        //.
+        // (0.4.2a7 shape change — was `Map<String, Value>`).
         let mut group_payloads: std::collections::BTreeMap<String, String> =
             std::collections::BTreeMap::new();
         let payload_json = serde_json::to_string(&GroupPayload {

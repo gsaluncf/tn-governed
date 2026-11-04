@@ -1,7 +1,17 @@
+mod governed_support;
 mod support;
+use governed_support::SessionHarness;
 use serde_json::{json, Value};
-use support::{canonical_json, literal_runnable_manifest, prepare_and_begin, SessionHarness};
-use tn_runtime::{NativeToolResult, State};
+use support::{canonical_json, literal_runnable_manifest, prepare_and_begin};
+use tn_runtime::{NativeToolResult, Phase, State};
+
+#[test]
+fn model_action_phases_have_the_exact_native_numbers() {
+    assert_eq!(u32::from(Phase::GovernanceRead), 1);
+    assert_eq!(u32::from(Phase::CommitmentEcho), 2);
+    assert_eq!(u32::from(Phase::SectionSelection), 3);
+    assert_eq!(u32::from(Phase::GovernedAction), 4);
+}
 
 #[test]
 fn turn_one_requires_one_complete_exact_bound_native_call() {
@@ -12,8 +22,8 @@ fn turn_one_requires_one_complete_exact_bound_native_call() {
         Malformed,
         Duplicate,
         Extra,
-        UnknownSection,
-        EmptySelection,
+        UnknownHash,
+        EmptyHashes,
         Truncated,
         StopLimit,
     }
@@ -31,16 +41,16 @@ fn turn_one_requires_one_complete_exact_bound_native_call() {
             Mutation::Duplicate,
             "tn_tool_arguments_invalid",
         ),
-        ("extra", Mutation::Extra, "tn_section_selection_invalid"),
+        ("extra", Mutation::Extra, "tn_decrypt_keys_invalid"),
         (
-            "unknown section",
-            Mutation::UnknownSection,
-            "tn_section_selection_invalid",
+            "unknown hash",
+            Mutation::UnknownHash,
+            "tn_decrypt_keys_invalid",
         ),
         (
-            "empty selection",
-            Mutation::EmptySelection,
-            "tn_section_selection_invalid",
+            "empty hashes",
+            Mutation::EmptyHashes,
+            "tn_decrypt_keys_invalid",
         ),
         ("truncated", Mutation::Truncated, "tn_model_turn_incomplete"),
         (
@@ -54,32 +64,30 @@ fn turn_one_requires_one_complete_exact_bound_native_call() {
         let mut harness = SessionHarness::new(name);
         let turn = harness.session.next_model_turn().unwrap();
         prepare_and_begin(&turn, b"turn-one", 2048, 21);
-        let mut result = harness.section_selection_result(&["firm_data"]);
+        let mut result = harness.decrypt_result(&turn, &["finance"]);
         match mutation {
             Mutation::EmptyId => result.id.clear(),
             Mutation::InvalidId => result.id = vec![0xff],
             Mutation::WrongName => result.name = b"continue_with_governance".to_vec(),
             Mutation::Malformed => result.arguments = b"{".to_vec(),
             Mutation::Duplicate => {
-                result.arguments = format!(
-                    r#"{{"request_digest":"{}","row_hash":"{}","row_hash":"{}"}}"#,
-                    harness.request_digest, harness.row_hash, harness.row_hash
-                )
-                .into_bytes();
+                let arguments = String::from_utf8(result.arguments.clone()).unwrap();
+                result.arguments =
+                    format!(r#"{{"data_hashes":[],{}"#, &arguments[1..]).into_bytes();
             }
             Mutation::Extra => {
                 let mut value: Value = serde_json::from_slice(&result.arguments).unwrap();
                 value["extra"] = json!(true);
                 result.arguments = canonical_json(&value);
             }
-            Mutation::UnknownSection => {
+            Mutation::UnknownHash => {
                 let mut value: Value = serde_json::from_slice(&result.arguments).unwrap();
-                value["sections"] = json!(["unknown"]);
+                value["data_hashes"] = json!([format!("hmac-sha256:v1:{}", "0".repeat(64))]);
                 result.arguments = canonical_json(&value);
             }
-            Mutation::EmptySelection => {
+            Mutation::EmptyHashes => {
                 let mut value: Value = serde_json::from_slice(&result.arguments).unwrap();
-                value["sections"] = json!([]);
+                value["data_hashes"] = json!([]);
                 result.arguments = canonical_json(&value);
             }
             Mutation::Truncated => result.truncated = true,
@@ -101,7 +109,7 @@ fn turn_one_requires_one_complete_exact_bound_native_call() {
 fn permits_cannot_cross_sessions_or_accept_before_begin_or_survive_abort() {
     let mut before_begin = SessionHarness::new("before begin");
     let turn = before_begin.session.next_model_turn().unwrap();
-    let result = before_begin.section_selection_result(&["firm_data"]);
+    let result = before_begin.decrypt_result(&turn, &["finance"]);
     let error = before_begin
         .session
         .accept_model_action(turn.permit, result.native())
@@ -112,8 +120,8 @@ fn permits_cannot_cross_sessions_or_accept_before_begin_or_survive_abort() {
     let mut target = SessionHarness::new("target session");
     let origin_turn = origin.session.next_model_turn().unwrap();
     prepare_and_begin(&origin_turn, b"origin", 2048, 83);
-    let _target_turn = target.session.next_model_turn().unwrap();
-    let result = target.section_selection_result(&["firm_data"]);
+    let target_turn = target.session.next_model_turn().unwrap();
+    let result = target.decrypt_result(&target_turn, &["finance"]);
     let error = target
         .session
         .accept_model_action(origin_turn.permit, result.native())

@@ -1,104 +1,10 @@
 #![allow(dead_code)]
 
-use std::collections::BTreeMap;
 use std::fs;
 
 use serde_json::{json, Value};
-use tn_runtime::{
-    parse_and_verify_request, GovernedRuntime, ModelTurn, NativeToolResult, ParsedToolCall,
-    RequestLimits, RuntimeConfig, Session,
-};
-use tn_test_tools::{build_real_tn_fixture, RealTnFixture};
-
-pub struct SessionHarness {
-    pub _fixture: RealTnFixture,
-    pub runtime: GovernedRuntime,
-    pub session: Session,
-    pub raw_request: Vec<u8>,
-    pub row_hash: String,
-    pub request_digest: String,
-    pub governance: BTreeMap<String, Value>,
-    pub commitments: BTreeMap<String, String>,
-}
-
-impl SessionHarness {
-    pub fn new(user_content: &str) -> Self {
-        let fixture = build_real_tn_fixture().unwrap();
-        let runtime = GovernedRuntime::from_config(fixture_config(&fixture)).unwrap();
-        Self::from_fixture_and_runtime(fixture, runtime, user_content)
-    }
-
-    pub fn from_fixture_and_runtime(
-        fixture: RealTnFixture,
-        runtime: GovernedRuntime,
-        user_content: &str,
-    ) -> Self {
-        let mut request: Value = serde_json::from_slice(&fixture.row1_request_json).unwrap();
-        request["messages"][0]["content"] = Value::String(user_content.to_string());
-        let raw_request = serde_json::to_vec(&request).unwrap();
-        let config = fixture_config(&fixture);
-        let accepted = parse_and_verify_request(
-            &raw_request,
-            &RequestLimits {
-                max_request_bytes: config.max_request_bytes,
-                max_message_bytes: config.max_message_bytes,
-                expected_device_identity: Some(fixture.device_identity.clone()),
-                expected_event_type: config.expected_event_type.clone(),
-                allowed_input_groups: config.allowed_input_groups.clone(),
-                require_signature: true,
-                max_active_sessions: config.max_active_sessions,
-                max_chain_namespaces: config.max_chain_namespaces,
-            },
-        )
-        .unwrap();
-        let row_hash = accepted.row.row_hash().to_string();
-        let request_digest = accepted.request_digest;
-        let commitments = request["tn_row"]["tn.agents"]["field_hashes"]
-            .as_object()
-            .unwrap()
-            .iter()
-            .map(|(name, value)| (name.clone(), value.as_str().unwrap().to_string()))
-            .collect();
-        let governance = fixture.governance.clone();
-        let session = runtime.start_session(&raw_request).unwrap();
-        Self {
-            _fixture: fixture,
-            runtime,
-            session,
-            raw_request,
-            row_hash,
-            request_digest,
-            governance,
-            commitments,
-        }
-    }
-
-    pub fn section_selection_result(&self, sections: &[&str]) -> OwnedToolResult {
-        OwnedToolResult {
-            id: b"call-selection-3".to_vec(),
-            name: b"select_sections".to_vec(),
-            arguments: canonical_json(&json!({"sections": sections})),
-            raw: br#"<tool_call>{"name":"select_sections"}</tool_call>"#.to_vec(),
-            content: Vec::new(),
-            call_count: 1,
-            truncated: false,
-            stop_limit: false,
-        }
-    }
-
-    pub fn action_result(&self, id: &str, name: &str, arguments: Value) -> OwnedToolResult {
-        OwnedToolResult {
-            id: id.as_bytes().to_vec(),
-            name: name.as_bytes().to_vec(),
-            arguments: canonical_json(&arguments),
-            raw: format!(r#"<tool_call>{{"name":"{name}"}}</tool_call>"#).into_bytes(),
-            content: Vec::new(),
-            call_count: 1,
-            truncated: false,
-            stop_limit: false,
-        }
-    }
-}
+use tn_runtime::{ModelTurn, NativeToolResult, ParsedToolCall, RuntimeConfig};
+use tn_test_tools::RealTnFixture;
 
 pub struct OwnedToolResult {
     pub id: Vec<u8>,
@@ -205,8 +111,4 @@ pub fn prepare_and_begin(turn: &ModelTurn, prompt: &[u8], n_predict: u32, task_i
     turn.permit
         .begin(task_id, 0, &turn.request_json, prompt, &manifest)
         .unwrap();
-}
-
-pub fn advance_to_selection(harness: &mut SessionHarness) -> ModelTurn {
-    harness.session.next_model_turn().unwrap()
 }

@@ -11,18 +11,13 @@ fn fixture() -> (governed_support::Fixture, Value) {
         serde_json::from_str(include_str!("fixtures/decision-context.json")).unwrap();
     let root = fixture.legacy.temp.path().join("claims");
     let keys = root.join("input/keys");
-    let readers = root.join("input/readers");
     std::fs::create_dir_all(&keys).unwrap();
-    std::fs::create_dir_all(&readers).unwrap();
     for (name, encoded) in claim["keys"].as_object().unwrap() {
         std::fs::write(
             keys.join(name),
             STANDARD.decode(encoded.as_str().unwrap()).unwrap(),
         )
         .unwrap();
-        if name.ends_with(".btn.mykit") {
-            std::fs::copy(keys.join(name), readers.join(name)).unwrap();
-        }
     }
     std::fs::write(
         root.join("input/tn.yaml"),
@@ -37,7 +32,6 @@ fn fixture() -> (governed_support::Fixture, Value) {
     fixture.config.expected_event_type = "experiment.primitive".into();
     fixture.config.allowed_input_groups = ["values".into(), "evidence".into()].into();
     fixture.config.report_contract.allowed_input_sections = ["values".into()].into();
-    fixture.config.reader_key_dir = readers;
     fixture.config.input_index_key_path = keys.join("index_master.key");
     fixture.config.ceremony_id = claim["reader_config"]["ceremony"]["id"]
         .as_str()

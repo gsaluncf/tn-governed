@@ -8,8 +8,10 @@
 //!   epoch (after a rotation).
 //! - A [`ReaderKeyset`] — the actual decryption key material.
 //!
-//! A kit holds reader key material and can be serialized with
-//! `ReaderKit::to_bytes`.
+//! In v0.1 the kit is an in-memory struct. Wire-format serialization
+//! ships in a later commit; at that point the kit becomes the
+//! conceptual `.tnpkg` artifact the publisher hands out once per
+//! mint.
 
 use crate::ciphertext::Ciphertext;
 use crate::error::{Error, Result};

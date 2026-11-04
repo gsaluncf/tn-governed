@@ -121,10 +121,12 @@ impl ExecutionBackend {
         max_tokens: u32,
     ) -> Result<String, TnLlamaError> {
         match self {
-            Self::Llama => crate::model_protocol::parse_and_digest_manifest(raw, phase, max_tokens),
+            Self::Llama => {
+                crate::runnable_manifest::parse_and_digest_manifest(raw, phase, max_tokens)
+            }
             Self::Vllm(config) => {
                 let value =
-                    crate::envelope::parse_duplicate_safe_json(raw).map_err(|_| invalid())?;
+                    crate::strict_json::parse_duplicate_safe_json(raw).map_err(|_| invalid())?;
                 let object = value.as_object().ok_or_else(invalid)?;
                 if object.len() != MANIFEST_FIELDS.len()
                     || MANIFEST_FIELDS.iter().any(|key| !object.contains_key(*key))
