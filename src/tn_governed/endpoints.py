@@ -16,6 +16,7 @@ from .values.obligations import ObligationRun, run_obligations
 from .values.references import unpack_references
 from .values.runtime import Assessment, Claim, Request
 from .values.string import OperationDenied, ValueReference
+from .values.holders import field_hash, holder, receive_routed
 
 ARTIFACT_TYPE = "tn.artifact"
 ARTIFACT_SCHEMA = "tn.artifact.v1"
@@ -203,9 +204,9 @@ class Endpoint:
             or rb["details"].get("output") != artifact.reference.to_dict()
             or rb["details"].get("decision_id") != artifact.decision_id
             or rb["details"].get("manifest_commitment")
-            != obj.envelope["evidence"]["field_hashes"]["manifest"]
+            != field_hash(obj, "evidence", "manifest")
             or rb["details"].get("value_commitment")
-            != obj.envelope["values"]["field_hashes"]["value"]
+            != field_hash(obj, "values", "value")
             or db["operation"] != manifest["operation"]
             or db["details"].get("parameters") != manifest["parameters"]
             or db["destination"] != manifest["destination"]
@@ -306,12 +307,15 @@ class Endpoint:
         for reference in external:
             source = self.store.read(reference.object_id)
             view = self.session.governance(source)
-            view.accept(
+            # A carried group is admitted on the governance of the object that holds it.
+            held = view if reference.group in source.group_names else self.session.governance(
+                holder(source, reference.group))
+            held.accept(
                 use=tn.UseContext(self.application, self.purpose, "inspect"),
                 groups=[reference.group],
                 decide=self.accept_metadata,
             )
-            if reference.field not in source.envelope[reference.group]["field_hashes"]:
+            if reference.field not in holder(source, reference.group).envelope[reference.group]["field_hashes"]:
                 raise EvidenceError("external input does not identify a signed field")
             inherited.extend(view.governance.policies)
         if inherited and (
@@ -552,8 +556,8 @@ class Endpoint:
                 "decision_id": decision,
                 "output": reference.to_dict(),
                 "claims": claims,
-                "manifest_commitment": publication.envelope["evidence"]["field_hashes"]["manifest"],
-                "value_commitment": publication.envelope["values"]["field_hashes"]["value"],
+                "manifest_commitment": field_hash(publication, "evidence", "manifest"),
+                "value_commitment": field_hash(publication, "values", "value"),
             },
         )
         return self._carried(
@@ -735,7 +739,10 @@ class Endpoint:
                 return self.accept_metadata(ctx) is True and (decide is None or decide(ctx) is True)
 
             view = self.session.governance(publication)
-            view.accept(use=use, groups=[group], decide=accept)
+            # A carried group is admitted on the governance of the object that holds it.
+            held = view if group in publication.group_names else self.session.governance(
+                holder(publication, group))
+            held.accept(use=use, groups=[group], decide=accept)
             lineage = {}
             if claims:
                 pending = [publication.id]
@@ -788,7 +795,8 @@ class Endpoint:
             call_id = uuid4().hex
             decision = self._authorize(request, call_id)
             try:
-                data = self.session.receive(publication, use=use, groups=[group], decide=accept)
+                data = receive_routed(self.session, publication, use=use, groups=[group],
+                                      decide=lambda source, groups: accept)
                 if validate is not None and validate(data) is not True:
                     raise EvidenceError("external content validation refused the publication")
                 value = data.get(field, group=group)

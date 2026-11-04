@@ -21,6 +21,7 @@ from .references import pack_references, unpack_references
 from .string import (
     OperationDenied, StringMetadataProvider, TNString, ValueReference, _active, _exposure,
 )
+from .holders import field_hash, receive_routed
 
 STRING_TYPE = "experiment.string"
 STRING_SCHEMA = "tn.string-bindings.v1"
@@ -384,11 +385,11 @@ class Context:
         for value in values:
             obj = self.store_object(value.reference.object_id)
             use = tn.UseContext(self.application, self.purpose, request.operation)
-            data = self.session.receive(
-                obj, use=use, groups=["strings", "evidence"],
-                decide=lambda ctx, obj=obj, use=use: (
-                    ctx.object.id == obj.id and ctx.writer == obj.writer
-                    and ctx.use_context == use and set(ctx.groups) == {"strings", "evidence"}
+            data = receive_routed(
+                self.session, obj, use=use, groups=["strings", "evidence"],
+                decide=lambda source, groups, use=use: lambda ctx: (
+                    ctx.object.id == source.id and ctx.writer == source.writer
+                    and ctx.use_context == use and set(ctx.groups) == set(groups)
                     and self.metadata_accept(ctx)
                 ),
             )
@@ -483,7 +484,7 @@ class Context:
             reference = ValueReference(publication.id, field)
             result_id = self._append("Result", request, call_id, {
                 "decision_id": decision_id, "output": reference.to_dict(), "claims": claims,
-                "field_commitment": publication.envelope["strings"]["field_hashes"][field],
+                "field_commitment": field_hash(publication, "strings", field),
                 "transition": {
                     "governed_inputs": pack_references(v.reference.to_dict() for v in values),
                     "governance": "retain-all-contributing-governance",

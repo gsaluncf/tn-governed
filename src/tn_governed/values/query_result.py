@@ -16,6 +16,7 @@ from .primitives import VALUE_TYPE
 from .query import SourceColumn, decode_sql, digest, encode_sql
 from .runtime import Request
 from .string import MetadataUnavailable, ValueReference
+from .holders import field_hash
 
 RESULT_SCHEMA = "tn.sql-result.v1"
 
@@ -250,7 +251,7 @@ def publish_result(context, rows, binding, lineage, *, request, decision_id, que
             "decision_id": decision_id,
             "output": ValueReference(publication.id, "rows", "values").to_dict(),
             "claims": [],
-            "field_commitment": publication.envelope["values"]["field_hashes"]["rows"],
+            "field_commitment": field_hash(publication, "values", "rows"),
             "binding_id": manifest["binding_id"],
             "manifest_id": digest(manifest),
             "transition": {"governed_inputs": [], "retained_claims": [], "literal_inputs": []},
@@ -527,7 +528,7 @@ class GovernedQueryResult:
             or db["details"].get("parameters")
             != [{key: value for key, value in binding.items() if key != "output_schema"}]
             or rb["details"].get("field_commitment")
-            != data.snapshot.envelope["values"]["field_hashes"]["rows"]
+            != field_hash(data.snapshot, "values", "rows")
             or db["details"].get("permitted") is not True
             or rb["sequence"] <= db["sequence"]
             or any(

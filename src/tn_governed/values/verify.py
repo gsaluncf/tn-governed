@@ -25,6 +25,7 @@ from .manifests import SCHEMAS, signed_manifest, unique_origins
 from .primitives import VALUE_TYPE
 from .references import unpack_references
 from .provision import POLICY
+from .holders import holder
 
 
 # Default count of source cells above which the written graph has one node per source publication.
@@ -241,7 +242,7 @@ def verify(root, *, graph_cell_limit=GRAPH_CELL_LIMIT):
 
         @cached
         def commitments(identity, group):
-            return object_(identity).envelope[group]["field_hashes"]
+            return holder(object_(identity), group).envelope[group]["field_hashes"]
 
         @cached
         def lineage(identity):
