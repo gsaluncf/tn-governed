@@ -476,7 +476,7 @@ python -m experiments.pvldb_evaluation.verify_numeric_path --run-directory exper
 For the smaller SQL/string/numeric demonstration:
 
 ```powershell
-python -m tn_governed.values.demo --numeric-type Decimal --run-directory experiments/results/sql-primitives
+python -m experiments.pvldb_evaluation.run --mode primitive --numeric-type Decimal --run-directory experiments/results/sql-primitives
 python -m tn_governed.values.verify experiments/results/sql-primitives
 ```
 

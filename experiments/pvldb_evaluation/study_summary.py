@@ -52,7 +52,11 @@ def model_turns(directory):
         path = Path(directory) / "server.stderr.log"
     if not path.is_file():
         return None
-    text = path.read_text(encoding="utf-8", errors="replace")
+    return log_turns(path.read_text(encoding="utf-8", errors="replace"))
+
+
+def log_turns(text):
+    """Prompt and decode time and tokens in a llama-server log, summed over every turn."""
     prompts = re.findall(r"prompt eval time =\s*([\d.]+) ms /\s*(\d+) tokens", text)
     decodes = re.findall(r"\|\s+eval time =\s*([\d.]+) ms /\s*(\d+) tokens", text)
     return {"inferences": len(prompts),

@@ -1,6 +1,7 @@
 """Authority precedence and action graphs belong to individual endpoints."""
 
 import pytest
+from tn_governed.artifact_verification import verify_artifact
 from test_endpoints import endpoints as endpoints
 
 from tn_governed.values.runtime import ObligationResult
@@ -38,7 +39,7 @@ def test_endpoints_can_apply_different_precedence_without_rewriting_policies(end
         )
         assert len(decision.body["details"]["evaluation"]["votes"]) == 2
     assert outcomes == [9, "refused"]
-    assert len(source._metadata(value)[0].policies) == 2
+    assert len(verify_artifact(source, value)[0].policies) == 2
 
 
 def test_action_dependencies_execute_in_order_and_retain_evidence(endpoints):

@@ -11,13 +11,13 @@ from __future__ import annotations
 import argparse
 import base64
 import json
-import re
 from pathlib import Path
 
 from tn_governed.native_run import ALL_GPU_LAYERS
 
 from .evidence_mutants import native_rows
 from .run import run_case
+from .study_summary import log_turns
 
 # The runtime lists at most LISTED_ENTRIES dataset bindings or lineage entries in
 # the model context and replaces a longer list with its committed reference. Each
@@ -31,11 +31,9 @@ REFERENCE_SCHEMA = b"tn.governance-reference.v1"
 
 
 def turn_timings(directory):
+    """Inference over both model turns, the decrypt call and the report."""
     text = (directory / "native-model/server.stderr.log").read_text(encoding="utf-8", errors="replace")
-    prompt = re.search(r"prompt eval time =\s*([\d.]+) ms /\s*(\d+) tokens", text)
-    decode = re.search(r"\n[^\n]*\beval time =\s*([\d.]+) ms /\s*(\d+) tokens", text[prompt.end():])
-    return {"prompt_seconds": float(prompt[1]) / 1000, "prompt_tokens": int(prompt[2]),
-            "decode_seconds": float(decode[1]) / 1000, "decoded_tokens": int(decode[2])}
+    return log_turns(text)
 
 
 def rendered_prompt(directory):

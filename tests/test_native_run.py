@@ -49,8 +49,9 @@ def test_gpu_layer_count_is_validated_before_launch(tmp_path, gpu_layers):
         pytest.fail("invalid GPU layer count was accepted")
 
 
-@pytest.mark.parametrize("wsl,gpu_layers,expected", [(False, None, "0"),
-                                                   (True, None, "99"), (True, 0, "0")])
+# Without an explicit count the launcher puts every model layer on the GPU, in or out of WSL.
+@pytest.mark.parametrize("wsl,gpu_layers,expected", [(False, None, "999"),
+                                                   (True, None, "999"), (True, 0, "0")])
 def test_gpu_configuration_reaches_owned_process(tmp_path, monkeypatch, wsl, gpu_layers, expected):
     from tn_governed import native_run
 

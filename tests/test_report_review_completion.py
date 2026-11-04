@@ -15,11 +15,7 @@ import tn
 from tn.governed import UseDenied
 from tn_llama_client.protocol import NativeModelRelease
 
-from tn_governed.publications import PublicationStore
-from tn_governed.native_objects import NativeObjects
-from tn_governed.values.catalog import AssignedRules, UnityGovernance
-from tn_governed.values.evidence import EvidenceRecorder, read_record, verify_tape
-from tn_governed.values.market_report import (
+from experiments.pvldb_evaluation.case_study import (
     APPLICATION,
     MODEL_USE,
     NOTICE,
@@ -28,6 +24,10 @@ from tn_governed.values.market_report import (
     REVIEW_ACTION,
     policy,
 )
+from tn_governed.native_objects import NativeObjects
+from tn_governed.publications import PublicationStore
+from tn_governed.values.catalog import AssignedRules, UnityGovernance
+from tn_governed.values.evidence import EvidenceRecorder, read_record, verify_tape
 from tn_governed.values.model import NativeModelEndpoint, prepare_native_model
 from tn_governed.values.primitives import Context
 from tn_governed.values.provision import provision

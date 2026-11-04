@@ -27,6 +27,11 @@ class EvidenceError(ValueError):
     """Evidence failed verification or did not support the claimed association."""
 
 
+def require(condition, message):
+    if not condition:
+        raise EvidenceError(message)
+
+
 @dataclass(frozen=True)
 class Record:
     id: str
@@ -54,8 +59,10 @@ def referenced_publications(value, lookup):
 def read_record(wire, *, session, policy, expected_writer=None):
     """Read TN bytes or a verified native object, then authorize evidence access.
 
+    `policy` is the accepted evidence contract, or a tuple of accepted contracts.
     Accepting this read contract permits inspection, not endorsement of its claims.
     """
+    contracts = policy if isinstance(policy, tuple) else (policy,)
     try:
         obj = wire if isinstance(wire, tn.GovernedObject) else tn.GovernedObject.read(io.BytesIO(wire))
         if obj.object_type != EVIDENCE_TYPE:
@@ -66,7 +73,7 @@ def read_record(wire, *, session, policy, expected_writer=None):
             obj, use=tn.UseContext("string-evidence-reader", "inspect-evidence", "read"),
             groups=["evidence"],
             decide=lambda ctx: len(ctx.policies) == 1
-            and ctx.governance.matches_contract(policy),
+            and any(ctx.governance.matches_contract(contract) for contract in contracts),
         )
         body = working.get("record", group="evidence")
         required = {
@@ -181,6 +188,10 @@ class EvidenceRecorder:
             self._ids.append(publication.id)
             return publication.id
 
+    def ids(self):
+        with self._lock:
+            return tuple(self._ids)
+
     def records(self):
         with self._lock:
             return tuple(self.store.get(identity) for identity in self._ids)
@@ -198,11 +209,11 @@ class EvidenceRecorder:
 
         directory = Path(directory)
         with self._lock:
-            paths = []
+            paths, directories = [], set()
             for sequence, wire in enumerate(self.records(), 1):
                 paths.append(directory / f"{sequence:08d}.tn")
-                write_once(paths[-1], wire, sync=False)
-            sync_writes(paths)
+                directories.update(write_once(paths[-1], wire, sync=False))
+            sync_writes(paths, directories)
             checkpoint = {
                 "writer": self.session.did, "context_id": self.context_id,
                 "head": self.head, "count": len(self._ids),

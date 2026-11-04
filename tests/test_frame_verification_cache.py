@@ -13,6 +13,7 @@ from tn.governed import GovernedError
 from tn_governed.publications import PublicationStore
 from tn_governed.values.evidence import EvidenceError
 from experiments.pvldb_evaluation import verify_frame as module
+from tn_governed.values import retained_run
 from experiments.pvldb_evaluation.run import run_case
 from tn_polars.registry import UnityCatalogRegistry
 
@@ -114,7 +115,7 @@ def observation(monkeypatch):
     monkeypatch.setattr(tn.DataObject, "get", get)
     monkeypatch.setattr(module, "tn", Native())
     monkeypatch.setattr(module, "decode", decode)
-    monkeypatch.setattr(module, "lru_cache", cache_factory, raising=False)
+    monkeypatch.setattr(retained_run, "lru_cache", cache_factory)
     return SimpleNamespace(reads=reads, receives=receives, views=views, lineage=lineage,
                            decoded=decoded, manifests=manifests, caches=caches, clears=clears)
 

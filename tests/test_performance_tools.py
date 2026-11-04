@@ -47,7 +47,7 @@ def test_measured_tool_chain_verifies_dependency_depth_and_required_action(
 
 
 def test_invalid_tool_schedule_does_not_create_measurement_directory(tmp_path):
-    from experiments.pvldb_evaluation.performance_tools import run_tools
+    from experiments.pvldb_evaluation.tool_study import run_tools
 
     output = tmp_path / "measurements"
     for depths, repetitions, warmups in [([0], 1, 0), ([1, 1], 1, 0), ([1], 0, 0), ([1], 1, -1)]:
@@ -57,7 +57,7 @@ def test_invalid_tool_schedule_does_not_create_measurement_directory(tmp_path):
 
 
 def test_tool_summary_excludes_warmups_and_retains_failures():
-    from experiments.pvldb_evaluation.performance_tools import summarize_tools
+    from experiments.pvldb_evaluation.tool_study import summarize_tools
 
     cases = [
         {
@@ -130,7 +130,7 @@ def test_retained_scalar_import_preserves_source_and_measures_separate_tool_tria
     retained_source,
     tmp_path,
 ):
-    from experiments.pvldb_evaluation.performance_tools import run_tools
+    from experiments.pvldb_evaluation.tool_study import run_tools
 
     (retained_source / "case-summary.json").write_text(
         json.dumps(
@@ -302,7 +302,7 @@ def test_integrated_report_retains_signed_acceptance_and_rejects_changed_html(
 
 def test_tool_enrollment_failures_are_retained_in_raw_cases(monkeypatch, tmp_path):
     from experiments.pvldb_evaluation import performance_source
-    from experiments.pvldb_evaluation.performance_tools import run_tools
+    from experiments.pvldb_evaluation.tool_study import run_tools
 
     source = tmp_path / "source"
     source.mkdir()

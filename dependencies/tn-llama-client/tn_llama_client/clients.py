@@ -525,64 +525,6 @@ class NativeOutputReader:
         )
 
 
-class PreciselyClient:
-    def __init__(self, base_url: str, transcript: HttpTranscript) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.transcript = transcript
-
-    def fetch_next(self) -> SourceRecord:
-        request = urllib.request.Request(
-            self.base_url + "/v1/precisely/records/next", method="GET"
-        )
-        self.transcript.log_request("precisely", request, b"")
-        try:
-            with _OPENER.open(request) as response:
-                body = response.read()
-                self.transcript.log_response(
-                    "precisely", request.full_url, response, body
-                )
-        except urllib.error.HTTPError as error:
-            body = error.read()
-            self.transcript.log_response("precisely", request.full_url, error, body)
-            raise
-        return self._record(body)
-
-    def fetch_if_changed(self, previous_row_hash: str | None) -> SourceRecord | None:
-        headers = (
-            {"If-None-Match": previous_row_hash}
-            if previous_row_hash is not None
-            else {}
-        )
-        request = urllib.request.Request(
-            self.base_url + "/v1/precisely/records/next", headers=headers, method="GET"
-        )
-        self.transcript.log_request("precisely", request, b"")
-        try:
-            with _OPENER.open(request) as response:
-                body = response.read()
-                self.transcript.log_response(
-                    "precisely", request.full_url, response, body
-                )
-        except urllib.error.HTTPError as error:
-            body = error.read()
-            self.transcript.log_response("precisely", request.full_url, error, body)
-            if error.code == 304:
-                return None
-            raise
-        return self._record(body)
-
-    def _record(self, body: bytes) -> SourceRecord:
-        record = SourceRecord.from_ndjson(body)
-        self.transcript.log_state(
-            "source_record_received",
-            event_id=record.event_id,
-            row_hash=record.row_hash,
-            encrypted_groups=list(record.encrypted_groups),
-            record_bytes=len(record.ndjson),
-        )
-        return record
-
-
 class GovernedLlamaClient:
     def __init__(
         self,

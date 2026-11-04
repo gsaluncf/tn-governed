@@ -4,11 +4,23 @@ from dataclasses import asdict
 
 import pytest
 import tn
-from test_native_tn_objects import POLICY
 
 from tn_governed.calculation import execute_calculation
 from tn_governed.calculation_client import EngineCalculationPort
 from tn_governed.workflow_setup import bind_workflow
+
+POLICY = """## finance.account
+### instruction
+Calculate the requested account total.
+### use_for
+Portfolio analysis.
+### do_not_use_for
+Trade execution.
+### consequences
+Review.
+### on_violation_or_error
+Refuse release.
+"""
 
 ROWS = [
     {"observed_at": "2026-09-01T16:00:00+00:00", "wealth": 100.0},

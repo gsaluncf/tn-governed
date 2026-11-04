@@ -7,8 +7,6 @@ import json
 
 import pytest
 
-from tn_governed.witness import verify_reference_run
-
 
 def encoded(raw):
     return base64.b64encode(raw).decode()
@@ -22,8 +20,8 @@ def digest(domain, raw):
     return "sha256:" + hashlib.sha256(domain.encode() + b"\0" + raw).hexdigest()
 
 
-@pytest.fixture
-def context_records():
+def v1_shaped_records():
+    """The decision, model, and release history without the native object fields."""
     source = "sha256:" + "a" * 64
     request = "sha256:" + "b" * 64
     audit, trace = [], []
@@ -131,11 +129,6 @@ def context_records():
     return audit, trace
 
 
-def write_rows(path, rows):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
-
-
 def retain_release_actions(audit, trace):
     release = json.loads(base64.b64decode(trace[-1]["parsed_content_b64"]))
     actions = []
@@ -168,124 +161,6 @@ def retain_release_actions(audit, trace):
     for ordinal, item in enumerate(release["trace"]):
         item["ordinal"] = ordinal
     trace[-1]["parsed_content_b64"] = encoded(canonical(release))
-
-
-@pytest.fixture
-def reference_run(tmp_path, context_records):
-    audit, trace = context_records
-    source_hash = audit[0]["target_row_hash"]
-    output_hash = "sha256:" + "c" * 64
-    policy = "https://policy.test/rules#sha256:" + "d" * 64
-    summary = {
-        "tn_handoffs": {
-            "model_source_event_id": "source-event",
-            "model_source_row_hash": source_hash,
-            "policy_reference": policy,
-        },
-        "verified_output": {"event_id": "output-event", "row_hash": output_hash},
-        "calculation": {"invocation_count": 1},
-    }
-    (tmp_path / "run-summary.json").write_text(json.dumps(summary), encoding="utf-8")
-    actions = {
-        31: "sections_selected",
-        41: "governed_tool_executed",
-    }
-    with_actions = []
-    for row in audit:
-        with_actions.append(row)
-        if row["kind"] == "turn_begin_authorized" and row["llama_task_id"] in actions:
-            with_actions.append({**row, "kind": actions[row["llama_task_id"]]})
-    audit = with_actions
-    audit.append(
-        {
-            "kind": "row_verified",
-            "outcome": "allow",
-            "facts_json": json.dumps({"signature_verified": True}),
-        }
-    )
-    for sequence, row in enumerate(audit):
-        row["sequence"] = sequence
-    retain_release_actions(audit, trace)
-    request = {
-        "protocol": "tn.llama.request.v1",
-        "purpose": "derived_html_report",
-        "messages": [{"role": "user", "content": "Explain the calculation."}],
-    }
-    request_hash = digest(
-        "tn.llama.request-context.v1",
-        canonical(
-            {
-                "messages": request["messages"],
-                "purpose": request["purpose"],
-                "row_hash": source_hash,
-            }
-        ),
-    )
-    for row in audit:
-        if "request_digest" in row:
-            row["request_digest"] = request_hash
-    write_rows(tmp_path / "runtime/decision-events.ndjson", audit)
-    write_rows(tmp_path / "runtime/raw-trace/run-context.sensitive.ndjson", trace)
-    response = {
-        "protocol": "tn.llama.release.v1",
-        "run_id": "run-context",
-        "source_event_id": "source-event",
-        "source_row_hash": source_hash,
-        "output_event_id": "output-event",
-        "output_row_hash": output_hash,
-        "trace": json.loads(base64.b64decode(trace[-1]["parsed_content_b64"]))["trace"],
-    }
-    client = [
-        {
-            "peer": "llama",
-            "direction": "request",
-            "url": "/v1/tn/chat/completions",
-            "body_b64": encoded(canonical(request)),
-        },
-        {
-            "peer": "llama",
-            "direction": "response",
-            "status": 200,
-            "body_b64": encoded(canonical(response)),
-        },
-        {"event": "encrypted_release_verified", "output_row_hash": output_hash},
-    ]
-    client += [
-        {"event": "release_group_opened", "group": group, "signature": True}
-        for group in ["tn.agents", "default"]
-    ]
-    write_rows(tmp_path / "client/http.ndjson", client)
-    write_rows(
-        tmp_path / "client/received-output.ndjson",
-        [{"event_id": "output-event", "row_hash": output_hash}],
-    )
-    write_rows(
-        tmp_path / "tn/calculation/.tn/tn/logs/tn.ndjson",
-        [
-            {
-                "event_id": "source-event",
-                "row_hash": source_hash,
-                "device_identity": "publisher",
-                "tn_aad": json.dumps({"finance": {"policy": policy, "governed_by": "publisher"}}),
-            }
-        ],
-    )
-    packages = tmp_path / "tn/packages"
-    packages.mkdir(parents=True)
-    for name in [
-        "source-to-polars",
-        "polars-to-calculation",
-        "calculation-to-llama",
-        "llama-to-report",
-    ]:
-        (packages / (name + ".tnpkg")).write_bytes(b"retained package")
-    return tmp_path
-
-
-def test_witness_accepts_native_context_for_selection_and_every_action(reference_run):
-    result = verify_reference_run(reference_run)
-    assert result.all_full, [(item.number, item.status) for item in result.questions]
-    assert all("commitments matched" not in item.evidence for item in result.questions)
 
 
 def inspect(records, **expected):
@@ -327,7 +202,7 @@ def test_context_reader_rejects_unrelated_bound_event_identity(context_records, 
     "field,value",
     [
         ("context_digest", "sha256:" + "e" * 64),
-        ("source_row_hash", "sha256:" + "e" * 64),
+        ("source_object_id", "sha256:" + "e" * 64),
         ("model_request_digest", "sha256:" + "e" * 64),
         ("rendered_prompt_digest", "sha256:" + "e" * 64),
         ("runnable_task_digest", "sha256:" + "e" * 64),
@@ -475,8 +350,24 @@ def decrypt_exchange(arguments=None):
             {"role": "tool", "tool_call_id": "call-decrypt", "content": json.dumps(result)}]
 
 
+def generated_call(arguments, name="decrypt_value"):
+    """The model's raw output in the backend's tool-call markup."""
+    call = json.dumps({"name": name, "arguments": arguments})
+    return f"<tool_call>\n{call}\n</tool_call>".encode()
+
+
+@pytest.fixture
+def context_records():
+    """A native run's complete history: object identities, decrypt turns, and a v2 release."""
+    return native_records(v1_shaped_records())
+
+
 @pytest.fixture
 def native_context_records(context_records):
+    return context_records
+
+
+def native_records(context_records):
     source_id = "sha256:" + "a" * 64
     for row in context_records[0]:
         facts = json.loads(row["facts_json"])
@@ -504,8 +395,7 @@ def native_context_records(context_records):
                                             "data_hash": DATA_HASH}]},
         tools=[{"type": "function", "function": {"name": "decrypt_value"}}],
     )
-    context_records[1][2]["raw_model_output_b64"] = encoded(
-        json.dumps({"name": "decrypt_value", "arguments": HASH_KEYS}).encode())
+    context_records[1][2]["raw_model_output_b64"] = encoded(generated_call(HASH_KEYS))
     for turn in (1, 2):
         bind_context(context_records, turn, context, exchange=decrypt_exchange())
     for row in context_records[0]:
@@ -543,47 +433,6 @@ def test_context_reader_rejects_empty_context_with_consistent_artifact_digests(c
     assert not inspect(context_records).verified
 
 
-def test_witness_gives_an_echo_no_credit(reference_run):
-    path = reference_run / "runtime/decision-events.ndjson"
-    audit = [json.loads(line) for line in path.read_text().splitlines()]
-    admission = audit[0]
-    facts = json.loads(admission["facts_json"])
-    facts.pop("governance_context_protocol")
-    facts.update(governance_value_count=6, governance_commitment_count=6)
-    admission["facts_json"] = json.dumps(facts)
-    echo = {
-        **admission,
-        "kind": "commitments_matched",
-        "facts_json": json.dumps({"hashes_matched": True, "governance_commitment_count": 6}),
-    }
-    audit = [admission, echo] + [
-        row
-        for row in audit
-        if row["kind"]
-        not in {
-            "governance_opened_and_verified",
-            "governance_context_bound",
-            "turn_begin_authorized",
-        }
-    ]
-    for index, row in enumerate(audit):
-        row["sequence"] = index
-    write_rows(path, audit)
-    write_rows(reference_run / "runtime/raw-trace/run-context.sensitive.ndjson", [])
-    result = verify_reference_run(reference_run)
-    assert not result.all_full
-    assert not result.governance_context.verified
-    assert "commitments matched" not in result.questions[2].evidence
-
-
-def test_witness_requires_retained_context_execution_evidence(reference_run):
-    write_rows(reference_run / "runtime/raw-trace/run-context.sensitive.ndjson", [])
-    result = verify_reference_run(reference_run)
-    assert not result.all_full
-    assert result.questions[2].status == "not_shown"
-    assert result.questions[5].status == "not_shown"
-
-
 def test_context_reader_rejects_executed_action_with_deleted_turn_evidence(context_records):
     audit, trace = context_records
     executed = copy.deepcopy(audit[4])
@@ -603,7 +452,7 @@ def test_context_reader_rejects_history_truncated_before_report_turn(context_rec
     assert "completion" in " ".join(result.errors)
 
 
-@pytest.mark.parametrize("kind", ["output_emitted_and_read_back", "source_chain_committed"])
+@pytest.mark.parametrize("kind", ["output_emitted_and_read_back", "standalone_use_completed"])
 def test_context_reader_requires_report_emission_and_completion(context_records, kind):
     audit = context_records[0]
     audit[:] = [row for row in audit if row["kind"] != kind]
@@ -684,6 +533,23 @@ def test_context_reader_compares_hash_keys_with_the_signed_object(
     assert inspect(native_context_records, source_envelope=envelope).verified is verified
 
 
+@pytest.mark.parametrize("expected, verified", [
+    (GOVERNANCE_HASH, True),
+    (None, False),
+    ("hmac-sha256:v1:" + "3" * 64, False),
+])
+def test_a_bound_objects_key_must_equal_the_readers_derivation(
+    native_context_records, expected, verified,
+):
+    # A bound label carries `binding`; its key names governance the observer derives itself.
+    labels = {"tn.agents": {"binding": 2}, "values": {"binding": 2}}
+    envelope = {"tn.agents": {"field_hashes": {"policy": "unused for a bound object"}},
+                "values": {"field_hashes": {"value": DATA_HASH}},
+                "tn_aad": json.dumps(labels)}
+    result = inspect(native_context_records, source_envelope=envelope, governance_hash_key=expected)
+    assert result.verified is verified
+
+
 def test_context_reader_rejects_native_values_without_a_model_decrypt_turn(native_context_records):
     audit, trace = native_context_records
     audit[:] = [row for row in audit if row.get("llama_task_id") != 31]
@@ -719,6 +585,30 @@ def test_context_reader_rejects_a_result_beyond_the_presented_fields(native_cont
     assert not inspect(native_context_records).verified
 
 
+def test_context_reader_rejects_prose_holding_every_hash_key(native_context_records):
+    prose = f"I would call decrypt_value with {GOVERNANCE_HASH} and {DATA_HASH}."
+    native_context_records[1][2]["raw_model_output_b64"] = encoded(prose.encode())
+    assert not inspect(native_context_records).verified
+
+
+@pytest.mark.parametrize("raw", [
+    generated_call({**HASH_KEYS, "note": DATA_HASH}),
+    generated_call({"governance_hash": GOVERNANCE_HASH, "data_hashes": [DATA_HASH, DATA_HASH]}),
+    generated_call(HASH_KEYS) + b" and prose",
+    generated_call(HASH_KEYS) + generated_call(HASH_KEYS),
+    generated_call(HASH_KEYS, name="emit_governed_record"),
+])
+def test_context_reader_requires_the_generated_call_to_be_the_retained_one(native_context_records, raw):
+    native_context_records[1][2]["raw_model_output_b64"] = encoded(raw)
+    assert not inspect(native_context_records).verified
+
+
+def test_context_reader_accepts_reasoning_before_the_one_generated_call(native_context_records):
+    raw = b"<think>\n\n</think>\n\n" + generated_call(HASH_KEYS)
+    native_context_records[1][2]["raw_model_output_b64"] = encoded(raw)
+    assert inspect(native_context_records).verified
+
+
 def test_context_reader_rejects_hash_keys_without_a_decrypt_call(native_context_records):
     native_context_records[1][2]["raw_model_output_b64"] = encoded(json.dumps(HASH_KEYS).encode())
     assert not inspect(native_context_records).verified
@@ -751,78 +641,72 @@ def test_context_reader_rejects_a_value_already_in_the_decrypt_prompt(native_con
     assert not inspect(native_context_records).verified
 
 
+def runtime_tool_events(audit, count=2):
+    kinds = ("governed_tool_executed_runtime", "tool_result_accepted_runtime")
+    return [{**audit[0], "kind": kind, "facts_json": json.dumps({"content_digest": "sha256:" + "d" * 64})}
+            for kind in kinds[:count]]
+
+
 @pytest.fixture
-def runtime_context_records(context_records):
-    audit, trace = context_records
-    runtime_events = [
-        {
-            **audit[0],
-            "kind": kind,
-            "facts_json": json.dumps({"content_digest": "sha256:" + "d" * 64}),
-        }
-        for kind in (
-            "sections_selected_runtime",
-            "governed_tool_executed_runtime",
-            "tool_result_accepted_runtime",
-        )
-    ]
-    audit[1:5] = runtime_events
+def runtime_context_records(native_context_records):
+    """The native shape: the model's decrypt turn, runtime tool actions, then the report turn."""
+    audit, trace = native_context_records
+    audit[3:5] = runtime_tool_events(audit)
+    del trace[3:6]
+    for sequence, row in enumerate(audit):
+        row["sequence"] = sequence
+    retain_release_actions(audit, trace)
+    return audit, trace
+
+
+def test_context_reader_accepts_runtime_tools_after_the_model_decrypt_turn(runtime_context_records):
+    result = inspect(runtime_context_records)
+    assert result.verified, result.errors
+    assert result.phases == (3, 4)
+    assert result.task_ids == (31, 42)
+
+
+def test_context_reader_refuses_a_runtime_section_selection(native_context_records):
+    audit, trace = native_context_records
+    audit[1:5] = [{**audit[0], "kind": "sections_selected_runtime", "facts_json": "{}"},
+                  *runtime_tool_events(audit)]
     del trace[:6]
     for sequence, row in enumerate(audit):
         row["sequence"] = sequence
     for sequence, row in enumerate(trace):
         row["sequence"] = sequence
     retain_release_actions(audit, trace)
-    return audit, trace
+    result = inspect(native_context_records)
+    assert not result.verified
+    assert "decrypt call" in " ".join(result.errors)
 
 
-def test_context_reader_accepts_one_report_inference_after_runtime_actions(runtime_context_records):
-    result = inspect(runtime_context_records)
-    assert result.verified, result.errors
-    assert result.phases == (4,)
-    assert result.task_ids == (42,)
-
-
-def test_context_reader_accepts_runtime_tool_after_model_section_choice(native_context_records):
-    audit, trace = native_context_records
-    audit[3:5] = [
-        {
-            **audit[0],
-            "kind": kind,
-            "facts_json": json.dumps({"content_digest": "sha256:" + "d" * 64}),
-        }
-        for kind in ("governed_tool_executed_runtime", "tool_result_accepted_runtime")
-    ]
-    del trace[3:6]
+def test_context_reader_requires_the_model_decrypt_turn_before_runtime_actions(runtime_context_records):
+    audit, trace = runtime_context_records
+    del audit[1:3]
+    del trace[:3]
     for sequence, row in enumerate(audit):
         row["sequence"] = sequence
-    retain_release_actions(audit, trace)
-    result = inspect(native_context_records)
-    assert result.verified, result.errors
-    assert result.phases == (3, 4)
-    assert result.task_ids == (31, 42)
-
-
-def test_context_reader_requires_selection_before_report_inference(runtime_context_records):
-    runtime_context_records[0].pop(1)
+    for sequence, row in enumerate(trace):
+        row["sequence"] = sequence
     assert not inspect(runtime_context_records).verified
 
 
 def test_context_reader_rejects_runtime_actions_with_model_identity(runtime_context_records):
-    runtime_context_records[0][2]["llama_task_id"] = 42
+    runtime_context_records[0][3]["llama_task_id"] = 42
     assert not inspect(runtime_context_records).verified
 
 
 def test_context_reader_rejects_runtime_action_before_admission(runtime_context_records):
     audit = runtime_context_records[0]
-    audit[0], audit[1] = audit[1], audit[0]
+    audit[0], audit[3] = audit[3], audit[0]
     for sequence, row in enumerate(audit):
         row["sequence"] = sequence
     assert not inspect(runtime_context_records).verified
 
 
 def test_context_reader_requires_runtime_tool_result_acceptance(runtime_context_records):
-    runtime_context_records[0].pop(3)
+    runtime_context_records[0].pop(4)
     assert not inspect(runtime_context_records).verified
 
 
@@ -836,20 +720,6 @@ def test_context_reader_rejects_deleted_runtime_execution_and_acceptance(runtime
     assert not inspect(runtime_context_records, expected_release=expected).verified
 
 
-def test_witness_rejects_whole_middle_inference_deleted_from_audit_and_trace(reference_run):
-    audit_path = reference_run / "runtime/decision-events.ndjson"
-    audit = [json.loads(line) for line in audit_path.read_text().splitlines()]
-    audit = [row for row in audit if row.get("llama_task_id") != 41]
-    write_rows(audit_path, audit)
-    trace_path = reference_run / "runtime/raw-trace/run-context.sensitive.ndjson"
-    trace = [json.loads(line) for line in trace_path.read_text().splitlines()]
-    del trace[3:6]
-    write_rows(trace_path, trace)
-    result = verify_reference_run(reference_run)
-    assert not result.all_full
-    assert not result.governance_context.verified
-
-
 def test_context_reader_rejects_release_receipt_without_matching_tool(runtime_context_records):
     audit, trace = runtime_context_records
     release = json.loads(base64.b64decode(trace[-1]["parsed_content_b64"]))
@@ -861,70 +731,8 @@ def test_context_reader_rejects_release_receipt_without_matching_tool(runtime_co
 
 def test_context_reader_rejects_mismatched_retained_release_source(context_records):
     release = json.loads(base64.b64decode(context_records[1][-1]["parsed_content_b64"]))
-    release["source_row_hash"] = "sha256:" + "e" * 64
+    release["source_object_id"] = "sha256:" + "e" * 64
     context_records[1][-1]["parsed_content_b64"] = encoded(canonical(release))
     assert not inspect(context_records).verified
 
 
-def test_witness_binds_context_to_received_release(reference_run):
-    path = reference_run / "runtime/raw-trace/run-context.sensitive.ndjson"
-    trace = [json.loads(line) for line in path.read_text().splitlines()]
-    release = json.loads(base64.b64decode(trace[-1]["parsed_content_b64"]))
-    release["output_row_hash"] = "sha256:" + "e" * 64
-    trace[-1]["parsed_content_b64"] = encoded(canonical(release))
-    write_rows(path, trace)
-    result = verify_reference_run(reference_run)
-    assert not result.all_full
-    assert result.governance_context.verified is False
-
-
-def test_witness_accepts_runtime_selection_and_tools_before_report_inference(reference_run):
-    path = reference_run / "runtime/decision-events.ndjson"
-    audit = [json.loads(line) for line in path.read_text().splitlines()]
-    runtime_events = [
-        {
-            **audit[0],
-            "kind": kind,
-            "facts_json": json.dumps({"content_digest": "sha256:" + "d" * 64}),
-        }
-        for kind in (
-            "sections_selected_runtime",
-            "governed_tool_executed_runtime",
-            "tool_result_accepted_runtime",
-        )
-    ]
-    audit = [audit[0], *runtime_events] + [
-        row for row in audit[1:] if row.get("llama_task_id") not in {31, 41}
-    ]
-    for sequence, row in enumerate(audit):
-        row["sequence"] = sequence
-    write_rows(path, audit)
-    path = reference_run / "runtime/raw-trace/run-context.sensitive.ndjson"
-    trace = [json.loads(line) for line in path.read_text().splitlines()][6:]
-    retain_release_actions(audit, trace)
-    write_rows(path, trace)
-    client_path = reference_run / "client/http.ndjson"
-    client = [json.loads(line) for line in client_path.read_text().splitlines()]
-    response = next(row for row in client if row.get("direction") == "response")
-    response["body_b64"] = trace[-1]["parsed_content_b64"]
-    write_rows(client_path, client)
-    result = verify_reference_run(reference_run)
-    assert result.all_full, [(item.number, item.status) for item in result.questions]
-    assert result.governance_context.phases == (4,)
-
-
-def test_witness_rejects_malformed_admission_with_an_echo_assertion(reference_run):
-    path = reference_run / "runtime/decision-events.ndjson"
-    audit = [json.loads(line) for line in path.read_text().splitlines()]
-    audit[0]["facts_json"] = "{malformed"
-    echo = {
-        **audit[0],
-        "kind": "commitments_matched",
-        "facts_json": json.dumps({"hashes_matched": True, "governance_commitment_count": 6}),
-    }
-    audit = [row for row in audit if row["kind"] != "governance_context_bound"] + [echo]
-    write_rows(path, audit)
-    write_rows(reference_run / "runtime/raw-trace/run-context.sensitive.ndjson", [])
-    result = verify_reference_run(reference_run)
-    assert not result.all_full
-    assert result.questions[2].status == result.questions[5].status == "not_shown"

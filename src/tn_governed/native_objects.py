@@ -52,6 +52,15 @@ class CarriedPublication:
         raise FileNotFoundError(f"publication is not carried: {identity}")
 
 
+def include_carrier(store, carrier):
+    """Retain every publication a carrier holds, in a native collection or a publication store."""
+    if isinstance(store, NativeObjects):
+        store.include(carrier)
+    else:
+        for obj in carrier.objects():
+            store.put(obj)
+
+
 class NativeObjects:
     """Endpoint-owned native references; no files, serialization, or database I/O.
 
@@ -63,7 +72,6 @@ class NativeObjects:
         self._objects = {}
         self._dependencies = {}
         self._records = {}
-        self._record_snapshots = {}
         self._included = {}
         self._lock = threading.RLock()
 
@@ -121,7 +129,6 @@ class NativeObjects:
             self.put(snapshot)
             self.put(publication)
             records[sequence] = after
-            self._record_snapshots[(context_id, sequence)] = before
             self.link(after, before)
 
     def record_ids(self, context_id):
@@ -187,10 +194,7 @@ class NativeObjects:
                 archive.put(obj)
             for context_id, records in self._records.items():
                 for sequence, identity in sorted(records.items()):
-                    archive._write(
-                        archive.root / "tapes" / context_id / f"{sequence:08d}.ref",
-                        identity.encode("ascii"),
-                    )
+                    archive.put_reference(context_id, sequence, identity)
             archive.commit()
         return archive
 

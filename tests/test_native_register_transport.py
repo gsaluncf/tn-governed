@@ -23,7 +23,7 @@ def test_explicit_publisher_and_source_keep_their_own_registers(tmp_path, monkey
     with tn.Session(POLICY, groups=["finance"]) as source:
         configure("publisher")
         with tn.Session(POLICY, groups=["finance"]) as publisher:
-            initial = source.create_obj(
+            initial = source.create(
                 {"amount": 42},
                 source.policy("portfolio.feed.data.v1"),
                 object_type="portfolio.feed.data.v1",

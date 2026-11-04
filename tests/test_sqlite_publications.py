@@ -150,7 +150,8 @@ store.put_record(tn.GovernedObject.read(root/'snapshot'), tn.GovernedObject.read
 os._exit(23)
 '''
     result = subprocess.run([sys.executable, "-c", code, str(tmp_path), str(commit)],
-                            capture_output=True, text=True, env=os.environ.copy(), timeout=20)
+                            capture_output=True, text=True, timeout=20,
+                            env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)})
     assert result.returncode == 23, result.stderr
     with SQLitePublicationStore(database) as recovered:
         assert recovered.record_ids("crash") == ((released.id,) if commit else ())
@@ -229,3 +230,28 @@ def test_verifier_can_open_storage_read_only(tmp_path, backend):
     with pytest.raises(sqlite3.OperationalError):
         open_publication_store(tmp_path / "missing", backend="sqlite", read_only=True)
     assert not (tmp_path / "missing").exists()
+
+
+def test_each_backend_refuses_to_open_over_the_other(tmp_path):
+    from tn_governed.publications import PublicationStore
+
+    with SQLitePublicationStore(tmp_path / "database"):
+        pass
+    with pytest.raises(ValueError, match="backend"):
+        PublicationStore(tmp_path / "database")
+    with PublicationStore(tmp_path / "files") as files:
+        files.put(publication())
+    with pytest.raises(ValueError, match="backend"):
+        SQLitePublicationStore(tmp_path / "files")
+
+
+def test_native_export_refuses_an_existing_sqlite_archive(tmp_path):
+    from tn_governed.native_objects import NativeObjects
+
+    with SQLitePublicationStore(tmp_path):
+        pass
+    objects = NativeObjects()
+    objects.put(publication())
+    with pytest.raises(ValueError, match="backend"):
+        objects.export(tmp_path)
+    assert not (tmp_path / "objects").exists()

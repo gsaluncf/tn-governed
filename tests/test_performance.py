@@ -67,7 +67,8 @@ def test_timing_boundaries_exclude_startup_and_offline_verification():
         "generation": 7,
         "total": 428,
     }
-    assert perf.elapsed_processing(times, model=True) == 22
+    # Generation holds model inference, which is reported beside processing, never in it.
+    assert perf.elapsed_processing(times, model=True) == 15
     assert perf.elapsed_processing(times, model=False) == 15
     with pytest.raises(ValueError, match="generation"):
         perf.elapsed_processing({"query": 1}, model=True)

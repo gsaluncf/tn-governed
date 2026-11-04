@@ -264,11 +264,12 @@ def prepare_native_model(value, *, context, input_session, output_session, recip
         "publications": [wire(i) for i in sorted(publication_ids)],
         "claim_records": [wire(i) for i in sorted({claim.id for claim in claims})],
     }).encode())
-    for config in (input_config, output_config):
-        readers = config.parent / "readers"
-        readers.mkdir(exist_ok=True)
-        for kit in (config.parent / "keys").glob("*.btn.mykit"):
-            shutil.copyfile(kit, readers / kit.name)
+    # The runtime's independent output reader takes its kits from this copy; the input
+    # reader decrypts with the input session's own keystore.
+    readers = output_config.parent / "readers"
+    readers.mkdir(exist_ok=True)
+    for kit in (output_config.parent / "keys").glob("*.btn.mykit"):
+        shutil.copyfile(kit, readers / kit.name)
     source_cfg, output_cfg = yaml.safe_load(input_config.read_text()), yaml.safe_load(output_config.read_text())
     if source_cfg["ceremony"]["id"] == output_cfg["ceremony"]["id"]:
         raise ValueError("native model input and output require independent ceremonies")
@@ -298,7 +299,6 @@ def prepare_native_model(value, *, context, input_session, output_session, recip
             "output_policy": {name: metadata.policies[0].fields[name] for name in
                 ("instruction", "use_for", "do_not_use_for", "consequences", "on_violation_or_error")},
         },
-        "reader_key_dir": translate(input_config.parent / "readers"),
         "input_index_key_path": translate(input_config.parent / "keys/index_master.key"),
         "ceremony_id": source_cfg["ceremony"]["id"], "governance_group": "tn.agents", "input_index_epoch": 0,
         "output_tn_config_path": translate(output_config),

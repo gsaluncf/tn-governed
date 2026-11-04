@@ -338,3 +338,62 @@ def test_import_cannot_relabel_an_unrelated_claim_as_a_contribution(endpoints):
         endpoint.import_publication(
             publication, group="finance", field="rows", claims=(endpoint.claims(unrelated)[0].id,)
         )
+
+
+def test_endpoint_artifacts_designate_their_evidence_manifest(endpoints):
+    from tn_governed.artifact_types import GovernedArtifact
+    from tn_governed.values.string import ValueReference
+
+    peers, policies = endpoints
+    source = peers["source"]
+    value = source.originate(5, policies=(policies[0],))
+    derived = source.execute("double", (value,), lambda values: values[0] * 2)
+    for artifact in (value, derived):
+        assert source.store.read(artifact.reference.object_id).manifest_group == "evidence"
+    undesignated = source.session.create({"value": 5}, policies[0], object_type="tn.artifact", group="values")
+    undesignated.set(None, {"manifest": source.metadata(value)}, group="evidence")
+    undesignated.select(["values", "evidence"])
+    publication = undesignated.release(use=tn.UseContext("source", "analysis", "originate"),
+                                       to="governed-runtime", object_type="tn.artifact", decide=lambda _: True)
+    source.store.put(publication)
+    handle = GovernedArtifact(ValueReference(publication.id, "value", "values"), value.decision_id, value.result_id)
+    with pytest.raises(tn.governed.GovernedError):
+        source.metadata(handle)
+
+
+@pytest.mark.parametrize("count", [63, 64, 65])
+def test_an_artifact_with_many_inputs_verifies_against_its_packed_decision(endpoints, count):
+    peers, policies = endpoints
+    source = peers["source"]
+    values = [source.originate(index, policies=(policies[0],)) for index in range(count)]
+    total = source.execute("sum", values, lambda opened: sum(opened))
+    assert source.reveal(total, destination="internal") == sum(range(count))
+    assert len(source.metadata(total)["parents"]) == count
+
+
+def test_import_accepts_a_claim_on_a_field_its_carried_holder_signs(endpoints):
+    from tn_governed.values.string import ValueReference
+
+    peers, policies = endpoints
+    source, analyst = peers["source"], peers["analyst"]
+    use = tn.UseContext("source", "analysis", "release")
+    data = source.session.create({"rows": [5]}, policies[0], object_type="frame", group="finance")
+    data.set(None, {"label": "desk"}, group="values")
+    source.store.put(data.snapshot)
+    holder = data.release(use=use, to="analyst", decide=lambda _: True)
+    working = source.session.receive(holder, use=use, groups=["values"], decide=lambda _: True)
+    carrier = working.release(use=use, to="analyst", decide=lambda _: True)
+    assert "finance" not in carrier.group_names
+    assert holder.id in {item.id for item in carrier.carried}
+    for obj in (holder, carrier):
+        source.store.put(obj)
+    subject = ValueReference(carrier.id, "rows", "finance")
+    claim_id = source.recorder.append(
+        "Claim", call_id="source-claim", application="source", purpose="analysis",
+        operation="attest", inputs=(subject,), details={"statement": "estimates"},
+    )
+    wires = tuple(source.store.get(identity) for identity in source.store.publication_sizes())
+    result = analyst.import_publication(carrier, group="finance", field="rows", claims=(claim_id,),
+                                        publications=wires, decide=lambda _: True)
+    assert analyst.claims(result)[0].subjects == (subject,)
+    assert analyst.reveal(result, destination="internal") == [5]

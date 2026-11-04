@@ -13,7 +13,7 @@ import tn
 from test_sql_query_results import database as database
 from test_sql_query_results import sql_endpoint as sql_endpoint
 
-from tn_governed.values.demo import handle
+from experiments.pvldb_evaluation.case_study import handle
 from tn_governed.values.sql import source_identity
 
 

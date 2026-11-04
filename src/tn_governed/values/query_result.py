@@ -12,91 +12,14 @@ import tn
 from tn_governed.native_objects import CarriedPublication, NativeObjects
 
 from .evidence import EvidenceError
+from .holders import field_hash
 from .primitives import VALUE_TYPE
 from .query import SourceColumn, decode_sql, digest, encode_sql
+from .query_receipt import QueryTransport, check_result_binding
 from .runtime import Request
 from .string import MetadataUnavailable, ValueReference
-from .holders import field_hash
 
 RESULT_SCHEMA = "tn.sql-result.v1"
-
-
-def _verify_row_key(key):
-    if not isinstance(key, list) or not key or [encode_sql(decode_sql(v)) for v in key] != key:
-        raise EvidenceError("query lineage has an invalid row identity")
-
-
-def _verify_contributor_rows(manifest, lineage, sources):
-    """Check shared row identities against the result shape and assigned sources."""
-    rows, columns = lineage["contributor_rows"], lineage["contributor_columns"]
-    width = len(rows[0]) if rows else 0
-    if (len(rows) != manifest["row_count"]
-            or len(columns) != len(manifest["binding"]["output_schema"])
-            or any(len(row) != width for row in rows)):
-        raise EvidenceError("query lineage does not cover its result positions")
-    for item in (source for column in columns for source in column):
-        if ("main", item["table"], item["column"]) not in sources or item["role"] not in {
-            "value", "control", "presence",
-        }:
-            raise EvidenceError("query lineage names an unassigned contributor")
-        index = item["identity"]
-        if index is not None and (type(index) is not int or (rows and not 0 <= index < width)):
-            raise EvidenceError("query lineage has an invalid row identity")
-    for member in (item for row in rows for members in row for item in members):
-        if type(member) is not int:
-            _verify_row_key(json.loads(member))
-
-
-def _verify_lineage(manifest):
-    binding, lineage = manifest["binding"], manifest["lineage"]
-    sources = {(item["database"], item["table"], item["column"]) for item in binding["sources"]}
-    try:
-        if {
-            (item["database"], item["table"], item["column"]) for item in lineage["source_columns"]
-        } != sources:
-            raise EvidenceError("query lineage source scope differs from its assigned sources")
-        if "contributor_rows" in lineage:
-            _verify_contributor_rows(manifest, lineage, sources)
-            return
-        positions = set()
-        for cell in lineage["cells"]:
-            position = cell["row"], cell["column"]
-            if (
-                any(type(item) is not int for item in position)
-                or not 0 <= position[0] < manifest["row_count"]
-                or not 0 <= position[1] < len(binding["output_schema"])
-                or position in positions
-            ):
-                raise EvidenceError("query lineage has an invalid result position")
-            positions.add(position)
-        expected_positions = {
-            (row, column)
-            for row in range(manifest["row_count"])
-            for column in range(len(binding["output_schema"]))
-        }
-        if (
-            lineage["cells"] or lineage["row_support"] in {"known", "partial"}
-        ) and positions != expected_positions:
-            raise EvidenceError("query lineage does not cover its result positions")
-        for item in [
-            *lineage["controls"],
-            *(contributor for cell in lineage["cells"] for contributor in cell["contributors"]),
-        ]:
-            if ("main", item["table"], item["column"]) not in sources or item["role"] not in {
-                "value",
-                "control",
-                "presence",
-            }:
-                raise EvidenceError("query lineage names an unassigned contributor")
-            key = item["row_key"]
-            if key is not None:
-                _verify_row_key(key)
-            if lineage["precision"] == "exact" and key is None:
-                raise EvidenceError("exact query lineage requires contributor identities")
-    except (KeyError, TypeError, ValueError) as exc:
-        if isinstance(exc, EvidenceError):
-            raise
-        raise EvidenceError("malformed query lineage") from exc
 
 
 @dataclass(frozen=True)
@@ -109,114 +32,6 @@ class AdmittedQuery:
     reference: ValueReference
     decision_id: str
     claims: tuple = ()
-
-
-@dataclass(frozen=True)
-class QueryTransport:
-    """Transport container for canonical TN wires; it grants no authority."""
-
-    object_id: str
-    decision_id: str
-    result_id: str
-    source: dict
-    sources: tuple
-    packets: tuple
-    edition: dict
-    edition_wire: bytes
-    revision_wires: tuple
-    objects: tuple[bytes, ...]
-
-    def to_bytes(self):
-        return json.dumps(
-            {
-                "schema": "tn.sql-transport.v1",
-                "object_id": self.object_id,
-                "decision_id": self.decision_id,
-                "result_id": self.result_id,
-                "source": self.source,
-                "sources": self.sources,
-                "edition": self.edition,
-                "edition_wire": self.edition_wire.decode("utf-8"),
-                "revision_wires": [
-                    (identity, wire.decode("utf-8")) for identity, wire in self.revision_wires
-                ],
-                "packets": [
-                    {
-                        "table": table,
-                        "assignment_wire": packet.assignment_wire.decode("utf-8"),
-                        "revision_wires": [
-                            (identity, wire.decode("utf-8"))
-                            for identity, wire in packet.revision_wires
-                        ],
-                        "unity_volume_id": packet.unity_volume_id,
-                    }
-                    for table, packet in self.packets
-                ],
-                "objects": [wire.decode("utf-8") for wire in self.objects],
-            },
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8")
-
-    @classmethod
-    def from_bytes(cls, wire):
-        from .catalog import ResolutionPacket
-
-        def unique(pairs):
-            value = {}
-            for key, item in pairs:
-                if key in value:
-                    raise EvidenceError("duplicate SQL transport field")
-                value[key] = item
-            return value
-
-        body = json.loads(wire, object_pairs_hook=unique)
-        required = {
-            "schema",
-            "object_id",
-            "decision_id",
-            "result_id",
-            "source",
-            "sources",
-            "packets",
-            "edition",
-            "edition_wire",
-            "revision_wires",
-            "objects",
-        }
-        if (
-            not isinstance(body, dict)
-            or set(body) != required
-            or body["schema"] != "tn.sql-transport.v1"
-        ):
-            raise EvidenceError("invalid SQL transport schema")
-        if not isinstance(body["objects"], list) or len(body["objects"]) > 65536:
-            raise EvidenceError("invalid SQL transport object set")
-        return cls(
-            body["object_id"],
-            body["decision_id"],
-            body["result_id"],
-            body["source"],
-            tuple(body["sources"]),
-            tuple(
-                (
-                    item["table"],
-                    ResolutionPacket(
-                        item["assignment_wire"].encode("utf-8"),
-                        tuple(
-                            (identity, value.encode("utf-8"))
-                            for identity, value in item["revision_wires"]
-                        ),
-                        item["unity_volume_id"],
-                    ),
-                )
-                for item in body["packets"]
-            ),
-            body["edition"],
-            body["edition_wire"].encode("utf-8"),
-            tuple((identity, value.encode("utf-8")) for identity, value in body["revision_wires"]),
-            tuple(value.encode("utf-8") for value in body["objects"]),
-        )
 
 
 def publish_result(context, rows, binding, lineage, *, request, decision_id, query_id):
@@ -478,40 +293,15 @@ class GovernedQueryResult:
             or manifest.get("binding_id") != digest(manifest.get("binding"))
         ):
             raise EvidenceError("query result has an invalid signed binding")
-        binding = manifest["binding"]
-        lineage = manifest.get("lineage")
         record = self.context.editions[self.object_id]
-        if (
-            not isinstance(binding, dict)
-            or binding.get("schema") != "tn.sql-query.v1"
-            or binding.get("sources") != list(self.resolution.sources)
-            or binding.get("snapshot") != self.source
-            or manifest["binding_id"] != record.grant_ref
-            or not isinstance(lineage, dict)
-            or binding.get("lineage_precision") not in {"exact", "conservative"}
-            or binding["lineage_precision"] != lineage.get("precision")
-            or binding.get("lineage_provider") != lineage.get("provider")
-            or lineage.get("row_support") not in {"known", "partial", "unknown"}
-            or (binding["lineage_precision"] == "exact" and lineage["row_support"] != "known")
-            or type(manifest.get("row_count")) is not int
-            or manifest["row_count"] < 0
-        ):
-            raise EvidenceError("query result differs from the admitted source assignments")
-        schema = binding.get("output_schema")
-        if (
-            not isinstance(schema, list)
-            or not schema
-            or any(
-                not isinstance(column, dict)
-                or column.get("position") != index
-                or type(column.get("position")) is not int
-                or not isinstance(column.get("name"), str)
-                or not isinstance(column.get("storage_types"), list)
-                for index, column in enumerate(schema)
-            )
-        ):
-            raise EvidenceError("query result requires an indexed output schema")
-        _verify_lineage(manifest)
+        check_result_binding(manifest, sources=list(self.resolution.sources), source=self.source,
+                             grant_ref=record.grant_ref)
+        self._check_authorized(data, manifest)
+        return data, manifest
+
+    def _check_authorized(self, data, manifest):
+        """The signed Result and Decision name this publication, its binding, and its manifest."""
+        binding = manifest["binding"]
         result = self.context.recorder.read(self.result_id)
         decision = self.context.recorder.read(self.decision_id)
         rb, db = result.body, decision.body
@@ -544,7 +334,6 @@ class GovernedQueryResult:
             )
         ):
             raise EvidenceError("query result is not bound to its authorized publication")
-        return data, manifest
 
     def metadata(self):
         return self._metadata()[1]

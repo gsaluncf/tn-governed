@@ -13,7 +13,7 @@ from collections.abc import Callable, Mapping, Sequence
 import polars as pl
 import tn
 from tn_polars.build import build_opa_wasm
-from tn_polars.compiler import candidate_to_policy
+from tn_polars.policy import candidate_to_policy
 from tn_polars.policy import CompiledPolicy
 from tn_polars.registry import UnityCatalogRegistry, verified_edition_entry, write_edition_bundle
 from tn_polars.release import PolicyDenied
@@ -61,15 +61,6 @@ class UnityCatalogConfig:
     catalog: str = "portfolio"
     schema: str = "finance"
     token: str | None = None
-
-
-@dataclass(frozen=True)
-class PublishedFinanceFeeds:
-    """The catalog feed names and local artifacts published during setup."""
-
-    feed_names: tuple[str, str]
-    positions_bundle: Path
-    market_prices_bundle: Path
 
 
 @dataclass(frozen=True)
@@ -165,7 +156,7 @@ def publish_dataset_edition(
     frame = pl.DataFrame(rows)
     if set(frame.columns) != set(compiled.fields):
         raise ValueError("evaluator fields must describe every source column exactly")
-    data = session.create_obj(
+    data = session.create(
         {"feed_name": dataset, "rows": frame.to_dicts()}, policy,
         object_type=object_type, group=group,
     )
@@ -325,25 +316,6 @@ def build_finance_feed_bundles(
     return bundles
 
 
-def publish_finance_feeds(
-    output_dir: Path, *, config: UnityCatalogConfig | None = None
-) -> PublishedFinanceFeeds:
-    """Build and register both fixed feeds through Unity Catalog."""
-    bundles = build_finance_feed_bundles(output_dir)
-    catalog = unity_catalog_registry(config)
-    for feed_name in FEED_NAMES:
-        catalog.register_feed(feed_name, bundles[feed_name])
-    return PublishedFinanceFeeds(FEED_NAMES, bundles[POSITIONS_FEED], bundles[MARKET_PRICES_FEED])
-
-
-def resolve_finance_feeds(config: UnityCatalogConfig | None = None) -> dict[str, object]:
-    """Resolve both input feeds from Unity for the portfolio workflow."""
-    catalog = unity_catalog_registry(config)
-    entries = {feed_name: catalog.get(feed_name) for feed_name in FEED_NAMES}
-    _validate_resolved_feeds(entries)
-    return entries
-
-
 def _load_governance(path: Path) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
@@ -354,20 +326,6 @@ def _compiled_policy(governance: dict, fields: dict[str, str]):
         "fields": fields, "release": {"public": {"allow_aggregates": False, "min_group_size": 3}},
     }
     return candidate_to_policy(candidate, governance, set(fields))
-
-
-def _validate_resolved_feeds(entries: dict[str, object]) -> None:
-    """Reject catalog locations that do not resolve to their declared feed bundle."""
-    positions = entries[POSITIONS_FEED]
-    prices = entries[MARKET_PRICES_FEED]
-    if positions.policy.fields != _FEEDS[POSITIONS_FEED]["fields"]:
-        raise ValueError(f"{POSITIONS_FEED} resolved with unexpected fields")
-    if prices.policy.fields != _FEEDS[MARKET_PRICES_FEED]["fields"]:
-        raise ValueError(f"{MARKET_PRICES_FEED} resolved with unexpected fields")
-    if positions.policy.policy_ref != POLICY_REF or prices.policy.policy_ref != POLICY_REF:
-        raise ValueError("resolved finance feeds do not share the required policy reference")
-    if positions.tn_governance != prices.tn_governance:
-        raise ValueError("resolved finance feeds do not share one governance body")
 
 
 def _write_bundle(bundle: Path, policy, governance: dict, source: Path) -> None:

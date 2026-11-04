@@ -197,7 +197,7 @@ def blank_statement(_context, details, _request):
 
 
 def stale_decision(context, details, _request):
-    decisions = [i for i in context.recorder._ids[:3]]
+    decisions = context.recorder.ids()[:3]
     return {**details, "decision_id": decisions[0]}
 
 

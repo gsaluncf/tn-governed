@@ -2,12 +2,7 @@
 
 from html.parser import HTMLParser
 
-from .evidence import EvidenceError
-
-
-def require(condition, message):
-    if not condition:
-        raise EvidenceError(message)
+from .evidence import require
 
 
 class PlainReportText(HTMLParser):

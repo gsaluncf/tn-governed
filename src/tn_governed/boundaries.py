@@ -1,6 +1,6 @@
 """Required-governed application boundaries validate handles before dispatch."""
 
-from .endpoints import GovernedArtifact
+from .artifact_types import GovernedArtifact
 
 
 class BoundaryError(TypeError):

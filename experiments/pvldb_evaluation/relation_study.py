@@ -36,7 +36,7 @@ from tn_governed.values.provision import provision
 from tn_governed.values.query_result import GovernedQueryResult, QueryTransport
 from tn_governed.values.sql import GovernedSQL, source_identity
 
-from .performance import peak_memory_bytes, reset_peak_memory
+from .performance_stats import peak_memory_bytes, reset_peak_memory
 from .tpch_data import QUERIES, SCHEMA, generate
 
 USE = tn.UseContext("analytics", "internal", "select")

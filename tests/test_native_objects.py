@@ -5,7 +5,8 @@ import sqlite3
 import pytest
 import tn
 
-from tn_governed.endpoints import ArtifactBundle, Endpoint
+from tn_governed.artifact_types import ArtifactBundle
+from tn_governed.endpoints import Endpoint
 from tn_governed.native_objects import CarriedPublication, NativeObjects
 from tn_governed.values.runtime import Assessment
 

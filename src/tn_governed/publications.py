@@ -32,13 +32,8 @@ def _string_digest(object_id: str) -> str:
     return object_id[7:]
 
 
-def sync_writes(paths) -> None:
-    """Make a group of written files and their directory entries durable before their checkpoint."""
-    directories = set()
-    for path in paths:
-        with open(path, "rb+") as stream:
-            os.fsync(stream.fileno())
-        directories.add(Path(path).parent)
+def sync_directories(directories) -> None:
+    """Make directory entries durable where the platform can synchronize a directory."""
     if not hasattr(os, "O_DIRECTORY"):
         return
     for directory in directories:
@@ -49,16 +44,42 @@ def sync_writes(paths) -> None:
             os.close(descriptor)
 
 
-def write_once(path: Path, content: bytes, *, sync: bool = True) -> None:
+def sync_writes(paths, directories=()) -> None:
+    """Make a group of written files and their directory entries durable before their checkpoint.
+
+    `directories` names further directories whose entries changed, such as the parents
+    of directories the writes created.
+    """
+    changed = set(directories)
+    for path in paths:
+        with open(path, "rb+") as stream:
+            os.fsync(stream.fileno())
+        changed.add(Path(path).parent)
+    sync_directories(changed)
+
+
+def _make_parents(path: Path) -> list[Path]:
+    """Create `path`'s directory; return every directory whose entries changed."""
+    missing, directory = [], path.parent
+    while not directory.exists():
+        missing.append(directory)
+        directory = directory.parent
+    for created in reversed(missing):
+        created.mkdir(exist_ok=True)
+    return [created.parent for created in reversed(missing)] + [path.parent]
+
+
+def write_once(path: Path, content: bytes, *, sync: bool = True) -> list[Path]:
     """Atomically expose complete bytes without replacing any existing representation.
 
-    A caller that passes ``sync=False`` owes a later ``sync_writes`` over the same paths.
+    A caller that passes ``sync=False`` owes a later ``sync_writes`` over the same path
+    and the directories this returns.
     """
     if path.exists():
         if path.read_bytes() != content:
             raise ValueError(f"immutable publication representation differs: {path.name}")
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
+        return []
+    changed = _make_parents(path)
     descriptor, temporary = tempfile.mkstemp(prefix=".publication-", dir=path.parent)
     try:
         with os.fdopen(descriptor, "wb") as output:
@@ -75,17 +96,42 @@ def write_once(path: Path, content: bytes, *, sync: bool = True) -> None:
                 ) from None
     finally:
         Path(temporary).unlink(missing_ok=True)
+    if not sync:
+        return changed
+    sync_directories(changed)
+    return []
 
 
-class PublicationStore:
-    """Append-only signed wire storage with an immutable, explicitly verified index."""
+def encode_publication(publication) -> tuple[str, bytes, str]:
+    """A native publication's identity, exact wire bytes, and their digest, for storage."""
+    if not isinstance(publication, tn.GovernedObject):
+        raise TypeError("publication storage requires a native GovernedObject")
+    wire = publication.forward()
+    object_digest(publication.id)
+    return publication.id, wire, hashlib.sha256(wire).hexdigest()
 
-    def __init__(self, root: Path | str, *, read_only: bool = False,
-                 group_commit: bool = False) -> None:
-        self.root = Path(root)
-        self.read_only = read_only
-        self.group_commit = group_commit
-        self._unsynced = []
+
+def verified_publication(object_id: str, wire: bytes, wire_sha256) -> tn.GovernedObject:
+    """Verify retained bytes against their recorded digest and native identity, not their use."""
+    if hashlib.sha256(wire).hexdigest() != wire_sha256:
+        raise ValueError("retained publication wire digest differs from its immutable index")
+    publication = tn.GovernedObject.read(io.BytesIO(wire))
+    if publication.id != object_id or publication.forward() != wire:
+        raise ValueError("retained publication has the wrong native identity")
+    return publication
+
+
+def stored_backend(root: Path) -> str | None:
+    """The storage format already at `root`: "files", "sqlite", or None; both is refused."""
+    has_database = (root / "publications.sqlite3").exists()
+    has_files = (root / "objects").exists() or (root / "index").exists()
+    if has_database and has_files:
+        raise ValueError("unknown or ambiguous publication storage backend")
+    return "sqlite" if has_database else "files" if has_files else None
+
+
+class Storage:
+    """What both storage backends share: closing, serialized reads, and group commits."""
 
     def __enter__(self):
         return self
@@ -94,17 +140,37 @@ class PublicationStore:
         self.close()
 
     def close(self) -> None:
-        """The file backend has no persistent connection to close."""
-
-    def _write(self, path: Path, content: bytes) -> None:
-        write_once(path, content, sync=not self.group_commit)
-        if self.group_commit:
-            self._unsynced.append(path)
+        """A backend with no persistent connection has nothing to close."""
 
     def commit(self) -> None:
         """End a group of writes. Readers rely on them only after this returns."""
-        sync_writes(self._unsynced)
+
+    def get(self, object_id: str) -> bytes:
+        return self.read(object_id).forward()
+
+
+class PublicationStore(Storage):
+    """Append-only signed wire storage in files, with an immutable, explicitly verified index."""
+
+    def __init__(self, root: Path | str, *, read_only: bool = False,
+                 group_commit: bool = False) -> None:
+        self.root = Path(root)
+        if stored_backend(self.root) == "sqlite":
+            raise ValueError("requested backend differs from existing publication storage")
+        self.read_only = read_only
+        self.group_commit = group_commit
+        self._unsynced, self._unsynced_directories = [], set()
+
+    def _write(self, path: Path, content: bytes) -> None:
+        changed = write_once(path, content, sync=not self.group_commit)
+        if self.group_commit:
+            self._unsynced.append(path)
+            self._unsynced_directories.update(changed)
+
+    def commit(self) -> None:
+        sync_writes(self._unsynced, self._unsynced_directories)
         self._unsynced.clear()
+        self._unsynced_directories.clear()
 
     def publication_sizes(self) -> dict[str, int]:
         """Logical wire sizes for measurement, not a verification result."""
@@ -114,8 +180,15 @@ class PublicationStore:
         validate_record_position(context_id, sequence)
         self.put(snapshot)
         self.put(publication)
-        self._write(self.root / "tapes" / context_id / f"{sequence:08d}.ref",
-                    publication.id.encode("ascii"))
+        self.put_reference(context_id, sequence, publication.id)
+
+    def put_reference(self, context_id, sequence, object_id) -> None:
+        """Retain one record-chain position; an existing position never changes."""
+        validate_record_position(context_id, sequence)
+        object_digest(object_id)
+        if self.read_only:
+            raise PermissionError("publication store is read-only")
+        self._write(self.root / "tapes" / context_id / f"{sequence:08d}.ref", object_id.encode("ascii"))
 
     def record_ids(self, context_id) -> tuple[str, ...]:
         validate_record_position(context_id, 1)
@@ -142,25 +215,15 @@ class PublicationStore:
     def put(self, object: tn.GovernedObject) -> str:
         if self.read_only:
             raise PermissionError("publication store is read-only")
-        if not isinstance(object, tn.GovernedObject):
-            raise TypeError("publication storage requires a native GovernedObject")
-        wire = object.forward()
-        digest = object_digest(object.id)
-        relative = f"objects/{digest}.tn"
+        identity, wire, wire_sha256 = encode_publication(object)
+        relative = f"objects/{identity[7:]}.tn"
         self._write(self.root / relative, wire)
-        index = {
-            "object_id": object.id,
-            "file": relative,
-            "wire_sha256": hashlib.sha256(wire).hexdigest(),
-        }
+        index = {"object_id": identity, "file": relative, "wire_sha256": wire_sha256}
         self._write(
-            self.root / "index" / f"{digest}.json",
+            self.root / "index" / f"{identity[7:]}.json",
             json.dumps(index, sort_keys=True, separators=(",", ":")).encode("utf-8"),
         )
-        return object.id
-
-    def get(self, object_id: str) -> bytes:
-        return self.read(object_id).forward()
+        return identity
 
     def read(self, object_id: str) -> tn.GovernedObject:
         """Read current stored bytes and verify them once, without authorizing use."""
@@ -169,14 +232,7 @@ class PublicationStore:
         relative = f"objects/{digest}.tn"
         if index.get("object_id") != object_id or index.get("file") != relative:
             raise ValueError("publication index does not name the requested identity and file")
-        path = self.root / relative
-        wire = path.read_bytes()
-        if hashlib.sha256(wire).hexdigest() != index.get("wire_sha256"):
-            raise ValueError("retained publication wire digest differs from its immutable index")
-        publication = tn.GovernedObject.read(io.BytesIO(wire))
-        if publication.id != object_id or publication.forward() != wire:
-            raise ValueError("retained publication has the wrong native identity")
-        return publication
+        return verified_publication(object_id, (self.root / relative).read_bytes(), index.get("wire_sha256"))
 
 
 def validate_record_position(context_id, sequence) -> None:
@@ -186,15 +242,14 @@ def validate_record_position(context_id, sequence) -> None:
         raise ValueError("record sequence must be a positive integer")
 
 
-def open_publication_store(root, *, backend=None, read_only=False) -> PublicationStore:
+def open_publication_store(root, *, backend=None, read_only=False) -> Storage:
     """Select a storage backend explicitly, or reopen the format already on disk."""
     root = Path(root)
-    has_database = (root / "publications.sqlite3").exists()
-    has_files = (root / "objects").exists() or (root / "index").exists()
-    if backend not in (None, "files", "sqlite") or (has_database and has_files):
+    if backend not in (None, "files", "sqlite"):
         raise ValueError("unknown or ambiguous publication storage backend")
-    selected = backend or ("sqlite" if has_database else "files")
-    if (selected == "files" and has_database) or (selected == "sqlite" and has_files):
+    existing = stored_backend(root)
+    selected = backend or existing or "files"
+    if existing is not None and existing != selected:
         raise ValueError("requested backend differs from existing publication storage")
     if selected == "sqlite":
         from .sqlite_publications import SQLitePublicationStore

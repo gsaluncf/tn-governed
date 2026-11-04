@@ -22,16 +22,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import patch
 
-from tn_governed.native_run import ALL_GPU_LAYERS
-from tn_governed.values.market_report import NOTICE
-from tn_governed.values.model import NativeModelEndpoint
-from tn_governed.values.evidence import EvidenceError
-from tn_governed.values.report_profile import visible_text
+import yaml
 from tn_llama_client.protocol import build_model_request
 
+from tn_governed.native_run import ALL_GPU_LAYERS
+from tn_governed.values.evidence import EvidenceError
+from tn_governed.values.model import NativeModelEndpoint
+from tn_governed.values.report_profile import visible_text
+
 from . import run as run_module
+from .case_study import NOTICE
 from .performance_model import ordinary_server, plain_request, response_html
 from .run import PROMPT, run_case
+from .study_summary import log_turns
 
 ROWS = 8
 ROUTE = "/v1/tn/chat/completions"
@@ -199,6 +202,22 @@ def _metadata_drop(name):
     return mutate
 
 
+def _drop_earliest_ancestor(config_path, config):
+    """Remove the earliest-written retained publication.
+
+    The retained list is sorted by object id, so its last entry is sometimes the model
+    input itself, which travels in the request. The earliest-written entry is always an
+    ancestor of that input.
+    """
+    def written_at(wire):
+        whole, _, fraction = json.loads(wire)["timestamp"].rstrip("Z").partition(".")
+        return whole, fraction.ljust(9, "0")
+
+    def drop(store):
+        store["publications"].remove(min(store["publications"], key=written_at))
+    _edit_json(config["governed_objects"]["metadata_store_path"], drop)
+
+
 def _config_change(change):
     def mutate(config_path, config):
         _edit_json(config_path, change)
@@ -206,14 +225,17 @@ def _config_change(change):
 
 
 def _clear_reader_kits(config_path, config):
-    for kit in Path(config["reader_key_dir"]).glob("*.btn.mykit"):
+    """Remove the group kits the native governed reader decrypts with, from its own keystore."""
+    reader_config = Path(config["governed_objects"]["native_reader_config_path"])
+    keystore = yaml.safe_load(reader_config.read_text(encoding="utf-8"))["keystore"]["path"]
+    for kit in (reader_config.parent / keystore).glob("*.btn.mykit"):
         kit.unlink()
 
 
 CONFIG_FAULTS = {
     "config_policy_revision_missing": _metadata_drop("policy_revisions"),
     "config_dataset_edition_missing": _metadata_drop("dataset_editions"),
-    "config_ancestor_publication_missing": _metadata_drop("publications"),
+    "config_ancestor_publication_missing": _drop_earliest_ancestor,
     "config_claim_record_missing": _metadata_drop("claim_records"),
     "config_contract_not_granted": _config_change(lambda c: c["governed_objects"]["contracts"].pop()),
     "config_use_not_granted": _config_change(
@@ -244,11 +266,10 @@ def faulted_configuration(mutate):
 def server_timings(directory):
     path = directory / "native-model/server.stderr.log"
     text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
-    prompt = re.findall(r"prompt eval time =\s*[\d.]+ ms /\s*(\d+) tokens", text)
-    decode = re.findall(r"(?<!prompt )eval time =\s*[\d.]+ ms /\s*(\d+) tokens", text)
+    turns = log_turns(text)
     return {"slot_tasks_installed": text.count('"event":"slot_task_installed"'),
-            "prompt_tokens": sum(map(int, prompt)),
-            "decoded_tokens": sum(map(int, decode)),
+            "prompt_tokens": turns["prompt_tokens"],
+            "decoded_tokens": turns["decoded_tokens"],
             "slot_gate_denied": "TN pre-slot gate denied" in text}
 
 

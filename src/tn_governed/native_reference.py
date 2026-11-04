@@ -242,7 +242,7 @@ def prepare_governed_reference(directory: Path, *, unity_url: str, registry=None
         )
         with (directory / "source-http.ndjson").open("w", encoding="utf-8") as events:
             server = create_feed_server(
-                FeedServerConfig(directory, events, 0, publication_store=store)
+                FeedServerConfig(events, 0, store)
             )
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
@@ -395,7 +395,6 @@ def write_governed_runtime_config(
                 ]
             },
         },
-        "reader_key_dir": path_for_runtime(source_path.parent / "readers"),
         "input_index_key_path": path_for_runtime(source_path.parent / "keys" / "index_master.key"),
         "ceremony_id": source_config["ceremony"]["id"],
         "governance_group": "tn.agents",

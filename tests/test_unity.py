@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import socket
 import subprocess
 from pathlib import Path
@@ -16,8 +17,6 @@ from tn_governed.unity import (
     POSITIONS_FEED,
     UnityCatalogConfig,
     build_finance_feed_bundles,
-    publish_finance_feeds,
-    resolve_finance_feeds,
     unity_catalog_registry,
 )
 
@@ -68,6 +67,7 @@ def reserve_consecutive_port_pair() -> tuple[int, socket.socket]:
     raise RuntimeError("could not reserve a free consecutive loopback port pair")
 
 
+@pytest.mark.skipif(shutil.which("powershell") is None, reason="the Unity launcher is a PowerShell script")
 @pytest.mark.parametrize("occupied_port", ["public", "internal"])
 def test_launcher_rejects_each_unity_port_before_java_launch(
     occupied_port: str, tmp_path: Path,
@@ -224,43 +224,6 @@ def test_rejects_different_policy_references_between_feeds(tmp_path: Path) -> No
 
     with pytest.raises(ValueError, match="common policy reference"):
         build_finance_feed_bundles(tmp_path / "bundles", governance_path=altered)
-
-
-def test_publish_and_resolve_both_exact_unity_feeds(tmp_path: Path, monkeypatch) -> None:
-    transport = install_recording_transport(monkeypatch)
-    config = UnityCatalogConfig()
-    result = publish_finance_feeds(tmp_path, config=config)
-    resolved = resolve_finance_feeds(config)
-
-    assert result.feed_names == FEED_NAMES
-    assert [request["name"] for request in transport.volume_requests] == [
-        "portfolio_internal_positions",
-        "portfolio_market_prices",
-    ]
-    assert transport.volumes == {
-        "portfolio.finance.portfolio_internal_positions": result.positions_bundle.resolve().as_uri(),
-        "portfolio.finance.portfolio_market_prices": result.market_prices_bundle.resolve().as_uri(),
-    }
-    assert resolved[POSITIONS_FEED].policy.fields["cost_basis"] == "confidential"
-    assert resolved[MARKET_PRICES_FEED].policy.fields["last_price"] == "internal"
-    assert resolved[POSITIONS_FEED].tn_governance == resolved[MARKET_PRICES_FEED].tn_governance
-
-
-@pytest.mark.parametrize("bad_location", ["swapped", "duplicate", "missing"])
-def test_resolve_rejects_wrong_registered_bundle_locations(
-    tmp_path: Path, monkeypatch, bad_location: str
-) -> None:
-    transport = install_recording_transport(monkeypatch)
-    config = UnityCatalogConfig()
-    published = publish_finance_feeds(tmp_path, config=config)
-    market_volume = "portfolio.finance.portfolio_market_prices"
-    if bad_location in {"swapped", "duplicate"}:
-        transport.volumes[market_volume] = published.positions_bundle.resolve().as_uri()
-    else:
-        transport.volumes[market_volume] = (tmp_path / "missing").resolve().as_uri()
-
-    with pytest.raises(Exception, match="expected fields|incomplete"):
-        resolve_finance_feeds(config)
 
 
 def test_unity_configuration_defaults() -> None:

@@ -144,32 +144,6 @@ def _matches(value, spec) -> bool:
     return False
 
 
-def coerce_args(function: str, args: dict):
-    """Decode JSON-encoded strings and integral floats into the declared type where that is unambiguous.
-    Returns (args, coerced_keys). A value that still does not match is left for validate_args to reject."""
-    import json as _json
-    spec = ARG_TYPES.get(function, {})
-    out, coerced = {}, []
-    for k, v in args.items():
-        t = spec.get(k)
-        if t and not _matches(v, t):
-            if isinstance(v, str) and t != "string":
-                try:
-                    cand = _json.loads(v)
-                    if _matches(cand, t):
-                        out[k] = cand
-                        coerced.append(k)
-                        continue
-                except (ValueError, TypeError):
-                    pass
-            if t == "integer" and isinstance(v, float) and v.is_integer():
-                out[k] = int(v)
-                coerced.append(k)
-                continue
-        out[k] = v
-    return out, coerced
-
-
 def validate_args(function: str, args: dict) -> None:
     spec = ARG_TYPES[function]
     for k, t in spec.items():

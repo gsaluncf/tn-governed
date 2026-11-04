@@ -1,15 +1,8 @@
-import hashlib
-import io
-import json
-from pathlib import Path
 
 import polars as pl
 
 from .audit import expression_record
-from .labels import sensitivity_block
-from .policy import policy_sha256
-from .release import PolicyDenied, ReleaseArtifact
-from .sealing import CIPHER_NAME
+from .release import PolicyDenied
 from .support import Support, business_expressions, expression_kind, window_partitions
 from uuid import uuid4
 
@@ -257,56 +250,6 @@ class GovernedLazyFrame:
                              support=self._support) if self._tn else self
         return GovernedGroupBy(parent, expressions)
 
-    def _classification(self, roots):
-        if self._tn:
-            return self._tn.policies.classification(roots)
-        if any(self.policy.level(source) == "confidential" for source in roots):
-            return "confidential"
-        if any(self.policy.level(source) == "internal" for source in roots):
-            return "internal"
-        return "public"
-
-    def _policy_input(self, audience, materialized=None):
-        columns = [
-            {"name": name, "sources": sorted(roots),
-             "classification": self._classification(roots)}
-            for name, roots in self.sources.items()
-        ]
-        return {
-            "policy_ref": self.policy.policy_ref,
-            "operation": "release",
-            "audience": audience,
-            "columns": columns,
-            "row_selection_sources": sorted(self.row_sources),
-            "aggregate_support": self._support.facts(materialized) if materialized is not None else {"known": False},
-        }
-
-    def covered_columns(self):
-        """The output columns whose lineage reaches a non-public source."""
-        return sorted(
-            name for name, roots in self.sources.items()
-            if self._classification(roots) != "public"
-        )
-
-    def _decide_release(self, to, materialized=None):
-        if self._tn:
-            raise PolicyDenied("Use release_tn for a native TN-bound frame; its signed release retains all contributing contracts")
-        if self.tn_governance.get("policy") != self.policy.policy_ref:
-            raise PolicyDenied("TN governance body and compiled policy reference differ")
-        if materialized is None:
-            materialized = self._support.frame.collect()
-        decision = self.evaluator.decide(self._policy_input(to, materialized))
-        if not decision.allow:
-            raise PolicyDenied(decision.reason)
-        return decision
-
-    def release(self, path, *, to: str, label_map=None):
-        materialized = self._support.frame.collect()
-        decision = self._decide_release(to, materialized)
-        return self._write_release(path, decision,
-                                   label_map=label_map or self.label_map,
-                                   materialized=materialized.select(list(self.sources)))
-
     @property
     def tn_object(self):
         """An independent native working copy; mutation cannot affect sibling frames."""
@@ -317,50 +260,6 @@ class GovernedLazyFrame:
         from .tn_boundary import release_tn
         return release_tn(self, use=use, to=to, decide=decide, object_type=object_type,
                           group=group, rows_field=rows_field, metadata_group=metadata_group)
-
-    def release_delta(self, path, *, to: str):
-        """Release to a Delta table whose commit log carries the governance basis."""
-        from .delta import write_delta_release
-        materialized = self._support.frame.collect()
-        decision = self._decide_release(to, materialized)
-        version = write_delta_release(self, path, decision, self.covered_columns(), materialized=materialized.select(list(self.sources)))
-        return version
-
-    def _write_release(self, path, decision, extra=None, cipher=None, seal_marker=None,
-                       label_map=None, materialized=None):
-        if materialized is None:
-            materialized = self.frame.collect()
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if cipher is not None:
-            buffer = io.BytesIO()
-            materialized.write_parquet(buffer)
-            path.write_bytes(cipher.seal(buffer.getvalue(), seal_marker))
-        else:
-            materialized.write_parquet(path)
-        manifest_path = Path(str(path) + ".gov.json")
-        manifest = {
-            "schema": "tn.polars-release.v1",
-            "file": path.name,
-            "file_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-            "policy_ref": self.policy.policy_ref,
-            "compiled_policy_sha256": policy_sha256(self.policy),
-            "tn_governance": self.tn_governance,
-            "opa_decision": {
-                "allow": decision.allow,
-                "reason": decision.reason,
-                "id": decision.decision_id,
-            },
-            "lineage": {name: sorted(roots) for name, roots in self.sources.items()},
-            "row_selection_sources": sorted(self.row_sources),
-            "covered_columns": self.covered_columns(),
-            "sensitivity_label": sensitivity_block(self.covered_columns(), label_map),
-        }
-        if cipher is not None:
-            manifest["sealed"] = {"cipher": CIPHER_NAME, "marker": seal_marker}
-        manifest.update(extra or {})
-        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        return ReleaseArtifact(path=path, manifest_path=manifest_path)
 
 
 class GovernedGroupBy:

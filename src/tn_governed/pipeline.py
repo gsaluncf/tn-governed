@@ -4,25 +4,12 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass
-from pathlib import Path
 
 import tn
 
-from .calculation import (
-    CalculationExecution,
-    PortfolioExecution,
-    CalculationPort,
-    execute_calculation,
-    execute_calculation_for_model,
-)
+from .calculation import CalculationExecution, execute_calculation
 from .getdata import FeedFetchFact, GetDataConfig, fetch_governed_feed
-from .polars_stage import (
-    GovernedPolarsTNResult,
-    prepare_wealth_calculation,
-    run_governed_polars_tn_stage,
-)
-from .tn_flow import ModelBoundTNRow
-from .unity import FEED_NAMES, UnityCatalogConfig, resolve_finance_feeds
+from .polars_stage import prepare_wealth_calculation
 from .workflow_setup import bind_workflow
 
 
@@ -68,12 +55,12 @@ def run_governed_calculation_path(
     editions = (wealth_edition, calendar_edition)
     fetched = tuple(fetch_governed_feed(getdata, item.selection) for item in editions)
     frame = prepare_wealth_calculation(
-        fetched[0].body, fetched[1].body,
+        fetched[0].publication, fetched[1].publication,
         wealth_edition=wealth_edition, calendar_edition=calendar_edition,
         session=polars_session, use=polars_use, decide_receive=decide_source,
     )
     for item in fetched:
-        publication_store.put(tn.GovernedObject.read(io.BytesIO(item.body)))
+        publication_store.put(item.publication)
     polars_object = frame.release_tn(
         use=polars_release_use, to="calculation", decide=decide_polars_release,
         group="finance", rows_field="rows", object_type="portfolio.calculation.input",
@@ -155,51 +142,3 @@ def run_governed_calculation_path(
     )
 
 
-@dataclass(frozen=True, slots=True)
-class ProcessingPathResult:
-    """The two governed application-stage results produced before tn-llama."""
-
-    polars: GovernedPolarsTNResult
-    calculation: PortfolioExecution
-    calculation_object: tn.SealedObject
-    model_row: ModelBoundTNRow
-    feed_fetch_facts: tuple[FeedFetchFact, ...]
-
-
-def run_processing_path_legacy(
-    *,
-    feed_url: str,
-    account_id: str,
-    polars_config_path: Path,
-    calculation_config_path: Path,
-    calculation: CalculationPort,
-    unity: UnityCatalogConfig | None = None,
-) -> ProcessingPathResult:
-    """Snapshot workflow with a separate logged model publication."""
-    entries = resolve_finance_feeds(unity)
-    getdata = GetDataConfig(base_url=feed_url)
-    fetched = tuple(fetch_governed_feed(getdata, feed_name) for feed_name in FEED_NAMES)
-    source_objects = {item.feed_name: item.body for item in fetched}
-    polars = run_governed_polars_tn_stage(
-        entries,
-        source_objects,
-        endpoint_config_path=polars_config_path,
-        account_id=account_id,
-    )
-    execution, calculation_object, model_row = execute_calculation_for_model(
-        calculation,
-        polars.sealed_object,
-        recipient_config_path=calculation_config_path,
-        publisher_config_path=calculation_config_path,
-    )
-    return ProcessingPathResult(
-        polars=polars,
-        calculation=execution,
-        calculation_object=calculation_object,
-        model_row=model_row,
-        feed_fetch_facts=tuple(item.fact for item in fetched),
-    )
-
-
-# This alias selects the snapshot workflow; native execution has a separate entry point.
-run_processing_path = run_processing_path_legacy

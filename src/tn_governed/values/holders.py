@@ -27,6 +27,14 @@ def holder(obj, group):
     return route(obj, group)[-1]
 
 
+def holds_field(obj, group, field):
+    """Whether `obj`, or a whole object it carries, holds a signed `field` in `group`."""
+    try:
+        return field in holder(obj, group).envelope[group]["field_hashes"]
+    except KeyError:
+        return False
+
+
 def field_hash(obj, group, field):
     """The signed field hash of `field` in `group`, read from the object that holds it."""
     return holder(obj, group).envelope[group]["field_hashes"][field]

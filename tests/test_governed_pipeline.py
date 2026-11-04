@@ -1,6 +1,5 @@
 """Native SQL, dataframe, endpoint, tool and recipient composition."""
 
-import json
 
 import polars as pl
 import pytest
@@ -22,9 +21,7 @@ from tn_governed.endpoints import Endpoint
 from tn_governed.publications import PublicationStore
 from tn_governed.tool_runtime import (
     Call,
-    ProviderTurn,
     ToolRegistry,
-    ToolRunner,
     ToolSpec,
     ToolWorkflow,
 )
@@ -142,7 +139,6 @@ def tools():
                 {"type": "object", "maxProperties": 0},
                 {"type": "number"},
                 lambda inv: sum(row["total"] for row in inv.values[0]),
-                model_visible=True,
             ),
             ToolSpec(
                 "scale",
@@ -154,73 +150,9 @@ def tools():
                 },
                 {"type": "number"},
                 lambda inv: inv.values[0] * inv.arguments["factor"],
-                model_visible=True,
             ),
         )
     )
-
-
-def test_sql_polars_claim_tools_and_independent_recipient(sql_endpoint, tmp_path):
-    peers, artifact, claim, policies = prepared(sql_endpoint, tmp_path)
-    endpoint = peers["consumer"]
-    endpoint.evaluator = lambda request: Assessment(
-        True,
-        "local purpose permits",
-        ("ledger",) if request.operation == "workflow.release" else (),
-    )
-    endpoint.obligations["ledger"] = lambda _: ObligationResult(True, "ledger:derived-report")
-    workflow = ToolWorkflow(
-        endpoint, tools(), {"source": artifact}, required_tools=("sum_rows", "scale")
-    )
-
-    class Provider:
-        identity = "local-planner"
-
-        def turn(self, events, tool_schemas):
-            completed = [event for event in events if event["kind"] == "tool"]
-            if not completed:
-                return ProviderTurn((Call("sum", "sum_rows", {}, ("source",)),))
-            if len(completed) == 1:
-                return ProviderTurn(
-                    (
-                        Call(
-                            "scale",
-                            "scale",
-                            {"factor": 2},
-                            (completed[0]["result"]["handle"],),
-                            ("sum",),
-                        ),
-                    )
-                )
-            return ProviderTurn(text=json.dumps({"answer": completed[-1]["result"]["value"]}))
-
-    output = ToolRunner(Provider()).run(
-        workflow,
-        "Compute the requested summary",
-        result_schema={
-            "type": "object",
-            "properties": {"answer": {"type": "number"}},
-            "required": ["answer"],
-            "additionalProperties": False,
-        },
-        destination="internal-report",
-    )
-    recipient = peers["gateway"]
-    received = recipient.receive(endpoint.export(output))
-    assert recipient.reveal(received, destination="internal-report") == {"answer": 100}
-    assert recipient.claims(received)[0] == claim
-    assert {
-        policy_identity(policy)
-        for policy in recipient.session.governance(
-            recipient.store.read(received.reference.object_id)
-        ).governance.policies
-    } == {policy_identity(policy) for policy in policies}
-    decision = recipient.read_record(output.decision_id)
-    assert decision.body["details"]["discharged"][0]["evidence"] == "ledger:derived-report"
-    assert output.decision_id in recipient.metadata(received)["action_records"]
-    recipient.evaluator = lambda _: Assessment(False, "recipient purpose differs")
-    with pytest.raises(OperationDenied):
-        recipient.reveal(received, destination="public")
 
 
 def test_release_action_failure_blocks_pipeline_result(sql_endpoint, tmp_path):

@@ -34,7 +34,7 @@ Refuse release.
 
 def publication():
     with tn.Session(POLICY, groups=["finance"]) as session:
-        data = session.create_obj(
+        data = session.create(
             {"rows": [{"amount": 42}]}, session.policy("portfolio.feed.data.v1"),
             object_type="portfolio.feed.data.v1", group="finance",
         )

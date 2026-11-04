@@ -86,7 +86,7 @@ def configured_sessions(root):
 
 @contextmanager
 def serving(store, root):
-    server = create_feed_server(FeedServerConfig(root, io.StringIO(), 0, publication_store=store))
+    server = create_feed_server(FeedServerConfig(io.StringIO(), 0, store))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:

@@ -8,7 +8,8 @@ import tn
 from tn_polars.audit import AuditTrail, _member_ranges, _valid_members
 
 from tn_governed.publications import PublicationStore, object_digest, sync_writes, write_once
-from tn_governed.values.verify import cache_bound, report_graph
+from tn_governed.values.retained_run import cache_bound
+from tn_governed.values.verify_report import report_graph
 from tn_governed.values.manifests import BATCH_SCHEMA, SCHEMA, BatchBindings, signed_manifest
 
 POLICY = """## finance.account
@@ -167,3 +168,26 @@ def test_group_commit_store_round_trips_a_publication(tmp_path):
         index = json.loads(Path(tmp_path, "index", identity[7:] + ".json").read_text())
         assert index["object_id"] == identity
         assert store.read(identity).forward() == snapshot.forward()
+
+
+def test_synchronous_writes_make_new_directory_entries_durable(tmp_path, monkeypatch):
+    import tn_governed.publications as publications
+
+    synced = []
+    monkeypatch.setattr(publications, "sync_directories", lambda found: synced.append(set(found)))
+    publications.write_once(tmp_path / "a" / "b" / "file", b"x")
+    assert synced == [{tmp_path, tmp_path / "a", tmp_path / "a" / "b"}]
+
+
+def test_group_commit_makes_created_directories_durable_at_commit(tmp_path, monkeypatch):
+    import tn_governed.publications as publications
+    from test_publications import publication
+
+    synced = []
+    monkeypatch.setattr(publications, "sync_directories", lambda found: synced.append(set(found)))
+    root = tmp_path / "store"
+    store = publications.PublicationStore(root, group_commit=True)
+    store.put(publication())
+    assert synced == []
+    store.commit()
+    assert synced == [{tmp_path, root, root / "objects", root / "index"}]

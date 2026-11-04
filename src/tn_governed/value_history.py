@@ -9,7 +9,8 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from .endpoints import Endpoint, GovernedArtifact
+from .artifact_types import GovernedArtifact
+from .endpoints import Endpoint
 
 
 class HistoryConflict(ValueError):

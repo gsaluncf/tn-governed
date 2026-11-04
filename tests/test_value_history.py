@@ -9,6 +9,7 @@ import tn
 from test_carried_values import _without_persistence
 from test_endpoints import endpoints as enrolled_endpoints  # noqa: F401 - Pytest fixture registration.
 
+from tn_governed.artifact_verification import verify_artifact
 from tn_governed.endpoints import Endpoint
 from tn_governed.values.string import OperationDenied
 
@@ -115,7 +116,7 @@ def test_restore_preserves_deleted_predecessor_and_new_source(endpoints):
     assert history.versions("amount") == (first, deleted, restored)
     assert endpoint.reveal(restored, destination="internal") == 11
     assert endpoint.claims(restored) == endpoint.claims(original)
-    assert len(endpoint._metadata(restored)[0].policies) == 2
+    assert len(verify_artifact(endpoint, restored)[0].policies) == 2
 
 
 def test_restore_rejects_deleted_replacement_without_advancing_history(endpoints):

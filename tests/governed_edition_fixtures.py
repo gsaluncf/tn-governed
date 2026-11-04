@@ -41,7 +41,7 @@ def signed_edition(root, *, session=None, dataset="market.prices", edition="old"
     dag = tn.PolicyDag()
     dag.admit(revision, lambda record, parent: True)
     policy = dag.select(revision.id, "finance", lambda record: True)
-    data = session.create_obj(
+    data = session.create(
         {"feed_name": dataset, "rows": [{"amount": 42}]}, policy,
         object_type="portfolio.feed.data.v1", group="finance",
     )

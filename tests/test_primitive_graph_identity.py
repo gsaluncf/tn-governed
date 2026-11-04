@@ -230,7 +230,7 @@ def test_source_batch_requires_exactly_one_signed_sql_read(batch_run):
 
 @pytest.mark.parametrize("batch_run", [{"rows": 64}], indirect=True)
 def test_record_selection_work_is_linear_in_batch_size(batch_run, monkeypatch):
-    from tn_governed.values import verify as module
+    from tn_governed.values import retained_run as module
 
     root, _ = batch_run
     original = module.verify_tape
@@ -305,7 +305,7 @@ def test_shared_publication_is_read_and_opened_once_per_verification(batch_run, 
 
 @pytest.mark.parametrize("fail", [False, True])
 def test_verification_cache_is_bounded_and_cleared_on_exit(batch_run, monkeypatch, fail):
-    from tn_governed.values import verify as module
+    from tn_governed.values import retained_run as module
     root, run = batch_run
     caches = []
 
