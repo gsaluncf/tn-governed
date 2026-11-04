@@ -21,7 +21,7 @@ from .references import pack_references, unpack_references
 from .string import (
     OperationDenied, StringMetadataProvider, TNString, ValueReference, _active, _exposure,
 )
-from .holders import field_hash, receive_routed
+from .holders import field_hash
 
 STRING_TYPE = "experiment.string"
 STRING_SCHEMA = "tn.string-bindings.v1"
@@ -385,13 +385,10 @@ class Context:
         for value in values:
             obj = self.store_object(value.reference.object_id)
             use = tn.UseContext(self.application, self.purpose, request.operation)
-            data = receive_routed(
-                self.session, obj, use=use, groups=["strings", "evidence"],
-                decide=lambda source, groups, use=use: lambda ctx: (
-                    ctx.object.id == source.id and ctx.writer == source.writer
-                    and ctx.use_context == use and set(ctx.groups) == set(groups)
-                    and self.metadata_accept(ctx)
-                ),
+            # Native receipt asks this object and each holder of a carried group.
+            data = self.session.receive(
+                obj, use=use, groups=["strings", "evidence"],
+                decide=lambda ctx, use=use: ctx.use_context == use and self.metadata_accept(ctx),
             )
             content = data.get(value.reference.field, group="strings")
             if type(content) is not str:

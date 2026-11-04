@@ -16,7 +16,7 @@ from .values.obligations import ObligationRun, run_obligations
 from .values.references import unpack_references
 from .values.runtime import Assessment, Claim, Request
 from .values.string import OperationDenied, ValueReference
-from .values.holders import field_hash, holder, receive_routed
+from .values.holders import field_hash, holder
 
 ARTIFACT_TYPE = "tn.artifact"
 ARTIFACT_SCHEMA = "tn.artifact.v1"
@@ -306,18 +306,17 @@ class Endpoint:
                 )
         for reference in external:
             source = self.store.read(reference.object_id)
-            view = self.session.governance(source)
-            # A carried group is admitted on the governance of the object that holds it.
-            held = view if reference.group in source.group_names else self.session.governance(
-                holder(source, reference.group))
-            held.accept(
+            # Native admission asks the source and each object on the path to the group's
+            # holder, and returns the policies a received copy holds.
+            policies = self.session.admit(
+                source,
                 use=tn.UseContext(self.application, self.purpose, "inspect"),
                 groups=[reference.group],
                 decide=self.accept_metadata,
             )
             if reference.field not in holder(source, reference.group).envelope[reference.group]["field_hashes"]:
                 raise EvidenceError("external input does not identify a signed field")
-            inherited.extend(view.governance.policies)
+            inherited.extend(policies)
         if inherited and (
             not all(
                 any(policy.matches_contract(other) for other in data.policies)
@@ -738,11 +737,9 @@ class Endpoint:
             def accept(ctx):
                 return self.accept_metadata(ctx) is True and (decide is None or decide(ctx) is True)
 
-            view = self.session.governance(publication)
-            # A carried group is admitted on the governance of the object that holds it.
-            held = view if group in publication.group_names else self.session.governance(
-                holder(publication, group))
-            held.accept(use=use, groups=[group], decide=accept)
+            # Native admission asks the publication and each object on the path to the
+            # group's holder, and returns the policies the received copy holds.
+            policies = self.session.admit(publication, use=use, groups=[group], decide=accept)
             lineage = {}
             if claims:
                 pending = [publication.id]
@@ -787,7 +784,7 @@ class Endpoint:
                 operation,
                 (reference,),
                 (publication.writer,),
-                tuple(view.governance.policies),
+                tuple(policies),
                 tuple(verified_claims),
                 "governed-runtime",
                 (parameters,),
@@ -795,8 +792,7 @@ class Endpoint:
             call_id = uuid4().hex
             decision = self._authorize(request, call_id)
             try:
-                data = receive_routed(self.session, publication, use=use, groups=[group],
-                                      decide=lambda source, groups: accept)
+                data = self.session.receive(publication, use=use, groups=[group], decide=accept)
                 if validate is not None and validate(data) is not True:
                     raise EvidenceError("external content validation refused the publication")
                 value = data.get(field, group=group)

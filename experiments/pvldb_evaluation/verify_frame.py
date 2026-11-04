@@ -29,7 +29,7 @@ from tn_governed.values.numeric_codec import decode, encode, record_value
 from tn_governed.values.metadata import describe
 from tn_governed.values.provision import POLICY
 from tn_governed.values.references import unpack_references, unpack_source_cells
-from tn_governed.values.holders import holder, receive_routed
+from tn_governed.values.holders import holder
 
 
 _STAGES = ("load", "filter", "sort", "with_columns", "select", "release")
@@ -245,8 +245,8 @@ def verify_frame(root, *, graph_cell_limit=GRAPH_CELL_LIMIT):
             edition = source_editions.get(obj.id)
             selection = (catalog.select(edition.dataset, edition.edition, edition.id, use)
                          if edition is not None else None)
-            data = receive_routed(session, obj, use=use, groups=["values", "evidence"], selection=selection,
-                                  decide=lambda source, groups: accepted_value)
+            data = session.receive(obj, use=use, groups=["values", "evidence"], selection=selection,
+                                   decide=accepted_value)
             manifest = signed_manifest(data)
             _require(manifest["schema"] in SCHEMAS, "unknown primitive binding schema")
             return (holder(obj, "values").envelope["values"]["field_hashes"], tuple(data.dataset_bindings),

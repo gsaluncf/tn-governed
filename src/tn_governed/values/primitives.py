@@ -10,7 +10,7 @@ import weakref
 import tn
 
 from .evidence import EvidenceError
-from .holders import bind_manifest, field_hash, holder
+from .holders import field_hash, holder, suppliers
 from .manifests import BATCH_SCHEMA, SCHEMA, SCHEMAS, result_names, signed_manifest, unique_origins
 from .numeric import TNNumeric
 from .numeric_codec import KINDS, NUMERIC_TYPES, encode, decode, record_value
@@ -77,26 +77,16 @@ class Context(StringContext):
         self._adopt((value,))
         obj = self.store_object(value.reference.object_id)
         use = tn.UseContext(self.application, self.purpose, operation)
-        record = self.editions.get(obj.id)
-        selection = None if record is None else self.catalog.select(
-            record.dataset, record.edition, record.id, use)
         if operation == "inspect-claims":
-            return self.workflow.receive(obj, selection=selection)
-        own = [group for group in groups if group in obj.group_names]
-        data = self.session.receive(obj, use=use, groups=own, selection=selection, decide=self._admit)
-        for group in groups:
-            if group not in obj.group_names:
-                self._open_carried(data, holder(obj, group), group, use)
-        return data
+            return self.workflow.receive(obj, selection=self._selections(obj, ["evidence"], use))
+        return self.session.receive(obj, use=use, groups=list(groups),
+                                    selection=self._selections(obj, groups, use), decide=self._admit)
 
-    def _open_carried(self, data, source, group, use):
-        """Open a group from the carried object that holds it, under that object's own admission."""
-        record = self.editions.get(source.id)
-        selection = None if record is None else self.catalog.select(
-            record.dataset, record.edition, record.id, use)
-        opened = self.session.receive(source, use=use, groups=[group], selection=selection,
-                                      decide=self._admit)
-        data.set(None, opened.get(None, group=group), group=group)
+    def _selections(self, obj, groups, use):
+        """The selected edition of each object that supplies one of `groups`."""
+        return [self.catalog.select(record.dataset, record.edition, record.id, use)
+                for source in suppliers(obj, groups)
+                if (record := self.editions.get(source.id)) is not None]
 
     def _admit(self, ctx):
         if (not self.metadata_accept(ctx) or ctx.use_context.application != self.application
@@ -334,7 +324,7 @@ class Context(StringContext):
         binding = {"claims": claims, "parents": parents, "decision_id": decision_id,
                    "declared": declared, "origins": origins, "source": source}
         data.set(None, {"manifest": {"schema": SCHEMA, "bindings": {field: binding}}}, group="evidence")
-        bind_manifest(data)
+        data.bind_manifest("evidence")
         publication = self._release_value(data, request)
         reference = ValueReference(publication.id, field, "values")
         result = self._append("Result", request, call_id, {
@@ -380,7 +370,7 @@ class Context(StringContext):
         data.set(None, {"manifest": {"schema": BATCH_SCHEMA, "cells": facts,
                                      "batch": {"decision_id": decision_id, "source": scope}}},
                  group="evidence")
-        bind_manifest(data)
+        data.bind_manifest("evidence")
         publication = self._release_value(data, replace(request, policies=(policy,)))
         carried_source = self._carried(publication, extra_ids=(decision_id,))
         result = self._append("Result", request, call_id, {
