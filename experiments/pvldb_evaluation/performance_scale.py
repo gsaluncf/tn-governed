@@ -28,13 +28,19 @@ def accounting(directory):
     manifest = json.loads((directory / "run.json").read_text(encoding="utf-8"))
     with open_publication_store(directory / "publications", read_only=True) as store:
         sizes = store.publication_sizes()
-    refs = {json.dumps(item, sort_keys=True) for item in unpack_references(manifest["sources"])}
+        if "sources" in manifest:
+            refs = {json.dumps(item, sort_keys=True)
+                    for item in unpack_references(manifest["sources"])}
+        else:
+            source_ids = {item["source_object_id"] for item in manifest["source_editions"]}
+            refs = {(identity, field) for identity in source_ids
+                    for field in store.read(identity).envelope["values"]["field_hashes"]}
     records = sum(tape["count"] for tape in manifest["tapes"].values())
     target = manifest["outputs"]["model_input"]["reference"]["object_id"]
     policy_refs = {
-        policy["policy_revision"]
+        policy if isinstance(policy, str) else policy["policy_revision"]
         for frame in manifest["evaluation"]["dataframe"]
-        for policy in frame["policy_artifacts"]
+        for policy in frame.get("policy_artifacts", frame.get("policies", []))
     }
     return {
         "direct_cell_refs": len(refs),
@@ -57,7 +63,8 @@ def run_scale(root, args, profile):
     for repetition in range(-profile["warmups"], profile["repetitions"]):
         for rows in requested_rows:
             for mode in ("tn", "plain") if repetition % 2 == 0 else ("plain", "tn"):
-                case = _measure_case(root, args, profile, (rows, mode, repetition), cases, source_runs)
+                case = _measure_case(
+                    root, args, profile, (rows, mode, repetition), cases, source_runs)
                 cases.append(case)
                 _record_case(root, profile, case, cases)
                 if not case["ok"]:

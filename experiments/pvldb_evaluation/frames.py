@@ -203,7 +203,7 @@ def dataframe_calculate(context, rows):
             raise EvidenceError("input primitive kind differs from the signed dataframe profile")
         # All artifact verification and the OPA load decision precede this open.
         policies.decide("load", context.application, sources, set(), use)
-        opened = context._open_values(request, values)
+        opened = context._open_values(request, values, metadata=metadata)
         frame_rows = [{"name": opened[i][1], "value": opened[i + 1][1]}
                       for i in range(0, len(opened), 2)]
         loaded = build_frame(frame_rows, profile)

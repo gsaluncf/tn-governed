@@ -1,0 +1,396 @@
+--- a/crypto/tn-core/src/governed/reader/mod.rs
++++ b/crypto/tn-core/src/governed/reader/mod.rs
+@@ -24,8 +24,12 @@
+ mod admission;
+ mod opened;
+ mod prepared;
++mod manifest_cache;
++use manifest_cache::{ManifestCache, VerifiedManifest};
+ #[cfg(test)]
+ mod tests;
++#[cfg(test)]
++thread_local! { static DECRYPTED_GROUP_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+ 
+ pub use admission::{AdmittedObject, GovernanceView};
+ pub use opened::OpenedObject;
+@@ -76,6 +80,7 @@
+     indexes: BTreeMap<String, Hmac<Sha256>>,
+     allow_unbound: bool,
+     identity: Arc<()>,
++    manifests: std::sync::Mutex<ManifestCache>,
+ }
+ 
+ impl GovernedReader {
+@@ -255,6 +260,7 @@
+         self.groups.entry(name.to_owned()).or_default().push(cipher);
+         // A changed capability snapshot must obtain a new strict acceptance.
+         self.identity = Arc::new(());
++        self.manifests = std::sync::Mutex::new(ManifestCache::default());
+         Ok(self)
+     }
+ 
+@@ -279,6 +285,7 @@
+             return Err(invalid(format!("reader already holds an index key for {name:?}")));
+         }
+         self.identity = Arc::new(());
++        self.manifests = std::sync::Mutex::new(ManifestCache::default());
+         Ok(self)
+     }
+ 
+@@ -287,6 +294,7 @@
+     pub fn allow_unbound(mut self) -> Self {
+         self.allow_unbound = true;
+         self.identity = Arc::new(());
++        self.manifests = std::sync::Mutex::new(ManifestCache::default());
+         self
+     }
+ 
+@@ -419,10 +427,26 @@
+                     continue;
+                 }
+             };
++            let cache_key = (object.id().to_owned(), name.to_owned(), aad.to_vec());
++            let cacheable = object.bound() && object.manifest_group() == Some(name);
++            if cacheable {
++                let cached = self.manifests.lock().map_err(|_| invalid("manifest cache lock poisoned"))?
++                    .entries.get(&cache_key).cloned();
++                if let Some(cached) = cached {
++                    if cached.bytes == bytes {
++                        return Ok((cached.fields.clone(), bytes));
++                    }
++                }
++            }
+             let fields = decrypted_fields(&bytes, block, object.bound())?;
+             if let Some(index) = self.indexes.get(name) {
+                 verify_field_hashes(index, &fields, block)?;
+             }
++            if cacheable {
++                let cached = Arc::new(VerifiedManifest { fields: fields.clone(), bytes: bytes.clone() });
++                self.manifests.lock().map_err(|_| invalid("manifest cache lock poisoned"))?
++                    .insert(cache_key, cached);
++            }
+             return Ok((fields, bytes));
+         }
+         Err(cipher_error.unwrap_or_else(|| Error::NotEntitled {
+@@ -434,6 +458,8 @@
+ /// Parse decrypted group bytes. A bound object's digests cover these exact bytes,
+ /// so they must also be the one canonical encoding of what they say.
+ fn decrypted_fields(bytes: &[u8], block: &GroupBlock, bound: bool) -> Result<Map<String, Value>> {
++    #[cfg(test)]
++    DECRYPTED_GROUP_PARSES.with(|n| n.set(n.get() + 1));
+     let source = std::str::from_utf8(bytes).map_err(|_| invalid("opened group must be UTF-8 JSON"))?;
+     let value = parse_json(source)?;
+     if bound && canonical_bytes(&value)? != bytes {
+--- a/crypto/tn-core/src/governed/reader/prepared.rs
++++ b/crypto/tn-core/src/governed/reader/prepared.rs
+@@ -16,11 +16,12 @@
+     supplied: Option<&'a str>,
+     hash_key: Option<String>,
+     manifest: Option<(Map<String, Value>, Vec<u8>)>,
++    manifest_digest: Option<String>,
+ }
+ 
+ impl<'a> Keys<'a> {
+     pub(super) fn new(reader: &'a GovernedReader, view: &'a GovernanceView, supplied: Option<&'a str>) -> Self {
+-        Self { reader, view, supplied, hash_key: None, manifest: None }
++        Self { reader, view, supplied, hash_key: None, manifest: None, manifest_digest: None }
+     }
+ 
+     /// Decrypt one selected group under its AAD.
+@@ -31,7 +32,10 @@
+             return Ok(self.reader.decrypt(&view.object, name, &aad)?.0);
+         };
+         if bound.is_manifest(name) {
+-            return Ok(self.manifest()?.0.clone());
++            self.manifest()?;
++            let (fields, bytes) = self.manifest.take().expect("manifest loaded above");
++            self.manifest_digest = Some(binding::digest(&bytes));
++            return Ok(fields);
+         }
+         let hash_key = self.hash_key()?;
+         let aad = bound.aad(name, Input::Data { hash_key: &hash_key })?;
+@@ -78,7 +82,10 @@
+             .get(GOVERNANCE_GROUP)
+             .ok_or_else(|| invalid("bound data requires the reader's governance index key"))?;
+         let manifest_digest = match &bound.manifest {
+-            Some(_) => Some(binding::digest(&self.manifest()?.1)),
++            Some(_) => Some(match &self.manifest_digest {
++                Some(digest) => digest.clone(),
++                None => binding::digest(&self.manifest()?.1),
++            }),
+             None => None,
+         };
+         Ok(binding::hash_key(index, &bound.id, view.digest()?, manifest_digest.as_deref()))
+--- a/crypto/tn-core/src/governed/data/mod.rs
++++ b/crypto/tn-core/src/governed/data/mod.rs
+@@ -98,32 +98,23 @@
+     /// Use admitted selected plaintext while retaining every unopened source group.
+     pub fn from_opened(opened: OpenedObject) -> Result<Self> {
+         let source = SourceReference::from_opened(&opened)?;
+-        let groups = opened
+-            .groups()
+-            .iter()
+-            .map(|(name, value)| {
+-                value
+-                    .as_object()
+-                    .cloned()
+-                    .map(|fields| (name.clone(), fields))
+-                    .ok_or_else(|| invalid("business group must be an object"))
+-            })
+-            .collect::<Result<BTreeMap<_, _>>>()?;
+-        let (opaque, holders) = unopened_groups(opened.object(), &groups);
+-        let manifest = opened
+-            .object()
+-            .manifest_group()
+-            .filter(|name| groups.contains_key(*name))
+-            .map(str::to_owned);
++        let object = opened.object().clone();
++        let governance = opened.governance().clone();
++        let groups = opened.into_groups().into_iter().map(|(name, value)| {
++            let Value::Object(fields) = value else { return Err(invalid("business group must be an object")); };
++            Ok((name, fields))
++        }).collect::<Result<BTreeMap<_, _>>>()?;
++        let (opaque, holders) = unopened_groups(&object, &groups);
++        let manifest = object.manifest_group().filter(|name| groups.contains_key(*name)).map(str::to_owned);
+         Ok(Self {
+-            object_type: opened.object().object_type().to_owned(),
+-            governance: opened.governance().clone(),
++            object_type: object.object_type().to_owned(),
++            governance,
+             groups,
+             opaque,
+             holders,
+             manifest,
+             sources: vec![source],
+-            history: vec![opened.object().clone()],
++            history: vec![object],
+             revision: 0,
+             unreleased_changes: false,
+             register_error: None,
+@@ -143,10 +134,9 @@
+             };
+             data.include_all([inclusion])?;
+             for (name, value) in opened.into_groups() {
+-                let fields = value
+-                    .as_object()
+-                    .cloned()
+-                    .ok_or_else(|| invalid("business group must be an object"))?;
++                let Value::Object(fields) = value else {
++                    return Err(invalid("business group must be an object"));
++                };
+                 data.opaque.remove(&name);
+                 data.groups.insert(name, fields);
+             }
+--- a/crypto/tn-core/src/governed/writer.rs
++++ b/crypto/tn-core/src/governed/writer.rs
+@@ -70,13 +70,13 @@
+             )));
+         }
+         let value = serde_json::to_value(fields)?;
+-        let fields = value
+-            .as_object()
+-            .ok_or_else(|| invalid("group fields must be a JSON object"))?;
++        let Value::Object(fields) = value else {
++            return Err(invalid("group fields must be a JSON object"));
++        };
+         for field in fields.keys() {
+             super::validate_field(field)?;
+         }
+-        self.groups.insert(name.to_owned(), fields.clone());
++        self.groups.insert(name.to_owned(), fields);
+         Ok(self)
+     }
+ 
+--- a/crypto/tn-core/src/runtime/session.rs
++++ b/crypto/tn-core/src/runtime/session.rs
+@@ -412,6 +412,18 @@
+             |ctx| (route.decide)(ctx),
+         )
+     }
++    /// Receive with an explicit reader snapshot and this workflow's current evaluator.
++    pub fn receive_selected_with_reader<'s>(
++        &self,
++        reader: &crate::governed::GovernedReader,
++        source: &impl Publication,
++        selections: impl IntoIterator<Item = &'s DatasetSelection>,
++    ) -> Result<DataObject> {
++        let publication = source.publication()?;
++        let route = self.route(publication.object_type())?;
++        reader.receive_for(publication, &route.use_context, &route.groups, selections,
++                           |ctx| (route.decide)(ctx))
++    }
+     /// Add a contract under the bound attachment authority.
+     pub fn attach(&self, data: &mut DataObject, policy: Governance) -> Result<()> {
+         let decide = self.attachment.as_ref().ok_or_else(|| {
+--- a/crypto/tn-core-py/src/governed/workflow.rs
++++ b/crypto/tn-core-py/src/governed/workflow.rs
+@@ -276,13 +276,13 @@
+     decide: &Bound<'_, PyAny>,
+ ) -> PyResult<PyData> {
+     guard(|| {
+-        let context = session.context()?;
++        let reader = session.cached_reader()?;
+         let object = publication_object(source)?;
+         let selection = selections(selection)?;
+         let use_context = use_context.inner.clone();
+         let default_group = primary(&groups);
+         let inner = with_admission(session, py, decide, |decide_native| {
+-            context.receive_for(&object, &use_context, &groups, &selection, decide_native)
++            reader.receive_for(&object, &use_context, &groups, &selection, decide_native)
+         })?;
+         Ok(PyData::new(inner, session.context.clone(), default_group))
+     })
+@@ -414,12 +414,14 @@
+ /// Python owns a native workflow and the originating session lifecycle.
+ #[pyclass(frozen, module = "tn.governed", name = "Workflow")]
+ pub(super) struct PyWorkflow {
++    reader: Arc<tn_core::governed::GovernedReader>,
+     pub(super) native: Arc<tn_core::runtime::Workflow<'static>>,
+     pub(super) state: SessionState,
+ }
+ impl PyWorkflow {
+     pub(super) fn bind(owner: &PySession, receive: &str, release: &str) -> PyResult<Self> {
+         Ok(Self {
++            reader: owner.cached_reader()?,
+             native: Arc::new(owner.context()?.workflow(receive, release).map_err(to_py)?),
+             state: owner.context.clone(),
+         })
+@@ -439,7 +441,7 @@
+             let object = publication_object(source)?;
+             let selection = selections(selection)?;
+             let inner = py
+-                .allow_threads(|| self.native.receive_selected(&object, &selection))
++                .allow_threads(|| self.native.receive_selected_with_reader(&self.reader, &object, &selection))
+                 .map_err(to_py)?;
+             session(&self.state)?;
+             let primary = self
+--- /dev/null
++++ b/crypto/tn-core/src/governed/reader/manifest_cache.rs
+@@ -0,0 +1,29 @@
++//! Reader-local reuse of parsed manifests after current decryption succeeds.
++use std::collections::BTreeMap;
++use std::sync::Arc;
++use serde_json::{Map, Value};
++
++pub(super) type CacheKey = (String, String, Vec<u8>);
++pub(super) struct VerifiedManifest {
++    pub fields: Map<String, Value>,
++    pub bytes: Vec<u8>,
++}
++#[derive(Default)]
++pub(super) struct ManifestCache {
++    pub entries: BTreeMap<CacheKey, Arc<VerifiedManifest>>,
++    bytes: usize,
++}
++impl ManifestCache {
++    pub fn insert(&mut self, key: CacheKey, value: Arc<VerifiedManifest>) {
++        const MAX_BYTES: usize = 64 * 1024 * 1024;
++        let size = value.bytes.len();
++        if size > MAX_BYTES { return; }
++        if let Some(previous) = self.entries.remove(&key) { self.bytes -= previous.bytes.len(); }
++        while self.bytes + size > MAX_BYTES {
++            if let Some((_, previous)) = self.entries.pop_first() { self.bytes -= previous.bytes.len(); }
++            else { break; }
++        }
++        self.bytes += size;
++        self.entries.insert(key, value);
++    }
++}
+--- a/crypto/tn-core/src/governed/reader/tests.rs
++++ b/crypto/tn-core/src/governed/reader/tests.rs
+@@ -218,3 +218,95 @@
+     let route = c.reader().admit_route(&direct, &usage(), ["x"], None, |_| Ok(true)).unwrap();
+     assert!(c.reader().receive_admitted(&route, |_| Ok(true)).is_err());
+ }
++
++fn manifest_fixture() -> (GovernedReader, GovernedObject) {
++    use crate::governed::{GovernedDraft, GovernedWriter};
++    let c = Carry::new();
++    let reader = c.reader();
++    let device = crate::DeviceKey::generate();
++    let mut writer = GovernedWriter::new(&device);
++    for (name, ciphers) in &reader.groups {
++        writer = writer.with_group(name, ciphers[0].clone(), &[1; 32]).unwrap();
++    }
++    let object = writer.seal(GovernedDraft::new("data", crate::governed::testing::policy(&device)).unwrap()
++        .group("x", serde_json::json!({"from": "source"})).unwrap().manifest("x").unwrap()).unwrap();
++    (reader, object)
++}
++
++#[test]
++fn verified_manifest_is_parsed_once_while_each_use_is_authorized() {
++    let (reader, object) = manifest_fixture();
++    DECRYPTED_GROUP_PARSES.with(|n| n.set(0));
++    let mut decisions = 0;
++    for _ in 0..2 {
++        let data = reader.receive_for(&object, &usage(), ["x"], None, |_| {
++            decisions += 1; Ok(true)
++        }).unwrap();
++        assert_eq!(data.group("x").unwrap()["from"], "source");
++    }
++    assert_eq!(decisions, 2);
++    assert_eq!(DECRYPTED_GROUP_PARSES.with(|n| n.get()), 3,
++               "governance opens on each use; the immutable manifest parses once");
++    assert!(reader.receive_for(&object, &usage(), ["x"], None, |_| Ok(false)).is_err());
++}
++
++#[test]
++fn mutating_a_received_copy_does_not_change_cached_source_fields() {
++    let (reader, object) = manifest_fixture();
++    let mut first = reader.receive_for(&object, &usage(), ["x"], None, |_| Ok(true)).unwrap();
++    first.set_field("x", "from", serde_json::json!("changed")).unwrap();
++    let second = reader.receive_for(&object, &usage(), ["x"], None, |_| Ok(true)).unwrap();
++    assert_eq!(second.group("x").unwrap()["from"], "source");
++}
++
++#[test]
++fn opened_groups_move_into_the_working_copy() {
++    let (reader, object) = manifest_fixture();
++    let admitted = reader.governance(&object).unwrap().accept(
++        usage(), ["x"], |_| Ok(true)).unwrap();
++    let opened = reader.open(&admitted, ["x"]).unwrap();
++    let pointer = opened.groups()["x"]["from"].as_str().unwrap().as_ptr();
++    let data = crate::governed::DataObject::from_opened(opened).unwrap();
++    assert_eq!(pointer, data.group("x").unwrap()["from"].as_str().unwrap().as_ptr(),
++               "receipt must move owned plaintext rather than allocate another group copy");
++}
++
++#[test]
++fn cached_manifest_does_not_bypass_current_cipher_entitlement() {
++    use std::sync::atomic::{AtomicBool, Ordering};
++    struct Revocable {
++        inner: Arc<dyn GroupCipher>,
++        blocked: Arc<AtomicBool>,
++    }
++    impl GroupCipher for Revocable {
++        fn kind(&self) -> &'static str { self.inner.kind() }
++        fn encrypt(&self, bytes: &[u8]) -> Result<Vec<u8>> { self.inner.encrypt(bytes) }
++        fn decrypt(&self, bytes: &[u8]) -> Result<Vec<u8>> { self.inner.decrypt(bytes) }
++        fn decrypt_with_aad(&self, bytes: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
++            if self.blocked.load(Ordering::SeqCst) {
++                return Err(Error::NotEntitled { group: "x".to_owned() });
++            }
++            self.inner.decrypt_with_aad(bytes, aad)
++        }
++    }
++    let (mut reader, object) = manifest_fixture();
++    let blocked = Arc::new(AtomicBool::new(false));
++    let original = reader.groups["x"][0].clone();
++    reader.groups.get_mut("x").unwrap()[0] = Arc::new(Revocable { inner: original, blocked: blocked.clone() });
++    reader.receive_for(&object, &usage(), ["x"], None, |_| Ok(true)).unwrap();
++    blocked.store(true, Ordering::SeqCst);
++    assert!(reader.receive_for(&object, &usage(), ["x"], None, |_| Ok(true)).is_err());
++}
++
++#[test]
++fn adding_an_index_key_rechecks_cached_fields() {
++    let (original, object) = manifest_fixture();
++    let mut reader = GovernedReader::new();
++    for (name, ciphers) in &original.groups {
++        reader = reader.with_group(name, ciphers[0].clone()).unwrap();
++    }
++    reader = reader.with_governance_index_key(&[1; 32]).unwrap();
++    reader.receive_for(&object, &usage(), ["x"], None, |_| Ok(true)).unwrap();
++    let reader = reader.with_group_index_key("x", &[99; 32]).unwrap();
++    assert!(reader.receive_for(&object, &usage(), ["x"], None, |_| Ok(true)).is_err());
++}

@@ -67,7 +67,7 @@ class Profiler:
         from tn_governed.values.evidence import EvidenceRecorder
         from tn_governed.values.primitives import Context
         targets = [
-            (Context, "_metadata", "primitive_metadata"),
+            (Context, "_metadata_fields", "primitive_metadata"),
             (Context, "_decision", "decision_and_obligations"),
             (Context, "_open_values", "native_admission_and_decryption"),
             (Context, "_publish", "value_publication"),

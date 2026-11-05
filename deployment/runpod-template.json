@@ -1,0 +1,16 @@
+{
+  "template_id": "runpod-torch-v280",
+  "template_name": "Runpod Pytorch 2.8.0",
+  "catalog_source": "official",
+  "image": "runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404",
+  "os": "Ubuntu 24.04",
+  "python": "3.12",
+  "cuda": "12.8.1",
+  "target": "linux/amd64",
+  "connection": "SSH on TCP 22; inference stays on loopback through an SSH tunnel",
+  "selection_reason": "Official single-GPU development template with CUDA development tools, Python 3.12, SSH and uv; suitable for the TN llama.cpp server without building a base image.",
+  "model_transfer": "GGUF is separate from the runtime archive and reused across code updates.",
+  "data_transfer": "One compressed runtime archive per target; one results archive per batch.",
+  "pod_created": false,
+  "catalog_checked_utc": "2026-11-05T18:18:38.087373+00:00"
+}

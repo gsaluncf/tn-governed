@@ -1,0 +1,32 @@
+{
+  "rows": [
+    1000,
+    10000,
+    100000
+  ],
+  "recipient_rows": 10000,
+  "recipients": [
+    1,
+    4,
+    8
+  ],
+  "tool_rows": 1000,
+  "tool_depths": [
+    1,
+    3,
+    5
+  ],
+  "repetitions": 5,
+  "recipient_repetitions": 30,
+  "warmups": 1,
+  "model": false,
+  "gpu_layers": 99,
+  "sql_batch_size": 4096,
+  "retain_cases": false,
+  "runtime_limits": {
+    "max_request_bytes": 100663296,
+    "max_message_bytes": 16384,
+    "lineage_max_objects": 65536,
+    "lineage_max_depth": 256
+  }
+}

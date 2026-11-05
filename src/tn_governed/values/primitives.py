@@ -8,6 +8,8 @@ import weakref
 
 import tn
 
+from tn_governed.native_objects import CarriedPublication
+
 from .evidence import EvidenceError
 from .holders import holder, suppliers
 from .manifests import BATCH_SCHEMA, POLICY_SCHEMA, SCHEMA, SCHEMAS, result_names, signed_manifest
@@ -35,6 +37,16 @@ OPERATIONS = frozenset({
     "conjugate", "real", "imag", "numerator", "denominator", "as_integer_ratio",
     "is_integer", "truth", "power_mod", "quantize", "sqrt", "normalize", "exp", "ln", "log10", *BINARY,
 })
+
+
+class _CheckedMetadata(list):
+    """Signed manifests and ordered fields retained for one prepared operation."""
+
+    def __init__(self, context, values):
+        super().__init__()
+        self.context = context
+        self.references = tuple(value.reference for value in values)
+        self.manifests = {}
 
 
 class Context(StringContext):
@@ -139,8 +151,11 @@ class Context(StringContext):
                 carrier = self._received_carrier(value, binding, shared=shared)
             else:
                 continue
-            values[index] = type(value)(value.reference, value.decision_id, value.result_id,
-                                        metadata_provider=self.string_metadata, publication=carrier)
+            if (not isinstance(carrier, CarriedPublication)
+                    or carrier.object.id != value.reference.object_id):
+                raise ValueError("carried publication differs from the value reference")
+            # These wrappers are private to hydration until their checked carriers are attached.
+            object.__setattr__(value, "publication", carrier)
         return tuple(values)
 
     def _signed_result(self, value, writer, records):
@@ -161,64 +176,83 @@ class Context(StringContext):
             records[key] = rb
         return records[key]
 
+    def _metadata_read(self, value):
+        data = self._read(value, ["evidence"], "inspect-claims")
+        snapshot = data.snapshot
+        envelope = holder(snapshot, value.reference.group).envelope
+        manifest = signed_manifest(data)
+        if isinstance(manifest, dict) and manifest.get("schema") in {SCHEMA, BATCH_SCHEMA}:
+            self._verify_legacy_sources(snapshot)
+        return data, manifest, snapshot.writer, envelope
+
     def _metadata(self, value, *, _reads=None, _records=None):
-        # These maps live only for this operation. Every later operation admits
-        # the publication again under its current endpoint and requested use.
         reads = {} if _reads is None else _reads
         records = {} if _records is None else _records
         identity = value.reference.object_id
         if identity not in reads:
-            data = self._read(value, ["evidence"], "inspect-claims")
-            snapshot = data.snapshot
-            # The value's group may travel in a carried object; its field hash is read there.
-            envelope = holder(snapshot, value.reference.group).envelope
-            manifest = signed_manifest(data)
-            if isinstance(manifest, dict) and manifest.get("schema") in {SCHEMA, BATCH_SCHEMA}:
-                self._verify_legacy_sources(snapshot)
-            reads[identity] = data, manifest, snapshot.writer, envelope
-        data, manifest, writer, envelope = reads[identity]
+            reads[identity] = self._metadata_read(value)
+        return self._metadata_fields((value,), *reads[identity], records)[0]
+
+    def _metadata_fields(self, values, data, manifest, writer, envelope, records):
         if not isinstance(manifest, dict) or manifest.get("schema") not in SCHEMAS:
             raise EvidenceError("missing signed primitive manifest")
-        binding = manifest.get("bindings", {}).get(value.reference.field)
-        if not isinstance(binding, dict):
-            raise EvidenceError("missing signed primitive binding")
-        expected_kinds = KINDS if isinstance(value, TNNumeric) else {"str"}
-        if binding.get("declared", {}).get("kind") not in expected_kinds:
-            raise EvidenceError("primitive class differs from signed logical kind")
-        if manifest["schema"] == POLICY_SCHEMA:
-            if (set(binding) != {"declared", "claims", "actions"} or value.decision_id is not None
-                    or value.result_id is not None or value.reference.group != "values"
-                    or value.reference.field not in envelope["values"]["field_hashes"]
-                    or not isinstance(binding["claims"], list) or not isinstance(binding["actions"], list)):
-                raise EvidenceError("invalid signed policy-bearing value")
-            self._action_support(binding["actions"], records)
-        else:
-            if binding.get("decision_id") != value.decision_id or value.result_id is None:
-                raise EvidenceError("primitive requires its exact signed decision and result")
-            rb = self._signed_result(value, writer, records)
-            if (not result_names(rb["details"], value.reference, envelope)
-                    or rb["inputs"] != binding["parents"]
-                    or rb["details"].get("claims") != binding["claims"]):
-                raise EvidenceError("primitive is not bound to its authorized result")
-            decision = self._record(value.decision_id, records)
-            if decision.body["details"].get("obligations"):
-                binding = {**binding, "actions": [decision.id]}
+        bindings = manifest.get("bindings", {})
+        policy_schema = manifest["schema"] == POLICY_SCHEMA
+        result = []
+        for value in values:
+            binding = bindings.get(value.reference.field)
+            if not isinstance(binding, dict):
+                raise EvidenceError("missing signed primitive binding")
+            expected_kinds = KINDS if isinstance(value, TNNumeric) else {"str"}
+            if binding.get("declared", {}).get("kind") not in expected_kinds:
+                raise EvidenceError("primitive class differs from signed logical kind")
+            if policy_schema:
+                if (set(binding) != {"declared", "claims", "actions"} or value.decision_id is not None
+                        or value.result_id is not None or value.reference.group != "values"
+                        or value.reference.field not in envelope["values"]["field_hashes"]
+                        or not isinstance(binding["claims"], list) or not isinstance(binding["actions"], list)):
+                    raise EvidenceError("invalid signed policy-bearing value")
                 self._action_support(binding["actions"], records)
-        claims = []
-        for identity in binding["claims"]:
-            claim = self._record(identity, records)
-            if (claim.body["kind"] != "Claim" or not isinstance(claim.body["details"].get("statement"), str)
-                    or not claim.body["details"]["statement"].strip() or not claim.body["inputs"]):
-                raise EvidenceError("invalid signed claim")
-            claims.append(Claim(identity, claim.writer,
-                                tuple(ValueReference(**r) for r in unpack_references(claim.body["inputs"])),
-                                claim.body["details"]["statement"]))
-        return data, binding, tuple(claims)
+            else:
+                if binding.get("decision_id") != value.decision_id or value.result_id is None:
+                    raise EvidenceError("primitive requires its exact signed decision and result")
+                rb = self._signed_result(value, writer, records)
+                if (not result_names(rb["details"], value.reference, envelope)
+                        or rb["inputs"] != binding["parents"]
+                        or rb["details"].get("claims") != binding["claims"]):
+                    raise EvidenceError("primitive is not bound to its authorized result")
+                decision = self._record(value.decision_id, records)
+                if decision.body["details"].get("obligations"):
+                    binding = {**binding, "actions": [decision.id]}
+                    self._action_support(binding["actions"], records)
+            claims = []
+            for identity in binding["claims"]:
+                claim = self._record(identity, records)
+                if (claim.body["kind"] != "Claim" or not isinstance(claim.body["details"].get("statement"), str)
+                        or not claim.body["details"]["statement"].strip() or not claim.body["inputs"]):
+                    raise EvidenceError("invalid signed claim")
+                claims.append(Claim(identity, claim.writer,
+                                    tuple(ValueReference(**r) for r in unpack_references(claim.body["inputs"])),
+                                    claim.body["details"]["statement"]))
+            result.append((data, binding, tuple(claims)))
+        return result
 
     def _metadata_many(self, values):
         self._adopt(values)
-        reads, records = {}, {}
-        return [self._metadata(value, _reads=reads, _records=records) for value in values]
+        groups, records = {}, {}
+        for index, value in enumerate(values):
+            key = value.reference.object_id, value.reference.group
+            groups.setdefault(key, []).append((index, value))
+        result = _CheckedMetadata(self, values)
+        result.extend([None] * len(values))
+        for key, members in groups.items():
+            indices, batch = zip(*members, strict=True)
+            data, manifest, writer, envelope = self._metadata_read(batch[0])
+            checked = self._metadata_fields(batch, data, manifest, writer, envelope, records)
+            result.manifests[key] = manifest
+            for index, item in zip(indices, checked, strict=True):
+                result[index] = item
+        return result
 
     def _decision(self, request, call_id, *, record_permit=True):
         actions = ObligationRun()
@@ -287,13 +321,18 @@ class Context(StringContext):
         return request, items, self._decision(request, call_id, record_permit=operation in {
             "reveal", "model_handoff", "select", "compare", "is_integer", "truth"})
 
-    def _open_values(self, request, values):
+    def _open_values(self, request, values, *, metadata=None):
+        if metadata is not None and (
+                not isinstance(metadata, _CheckedMetadata) or metadata.context is not self
+                or metadata.references != tuple(value.reference for value in values)):
+            raise EvidenceError("prepared metadata differs from this context or its ordered inputs")
         result, opened = [], {}
         for value in values:
             key = value.reference.object_id, value.reference.group
             if key not in opened:
                 data = self._read(value, [value.reference.group, "evidence"], request.operation)
-                opened[key] = data, signed_manifest(data), data.get(None, group=value.reference.group)
+                manifest = signed_manifest(data) if metadata is None else metadata.manifests[key]
+                opened[key] = data, manifest, data.get(None, group=value.reference.group)
             data, manifest, payloads = opened[key]
             payload = payloads[value.reference.field]
             facts = manifest["bindings"][value.reference.field]["declared"]
