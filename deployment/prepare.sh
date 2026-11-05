@@ -49,6 +49,12 @@ if ! rg -q 'fn group_fields' crypto/tn-core/src/governed/data/edit.rs; then
     sed -i 's/\r$//' crypto/tn-core-py/src/governed/data.rs crypto/tn-core-py/src/governed/codec.rs
     patch --batch --forward -p1 < "$root/deployment/native_python_reads.patch"
 fi
+if ! rg -q 'fn decrypt_shared' crypto/tn-core/src/governed/reader/mod.rs; then
+    patch --batch --forward -p1 < "$root/deployment/native_receipt_sharing.patch"
+fi
+if ! rg -q 'fn new_with_owned_groups' crypto/tn-core/src/governed/data/mod.rs; then
+    patch --batch --forward -p1 < "$root/deployment/native_owned_groups.patch"
+fi
 cargo metadata --offline --format-version 1 > "$work/sdk-metadata.json"
 CARGO_TARGET_DIR="$work/sdk-target" maturin build --release --locked --compatibility linux --out "$work/wheelhouse"
 cd "$work/project"

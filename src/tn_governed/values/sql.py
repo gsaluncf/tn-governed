@@ -6,6 +6,7 @@ produce a governed relation with an indexed schema and the policies assigned to 
 """
 
 from dataclasses import dataclass
+from collections.abc import Sequence
 import hashlib
 from pathlib import Path
 import re
@@ -14,7 +15,7 @@ from uuid import uuid4
 from .collection import pauses_collection
 from .metadata import describe
 from .numeric_codec import KINDS, encode
-from .primitives import MAX_SOURCE_PUBLICATION_CELLS
+from .primitives import MAX_SOURCE_PUBLICATION_CELLS, _PrimitiveHandle
 from .query import SQLiteQuery, digest
 from .runtime import Request
 
@@ -65,6 +66,40 @@ class TableQuery:
         return QueryResponse([dict(zip(self.columns, row, strict=True)) for row in cursor.fetchall()])
 
 
+class GovernedRows(Sequence):
+    """Ordered admitted field handles; scalar wrappers are created on access."""
+
+    def __init__(self, columns, rows):
+        self.columns, self._rows = tuple(columns), rows
+        if any(len(row) != len(self.columns) for row in rows):
+            raise ValueError("governed row width differs from its columns")
+
+    def __len__(self):
+        return len(self._rows)
+
+    @staticmethod
+    def _row(row):
+        return tuple(value.materialize() if isinstance(value, _PrimitiveHandle) else value
+                     for value in row)
+
+    def __getitem__(self, index):
+        rows = self._rows[index]
+        if isinstance(index, slice):
+            return [self._row(row) for row in rows]
+        if any(isinstance(value, _PrimitiveHandle) for value in rows):
+            rows = self._row(rows)
+            self._rows[index] = rows
+        return rows
+
+    def handles(self):
+        return tuple(value for row in self._rows for value in row)
+
+    def with_row(self, index, row):
+        rows = list(self._rows)
+        rows[index] = tuple(row)
+        return GovernedRows(self.columns, rows)
+
+
 class GovernedCursor:
     def __init__(self, columns, rows):
         self.description = tuple((name, None, None, None, None, None, None) for name in columns)
@@ -75,12 +110,15 @@ class GovernedCursor:
             return None
         row = self._rows[self._index]
         self._index += 1
-        return row
+        return GovernedRows._row(row)
 
     def fetchall(self):
+        return list(self.fetch_batches())
+
+    def fetch_batches(self):
         rows = self._rows[self._index:]
         self._index = len(self._rows)
-        return rows
+        return GovernedRows([column[0] for column in self.description], rows)
 
 
 class GovernedSQL:
@@ -223,7 +261,7 @@ class GovernedSQL:
                     self.consumer.resolver.admit_edition(info, self.consumer, transport=transport)
                     self.editions.append(info)
                     self.edition_transports[info["record_id"]] = transport
-                for position, value in zip(positions, self.consumer.hydrate_many(handles), strict=True):
+                for position, value in zip(positions, self.consumer.hydrate_many(handles, _lazy=True), strict=True):
                     rows[position[0]][position[1]] = value
                 self.published_values.extend(value for row in rows for value in row)
             return GovernedCursor(columns, [tuple(row) for row in rows])

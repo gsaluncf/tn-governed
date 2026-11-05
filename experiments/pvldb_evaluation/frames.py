@@ -30,6 +30,7 @@ from tn_governed.values.numeric import TNNumeric
 from tn_governed.values.numeric_codec import KINDS
 from .numeric_profile import numeric_profile, polars_dtype, build_frame, check_fixed_plan_range
 from tn_governed.values.primitives import Context, OPERATIONS
+from tn_governed.values.sql import GovernedRows
 from tn_governed.values.string import OperationDenied, TNString, _active
 
 
@@ -178,11 +179,16 @@ def dataframe_calculate(context, rows):
     """
     if not isinstance(context, DataframeContext) or _active.get() is not context:
         raise OperationDenied("dataframe calculation requires its active DataframeContext")
-    rows = tuple(rows)
-    if not rows or any(len(row) != 2 or not isinstance(row[0], TNString)
-                       or not isinstance(row[1], TNNumeric) for row in rows):
-        raise TypeError("dataframe calculation requires nonempty governed name/value rows")
-    values = tuple(value for row in rows for value in row)
+    if isinstance(rows, GovernedRows):
+        if not rows or rows.columns != ("name", "value"):
+            raise TypeError("dataframe calculation requires governed name/value columns")
+        values = rows.handles()
+    else:
+        rows = tuple(rows)
+        if not rows or any(len(row) != 2 or not isinstance(row[0], TNString)
+                           or not isinstance(row[1], TNNumeric) for row in rows):
+            raise TypeError("dataframe calculation requires nonempty governed name/value rows")
+        values = tuple(value for row in rows for value in row)
     call_id = uuid4().hex
     request, metadata, decision = context._prepare(OPERATION, values, None, (), call_id)
     try:
@@ -202,16 +208,15 @@ def dataframe_calculate(context, rows):
             raise EvidenceError("input primitive kind differs from the signed dataframe profile")
         # All artifact verification and the OPA load decision precede this open.
         policies.decide("load", context.application, sources, set(), use)
-        opened = context._open_values(request, values, metadata=metadata)
-        frame_rows = [{"name": opened[i][1], "value": opened[i + 1][1]}
-                      for i in range(0, len(opened), 2)]
+        first_data, frame_rows = context._open_values(request, values, metadata=metadata,
+                                                      _columns=("name", "value"))
         loaded = build_frame(frame_rows, profile)
         check_fixed_plan_range(loaded, profile)
         lazy = loaded.lazy()
         policies.pin(lazy)
         first = next(iter(policies._entries.values()))
         frame = GovernedLazyFrame(lazy, first.policy, {}, first.evaluator, sources=sources,
-            tn_boundary=TnBoundary(opened[0][0], policies, use, "values", "rows"), ordinary_rows=True)
+            tn_boundary=TnBoundary(first_data, policies, use, "values", "rows"), ordinary_rows=True)
         result = (frame.filter(pl.col("value") >= 0).sort("name")
                   .with_columns((pl.col("value") + 250).alias("adjusted")))
         result = result.select(pl.col("adjusted").sum().alias("amount"))

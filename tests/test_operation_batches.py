@@ -30,6 +30,23 @@ def test_content_open_reuses_the_prepared_signed_manifest(context, monkeypatch):
     assert len(reads) == 1
 
 
+def test_prepared_content_open_materializes_only_the_payload_group(context, monkeypatch):
+    values = publish(context, [7, 8, 9])
+    request, metadata = prepare(context, values)
+    reads = []
+    original = context._read
+
+    def read(value, groups, operation):
+        reads.append(tuple(groups))
+        return original(value, groups, operation)
+
+    monkeypatch.setattr(context, "_read", read)
+    opened = context._open_values(request, values, metadata=metadata)
+    assert [content for _, content in opened] == [7, 8, 9]
+    assert reads == [("values",)]
+    assert "evidence" in opened[0][0].hidden_groups
+
+
 def test_prepared_metadata_does_not_reuse_a_content_permit(context):
     values = publish(context, [7, 8])
     request, metadata = prepare(context, values)

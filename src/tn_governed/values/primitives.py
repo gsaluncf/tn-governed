@@ -5,6 +5,7 @@ import operator
 import math
 from uuid import uuid4
 import weakref
+from typing import NamedTuple
 
 import tn
 
@@ -47,6 +48,20 @@ class _CheckedMetadata(list):
         self.context = context
         self.references = tuple(value.reference for value in values)
         self.manifests = {}
+
+
+class _PrimitiveHandle(NamedTuple):
+    reference: ValueReference
+    decision_id: str | None
+    result_id: str | None
+    kind: str
+    publication: CarriedPublication | None
+    metadata_provider: object
+
+    def materialize(self):
+        cls = TNString if self.kind == "str" else TNNumeric
+        return cls(self.reference, self.decision_id, self.result_id,
+                   metadata_provider=self.metadata_provider, publication=self.publication)
 
 
 class Context(StringContext):
@@ -123,7 +138,7 @@ class Context(StringContext):
         """Verify a received handle after its edition/authority has been resolved."""
         return self.hydrate_many([(reference, decision_id, result_id, kind)])[0]
 
-    def hydrate_many(self, handles):
+    def hydrate_many(self, handles, *, _lazy=False):
         handles = tuple(handles)
         values = []
         kinds = {"str", *KINDS}
@@ -135,8 +150,17 @@ class Context(StringContext):
             if kind not in kinds:
                 raise TypeError("unsupported primitive kind")
             cls = TNString if kind == "str" else TNNumeric
-            values.append(cls(reference, decision_id, result_id, metadata_provider=self.string_metadata,
-                              publication=carried))
+            if _lazy:
+                if not isinstance(reference, ValueReference):
+                    raise TypeError("received primitive requires a native field reference")
+                if carried is not None and (not isinstance(carried, CarriedPublication)
+                        or carried.identity != reference.object_id):
+                    raise ValueError("carried publication differs from the value reference")
+                values.append(_PrimitiveHandle(reference, decision_id, result_id, kind,
+                                                carried, self.string_metadata))
+            else:
+                values.append(cls(reference, decision_id, result_id, metadata_provider=self.string_metadata,
+                                  publication=carried))
         metadata = self._metadata_many(values)
         shared = {}
         for index, ((_, binding, _), handle) in enumerate(zip(metadata, handles, strict=True)):
@@ -156,7 +180,11 @@ class Context(StringContext):
                     or carrier.identity != value.reference.object_id):
                 raise ValueError("carried publication differs from the value reference")
             # These wrappers are private to hydration until their checked carriers are attached.
-            object.__setattr__(value, "publication", carrier)
+            if isinstance(value, _PrimitiveHandle):
+                values[index] = _PrimitiveHandle(value.reference, value.decision_id, value.result_id,
+                                                 value.kind, carrier, value.metadata_provider)
+            else:
+                object.__setattr__(value, "publication", carrier)
         return tuple(values)
 
     def _signed_result(self, value, writer, records):
@@ -204,7 +232,8 @@ class Context(StringContext):
             binding = bindings.get(value.reference.field)
             if not isinstance(binding, dict):
                 raise EvidenceError("missing signed primitive binding")
-            expected_kinds = KINDS if isinstance(value, TNNumeric) else {"str"}
+            expected_kinds = ({value.kind} if isinstance(value, _PrimitiveHandle) else
+                              KINDS if isinstance(value, TNNumeric) else {"str"})
             if binding.get("declared", {}).get("kind") not in expected_kinds:
                 raise EvidenceError("primitive class differs from signed logical kind")
             if policy_schema:
@@ -322,16 +351,18 @@ class Context(StringContext):
         return request, items, self._decision(request, call_id, record_permit=operation in {
             "reveal", "model_handoff", "select", "compare", "is_integer", "truth"})
 
-    def _open_values(self, request, values, *, metadata=None):
+    def _open_values(self, request, values, *, metadata=None, _columns=None):
         if metadata is not None and (
                 not isinstance(metadata, _CheckedMetadata) or metadata.context is not self
                 or metadata.references != tuple(value.reference for value in values)):
             raise EvidenceError("prepared metadata differs from this context or its ordered inputs")
-        result, opened = [], {}
-        for value in values:
+        result, opened = ([] if _columns is None else {name: [] for name in _columns}), {}
+        first_data = None
+        for index, value in enumerate(values):
             key = value.reference.object_id, value.reference.group
             if key not in opened:
-                data = self._read(value, [value.reference.group, "evidence"], request.operation)
+                groups = [value.reference.group] if metadata is not None else [value.reference.group, "evidence"]
+                data = self._read(value, groups, request.operation)
                 manifest = signed_manifest(data) if metadata is None else metadata.manifests[key]
                 opened[key] = data, manifest, data.get(None, group=value.reference.group)
             data, manifest, payloads = opened[key]
@@ -340,8 +371,13 @@ class Context(StringContext):
             content = decode(payload, facts["kind"])
             if describe(content) != facts:
                 raise EvidenceError("declared facts do not match the opened content")
-            result.append((data, content))
-        return result
+            if _columns is None:
+                result.append((data, content))
+            else:
+                if first_data is None:
+                    first_data = data
+                result[_columns[index % len(_columns)]].append(content)
+        return result if _columns is None else (first_data, result)
 
     def _release_value(self, data, request, *, operation=None):
         use = tn.UseContext(self.application, self.purpose, operation or request.operation)

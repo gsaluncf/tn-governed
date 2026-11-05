@@ -239,7 +239,7 @@ class _Case:
         if self.request.cell_reads:
             self._read_cells(fetched)
         name = self._attest(fetched[0][0])
-        frame_rows = [(name, fetched[0][1]), *fetched[1:]]
+        frame_rows = fetched.with_row(0, (name, fetched[0][1]))
         with self._step("dataframe"), self.context:
             amount = dataframe_calculate(self.context, frame_rows)
             self.outputs["dataframe_result"] = handle(amount)
@@ -253,7 +253,7 @@ class _Case:
     def _query(self):
         rows = self.request.rows
         with self._step("query"):
-            fetched = self.db.execute("SELECT name, value FROM market_data LIMIT ?", (rows,)).fetchall()
+            fetched = self.db.execute("SELECT name, value FROM market_data LIMIT ?", (rows,)).fetch_batches()
             if len(fetched) != rows:
                 raise RuntimeError("SQL returned a different row count")
         return fetched

@@ -31,14 +31,19 @@ def polars_dtype(profile):
 def build_frame(rows, profile):
     """Construct exactly the declared schema; reject implicit lossy conversion."""
     dtype = polars_dtype(profile)
+    if isinstance(rows, dict):
+        names, values = rows['name'], rows['value']
+    else:
+        names, values = [row['name'] for row in rows], [row['value'] for row in rows]
+    if len(names) != len(values):
+        raise ValueError('column lengths differ')
     pytype = {'int': int, 'float': float, 'Decimal': Decimal}[profile['kind']]
-    if any(type(row['value']) is not pytype or type(row['name']) is not str for row in rows):
+    if any(type(value) is not pytype for value in values) or any(type(name) is not str for name in names):
         raise TypeError('SQL cells differ from the signed dataframe numeric type')
-    if pytype is int and any(not -(2**63) <= row['value'] < 2**63 for row in rows):
+    if pytype is int and any(not -(2**63) <= value < 2**63 for value in values):
         raise OverflowError('integer exceeds the signed Int64 storage range')
     if pytype is Decimal:
-        for row in rows:
-            value = row['value']
+        for value in values:
             if not value.is_finite():
                 raise ValueError('Polars Decimal requires finite values')
             # Check coefficient/scale without rounding through the Decimal context.
@@ -60,9 +65,8 @@ def build_frame(rows, profile):
                 coefficient *= 10 ** shift
             if len(str(coefficient)) > profile['precision']:
                 raise OverflowError('Decimal exceeds the signed precision')
-    frame = pl.DataFrame(rows, schema={'name': pl.String, 'value': dtype}, strict=True)
-    for original, converted in zip(rows, frame['value'].to_list(), strict=True):
-        value = original['value']
+    frame = pl.DataFrame({'name': names, 'value': values}, schema={'name': pl.String, 'value': dtype}, strict=True)
+    for value, converted in zip(values, frame['value'].to_list(), strict=True):
         if pytype is Decimal:
             if value != converted or (value.is_zero() and value.is_signed() != converted.is_signed()):
                 raise ValueError('Decimal representation would lose value or zero sign')

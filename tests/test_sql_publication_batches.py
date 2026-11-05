@@ -107,3 +107,27 @@ def test_source_batch_limit_applies_before_native_publication():
         Context.originate_batch(
             None, [(0, {})] * 4097, None, request=None, decision_id=None, call_id=None
         )
+
+
+def test_column_handoff_defers_wrappers_and_rechecks_admission(sql_endpoint, monkeypatch):
+    from tn.governed import UseDenied
+
+    calls = []
+    initialize = TNNumeric.__init__
+
+    def construct(self, reference, *args, **kwargs):
+        calls.append(reference)
+        initialize(self, reference, *args, **kwargs)
+
+    monkeypatch.setattr(TNNumeric, "__init__", construct)
+    batches = sql_endpoint.driver.execute("SELECT id, amount FROM orders").fetch_batches()
+    assert len(batches) == 257 and len(batches.handles()) == 514
+    assert calls == []
+    first = batches[0]
+    assert len(calls) == 2
+    assert batches[0][0] is first[0] and len(calls) == 2
+    context = sql_endpoint.contexts["consumer"]
+    assert first[1].reveal(context, destination="support-console") == 10
+    context.metadata_accept = lambda _: False
+    with pytest.raises(UseDenied):
+        context._metadata_many(batches.handles())

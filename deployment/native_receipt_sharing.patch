@@ -1,0 +1,294 @@
+--- a/crypto/tn-core/src/governed/reader/mod.rs
++++ b/crypto/tn-core/src/governed/reader/mod.rs
+@@ -382,14 +382,16 @@
+             // manifest alone included.
+             keys.hash_key()?;
+         }
+-        let mut plaintext = BTreeMap::new();
+-        for name in selected {
+-            let fields = keys.open(&name)?;
+-            plaintext.insert(name, Value::Object(fields));
+-        }
++        let manifest = admitted.view.object.manifest_group();
++        let plaintext = if selected.len() == 1 && manifest == Some(selected[0].as_str()) {
++            keys.shared_manifest()?.groups.clone()
++        } else {
++            let mut groups = BTreeMap::new();
++            for name in selected { groups.insert(name.clone(), keys.open(&name)?); }
++            Arc::new(groups)
++        };
+         Ok(OpenedObject {
+-            admitted: admitted.clone(),
+-            groups: plaintext,
++            admitted: admitted.clone(), groups: plaintext, view: std::sync::OnceLock::new(),
+         })
+     }
+ 
+@@ -406,13 +408,26 @@
+         Ok(())
+     }
+ 
++    /// Owned plaintext for callers that need a mutable value.
++    fn decrypt(&self, object: &GovernedObject, name: &str, aad: &[u8])
++        -> Result<(Map<String, Value>, Vec<u8>)> {
++        let result = self.decrypt_shared(object, name, aad)?;
++        let result = Arc::try_unwrap(result).unwrap_or_else(|shared| VerifiedManifest {
++            groups: shared.groups.clone(), bytes: shared.bytes.clone(), digest: shared.digest.clone(),
++        });
++        let mut groups = Arc::try_unwrap(result.groups).unwrap_or_else(|shared| (*shared).clone());
++        let fields = groups.remove(name).expect("decrypted group has its requested name");
++        let bytes = Arc::try_unwrap(result.bytes).unwrap_or_else(|shared| (*shared).clone());
++        Ok((fields, bytes))
++    }
++
+     /// Decrypt one group under `aad`, returning its fields and its exact plaintext bytes.
+-    fn decrypt(
++    fn decrypt_shared(
+         &self,
+         object: &GovernedObject,
+         name: &str,
+         aad: &[u8],
+-    ) -> Result<(Map<String, Value>, Vec<u8>)> {
++    ) -> Result<Arc<VerifiedManifest>> {
+         let block = object
+             .groups
+             .get(name)
+@@ -433,18 +448,22 @@
+                 let cached = self.manifests.lock().map_err(|_| invalid("manifest cache lock poisoned"))?
+                     .entries.get(&cache_key).cloned();
+                 if let Some(cached) = cached {
+-                    if cached.bytes == bytes {
+-                        return Ok((cached.fields.clone(), bytes));
++                    if cached.bytes.as_slice() == bytes.as_slice() {
++                        return Ok(cached);
+                     }
+                 }
+             }
+             let fields = decrypted_fields(&bytes, block, object.bound(), self.indexes.get(name))?;
++            let digest = binding::digest(&bytes);
++            let result = Arc::new(VerifiedManifest {
++                groups: Arc::new(BTreeMap::from([(name.to_owned(), fields)])),
++                bytes: Arc::new(bytes), digest,
++            });
+             if cacheable {
+-                let cached = Arc::new(VerifiedManifest { fields: fields.clone(), bytes: bytes.clone() });
+                 self.manifests.lock().map_err(|_| invalid("manifest cache lock poisoned"))?
+-                    .insert(cache_key, cached);
++                    .insert(cache_key, result.clone());
+             }
+-            return Ok((fields, bytes));
++            return Ok(result);
+         }
+         Err(cipher_error.unwrap_or_else(|| Error::NotEntitled {
+             group: name.to_owned(),
+--- a/crypto/tn-core/src/governed/reader/prepared.rs
++++ b/crypto/tn-core/src/governed/reader/prepared.rs
+@@ -1,5 +1,7 @@
+ //! One read's preparation: AAD inputs derived once and the manifest decrypted once.
+ use serde_json::{Map, Value};
++use std::sync::Arc;
++use super::VerifiedManifest;
+ use subtle::ConstantTimeEq;
+ 
+ use super::{GovernanceView, GovernedReader};
+@@ -15,7 +17,7 @@
+     view: &'a GovernanceView,
+     supplied: Option<&'a str>,
+     hash_key: Option<String>,
+-    manifest: Option<(Map<String, Value>, Vec<u8>)>,
++    manifest: Option<Arc<VerifiedManifest>>,
+     manifest_digest: Option<String>,
+ }
+ 
+@@ -33,9 +35,9 @@
+         };
+         if bound.is_manifest(name) {
+             self.manifest()?;
+-            let (fields, bytes) = self.manifest.take().expect("manifest loaded above");
+-            self.manifest_digest = Some(binding::digest(&bytes));
+-            return Ok(fields);
++            let manifest = self.manifest.take().expect("manifest loaded above");
++            self.manifest_digest = Some(manifest.digest.clone());
++            return Ok(manifest.groups[name].clone());
+         }
+         let hash_key = self.hash_key()?;
+         let aad = bound.aad(name, Input::Data { hash_key: &hash_key })?;
+@@ -43,15 +45,19 @@
+     }
+ 
+     /// The bound manifest's fields and exact bytes, decrypted once.
+-    fn manifest(&mut self) -> Result<&(Map<String, Value>, Vec<u8>)> {
++    fn manifest(&mut self) -> Result<&Arc<VerifiedManifest>> {
+         if self.manifest.is_none() {
+             let object = &self.view.object;
+             let bound = object.binding.as_ref().expect("only a bound object has a bound manifest");
+             let name = bound.manifest.as_deref().expect("asked only when a manifest is designated");
+             let aad = bound.aad(name, Input::Manifest { governance_digest: self.view.digest()? })?;
+-            self.manifest = Some(self.reader.decrypt(object, name, &aad)?);
++            self.manifest = Some(self.reader.decrypt_shared(object, name, &aad)?);
+         }
+         Ok(self.manifest.as_ref().expect("decrypted above"))
++    }
++
++    pub(super) fn shared_manifest(&mut self) -> Result<Arc<VerifiedManifest>> {
++        Ok(self.manifest()?.clone())
+     }
+ 
+     /// The governance hash key derived from the bytes this reader decrypted. A key
+@@ -84,7 +90,7 @@
+         let manifest_digest = match &bound.manifest {
+             Some(_) => Some(match &self.manifest_digest {
+                 Some(digest) => digest.clone(),
+-                None => binding::digest(&self.manifest()?.1),
++                None => self.manifest()?.digest.clone(),
+             }),
+             None => None,
+         };
+--- a/crypto/tn-core/src/governed/reader/manifest_cache.rs
++++ b/crypto/tn-core/src/governed/reader/manifest_cache.rs
+@@ -5,8 +5,9 @@
+ 
+ pub(super) type CacheKey = (String, String, Vec<u8>);
+ pub(super) struct VerifiedManifest {
+-    pub fields: Map<String, Value>,
+-    pub bytes: Vec<u8>,
++    pub groups: Arc<BTreeMap<String, Map<String, Value>>>,
++    pub bytes: Arc<Vec<u8>>,
++    pub digest: String,
+ }
+ #[derive(Default)]
+ pub(super) struct ManifestCache {
+--- a/crypto/tn-core/src/governed/reader/opened.rs
++++ b/crypto/tn-core/src/governed/reader/opened.rs
+@@ -1,17 +1,24 @@
+ //! Selected plaintext, with the admission it was opened under.
+ use std::collections::BTreeMap;
++use std::sync::{Arc, OnceLock};
+ 
+-use serde_json::Value;
++use serde_json::{Map, Value};
+ 
+ use super::AdmittedObject;
+ use crate::governed::{Governance, GovernedDraft, GovernedObject, SourceReference, UseContext, GOVERNANCE_GROUP};
+ use crate::Result;
+ 
+ /// Selected plaintext with its accepted contract and original signed source.
+-#[derive(Clone)]
+ pub struct OpenedObject {
+     pub(super) admitted: AdmittedObject,
+-    pub(super) groups: BTreeMap<String, Value>,
++    pub(super) groups: Arc<BTreeMap<String, Map<String, Value>>>,
++    pub(super) view: OnceLock<BTreeMap<String, Value>>,
++}
++
++impl Clone for OpenedObject {
++    fn clone(&self) -> Self {
++        Self { admitted: self.admitted.clone(), groups: self.groups.clone(), view: OnceLock::new() }
++    }
+ }
+ 
+ impl OpenedObject {
+@@ -33,11 +40,18 @@
+     }
+     /// Selected business plaintext, separated by group.
+     pub fn groups(&self) -> &BTreeMap<String, Value> {
+-        &self.groups
++        self.view.get_or_init(|| self.groups.iter().map(|(name, fields)| (name.clone(), Value::Object(fields.clone()))).collect())
+     }
+-    /// The selected plaintext, without a copy.
++    /// Materialize independently owned JSON groups for a mutable external consumer.
+     pub fn into_groups(self) -> BTreeMap<String, Value> {
++        Arc::try_unwrap(self.groups).unwrap_or_else(|shared| (*shared).clone())
++            .into_iter().map(|(name, fields)| (name, Value::Object(fields))).collect()
++    }
++    pub(in crate::governed) fn into_shared_groups(self) -> Arc<BTreeMap<String, Map<String, Value>>> {
+         self.groups
++    }
++    pub(in crate::governed) fn group_names(&self) -> Vec<String> {
++        self.groups.keys().cloned().collect()
+     }
+     /// Accepted contract carried with the plaintext.
+     pub fn governance(&self) -> &Governance {
+--- a/crypto/tn-core/src/governed/data/mod.rs
++++ b/crypto/tn-core/src/governed/data/mod.rs
+@@ -101,16 +101,13 @@
+         let source = SourceReference::from_opened(&opened)?;
+         let object = opened.object().clone();
+         let governance = opened.governance().clone();
+-        let groups = opened.into_groups().into_iter().map(|(name, value)| {
+-            let Value::Object(fields) = value else { return Err(invalid("business group must be an object")); };
+-            Ok((name, fields))
+-        }).collect::<Result<BTreeMap<_, _>>>()?;
++        let groups = opened.into_shared_groups();
+         let (opaque, holders) = unopened_groups(&object, &groups);
+         let manifest = object.manifest_group().filter(|name| groups.contains_key(*name)).map(str::to_owned);
+         Ok(Self {
+             object_type: object.object_type().to_owned(),
+             governance,
+-            groups: Arc::new(groups),
++            groups,
+             opaque,
+             holders,
+             manifest,
+--- a/crypto/tn-core/src/governed/source.rs
++++ b/crypto/tn-core/src/governed/source.rs
+@@ -44,7 +44,7 @@
+         Self::new(
+             opened.object(),
+             opened.governance(),
+-            opened.groups().keys().cloned().collect(),
++            opened.group_names(),
+             opened.operation(),
+         )
+     }
+--- a/crypto/tn-core/src/governed/reader/tests.rs
++++ b/crypto/tn-core/src/governed/reader/tests.rs
+@@ -265,7 +265,7 @@
+     let admitted = reader.governance(&object).unwrap().accept(
+         usage(), ["x"], |_| Ok(true)).unwrap();
+     let opened = reader.open(&admitted, ["x"]).unwrap();
+-    let pointer = opened.groups()["x"]["from"].as_str().unwrap().as_ptr();
++    let pointer = opened.groups["x"]["from"].as_str().unwrap().as_ptr();
+     let data = crate::governed::DataObject::from_opened(opened).unwrap();
+     assert_eq!(pointer, data.group("x").unwrap()["from"].as_str().unwrap().as_ptr(),
+                "receipt must move owned plaintext rather than allocate another group copy");
+@@ -310,3 +310,12 @@
+     let reader = reader.with_group_index_key("x", &[99; 32]).unwrap();
+     assert!(reader.receive_for(&object, &usage(), ["x"], None, |_| Ok(true)).is_err());
+ }
++
++#[test]
++fn cached_manifest_receipts_share_immutable_group_storage() {
++    let (reader, object) = manifest_fixture();
++    let first = reader.receive_for(&object, &usage(), ["x"], None, |_| Ok(true)).unwrap();
++    let second = reader.receive_for(&object, &usage(), ["x"], None, |_| Ok(true)).unwrap();
++    assert!(std::ptr::eq(first.groups(), second.groups()));
++    assert!(reader.receive_for(&object, &usage(), ["x"], None, |_| Ok(false)).is_err());
++}
+--- a/crypto/tn-core/src/governed/route.rs
++++ b/crypto/tn-core/src/governed/route.rs
+@@ -165,7 +165,7 @@
+             .position(|admitted| admitted.same_admission(opened.admitted()))
+             .ok_or_else(|| invalid("opened groups do not belong to this admitted route"))?;
+         let supplied = &self.stops[index].supplied;
+-        if opened.groups().keys().any(|name| !supplied.contains(name)) {
++        if opened.group_names().iter().any(|name| !supplied.contains(name)) {
+             return Err(invalid("an object on a route opens only the groups it supplies"));
+         }
+         Ok(index)
+--- a/crypto/tn-core/src/governed/reader/tests.rs
++++ b/crypto/tn-core/src/governed/reader/tests.rs
+@@ -319,3 +319,13 @@
+     assert!(std::ptr::eq(first.groups(), second.groups()));
+     assert!(reader.receive_for(&object, &usage(), ["x"], None, |_| Ok(false)).is_err());
+ }
++
++#[test]
++fn route_name_validation_does_not_materialize_plaintext_json() {
++    let (reader, object) = manifest_fixture();
++    let route = reader.admit_route(&object, &usage(), ["x"], None, |_| Ok(true)).unwrap();
++    let opened = reader.open(route.stops().next().unwrap().0, ["x"]).unwrap();
++    assert!(opened.view.get().is_none());
++    assert!(route.position(&opened).is_ok());
++    assert!(opened.view.get().is_none());
++}

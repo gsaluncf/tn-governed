@@ -1,48 +1,47 @@
 Two governed CPU implementations process 100,000 rows using the same local WSL runtime,
-local Java Unity service, SQL batch size 4096 and eight Polars threads. The timed case
-includes setup, SQL ingestion, dataframe processing, retained output and verification.
-Model startup and inference are disabled. No cloud resources are used.
+local Java Unity service, SQL batch size 4096 and eight Polars threads. The case includes
+setup, SQL ingestion, dataframe processing, retained output and verification. Environment
+and service startup and Python imports are outside the case timer. Model startup and
+inference are disabled. No cloud resources are used.
 
-Two repetitions per implementation ran in this order: before, after, after, before.
-The comparison uses arithmetic means. Each case completed and verified.
+Two repetitions per implementation ran before, after, after, before. Results below are
+arithmetic means. All four cases completed and verified. The baseline is commit e33863f.
 
-Complete case: 10.911326 -> 7.828582 seconds (28.3% lower).
-Optimized cases: 8.066627, 7.590537 seconds.
-query: 7.194739 -> 4.447710 seconds.
-dataframe: 2.729489 -> 2.316416 seconds.
-export: 0.457861 -> 0.573366 seconds.
-verification: 0.144820 -> 0.146369 seconds.
+Complete case: 7.812367 -> 6.242577 seconds (20.1% lower).
+Optimized cases: 6.106128, 6.379025 seconds.
+query: 4.583831 -> 3.725640 seconds.
+dataframe: 2.251567 -> 1.559230 seconds.
+export: 0.491335 -> 0.473809 seconds.
+verification: 0.143459 -> 0.149114 seconds.
 
 Exclusive component comparisons:
-native release and sealing: 1.761555 -> 0.796257 seconds.
-native group extraction into Python: 0.897467 -> 0.332804 seconds.
-publish and register batch editions: 0.674578 -> 0.233432 seconds.
-construct source references and wrappers: 0.624918 -> 0.247104 seconds.
-construct consumer wrappers: 0.421206 -> 0.307267 seconds.
-adopt carried publications: 0.213284 -> 0.056537 seconds.
+native workflow metadata receipt: 1.097677 -> 0.635092 seconds.
+native receipt and opening: 0.618242 -> 0.288079 seconds.
+native policy output construction: 0.504898 -> 0.253183 seconds.
+dataframe: 0.333262 -> 0.132809 seconds.
 
-Implemented work, in bottleneck order:
-1. Share native working groups and drafts; isolate edits with copy-on-write.
-2. Encode group JSON once and hash each field's encoded slice.
-3. Read native JSON directly into detached Python results; share repeated immutable dictionary keys.
-4. Publish editions from native objects without serializing and reparsing them.
-5. Encode SQL column batches directly and construct cell wrappers only at the receiver.
-6. Adopt each carrier once per operation and reuse its immutable identity.
+Copy removal and handoff changes:
+1. Cache parsed receipt groups and exact plaintext bytes by shared immutable ownership.
+2. Pass shared groups through opened receipts into working objects; edits use copy-on-write.
+3. Inspect route/source group names without materializing the public JSON view.
+4. Move parsed Python-to-native JSON into working groups without serializing it again.
+5. Keep admitted SQL references in batches; construct scalar wrappers on access.
+6. Open dataframe payloads directly into columns, avoiding row dictionaries and retained per-cell open-result pairs.
+7. Reuse prepared metadata while opening only the requested payload group.
+
+32 focused Python checks passed, including current metadata admission, prepared input
+binding, lazy wrapper creation, detached reads, dataframe governance and int/float/Decimal
+results. 145 native checks passed, including shared receipt ownership, edit isolation,
+route-name validation, group validation, index-key changes and revoked cipher access.
 
 Largest remaining exclusive components, in seconds:
-1.008954: native workflow metadata receipt.
-0.796257: native release and sealing.
-0.603275: native receipt and opening.
-0.560003: serialize and persist retained publications.
-0.493404: native policy output construction.
-0.488693: authorize payload access and check opened values.
-0.358444: dataframe.
-0.336931: validate source cells and build encoded fields/facts.
+0.828802: native release and sealing.
+0.635092: native workflow metadata receipt.
+0.461010: serialize and persist retained publications.
+0.445062: authorize payload access and check opened values.
+0.353375: validate source cells and build encoded fields/facts.
+0.326934: validate field bindings and claims.
+0.307617: native group extraction into Python.
+0.288079: native receipt and opening.
 
-The remaining native receipt work includes first-use metadata parsing, canonical encoding,
-field-hash verification, decryption and copying cached manifest fields into working objects.
-The remaining sealing work includes encoding, field HMACs, encryption, signing and envelope construction.
-
-37 focused checks passed for detached reads, carrier bindings, SQL batching, metadata admission,
-prepared-operation binding and dataframe governance. The canonical/hash implementation passed
-142 native unit checks. Results are recorded in performance-100k.json.
+Measurements and earlier comparisons are retained in performance-100k.json.
