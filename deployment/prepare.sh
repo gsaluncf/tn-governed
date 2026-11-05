@@ -41,6 +41,14 @@ fi
 if ! rg -q 'fn shared_groups' crypto/tn-core/src/governed/writer.rs; then
     patch --batch --forward -p1 < "$root/deployment/native_copy_on_write.patch"
 fi
+if ! rg -q 'fn canonical_object_fields' crypto/tn-core/src/canonical.rs; then
+    patch --batch --forward -p1 < "$root/deployment/native_single_pass.patch"
+fi
+if ! rg -q 'fn group_fields' crypto/tn-core/src/governed/data/edit.rs; then
+    # These files in the pinned archive use CRLF; patch context uses LF.
+    sed -i 's/\r$//' crypto/tn-core-py/src/governed/data.rs crypto/tn-core-py/src/governed/codec.rs
+    patch --batch --forward -p1 < "$root/deployment/native_python_reads.patch"
+fi
 cargo metadata --offline --format-version 1 > "$work/sdk-metadata.json"
 CARGO_TARGET_DIR="$work/sdk-target" maturin build --release --locked --compatibility linux --out "$work/wheelhouse"
 cd "$work/project"

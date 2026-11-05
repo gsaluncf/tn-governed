@@ -1,22 +1,48 @@
-Local CPU optimization, 100,000 rows
+Two governed CPU implementations process 100,000 rows using the same local WSL runtime,
+local Java Unity service, SQL batch size 4096 and eight Polars threads. The timed case
+includes setup, SQL ingestion, dataframe processing, retained output and verification.
+Model startup and inference are disabled. No cloud resources are used.
 
-Baseline: 13.060 seconds for the full case, including retained output and verification.
-All measurements use the same local WSL runtime and local Java Unity service.
-No cloud or GPU resources are used.
+Two repetitions per implementation ran in this order: before, after, after, before.
+The comparison uses arithmetic means. Each case completed and verified.
 
-Priority list
-1. Native working-copy and draft creation: share immutable group storage; copy on mutation.
-2. Native group encoding: serialize borrowed maps without cloning the entire JSON tree.
-3. Repeated carrier registration and metadata traversal: process each shared object once per operation.
-4. Archive/export: remove repeated opens and redundant serialization while retaining stored-data verification.
+Complete case: 10.911326 -> 7.828582 seconds (28.3% lower).
+Optimized cases: 8.066627, 7.590537 seconds.
+query: 7.194739 -> 4.447710 seconds.
+dataframe: 2.729489 -> 2.316416 seconds.
+export: 0.457861 -> 0.573366 seconds.
+verification: 0.144820 -> 0.146369 seconds.
 
-Measurements
-Baseline: complete and verified, 13.060 seconds.
-Native immutable groups and borrowed encoding: 12.605 seconds, verified.
-Carrier adoption once per operation; direct native edition publication; policy selection once per data object: 9.480 seconds, verified.
-Baseline to current: 27.4% lower elapsed case time.
-Release and sealing: 1.888 to 1.039 seconds.
-Edition publication/registration: 0.839 to 0.243 seconds.
+Exclusive component comparisons:
+native release and sealing: 1.761555 -> 0.796257 seconds.
+native group extraction into Python: 0.897467 -> 0.332804 seconds.
+publish and register batch editions: 0.674578 -> 0.233432 seconds.
+construct source references and wrappers: 0.624918 -> 0.247104 seconds.
+construct consumer wrappers: 0.421206 -> 0.307267 seconds.
+adopt carried publications: 0.213284 -> 0.056537 seconds.
 
-Completed: priorities 1 through 3. Next: remove producer wrappers discarded during SQL handoff.
-Validation: 19 focused Python tests and 141 native unit tests passed.
+Implemented work, in bottleneck order:
+1. Share native working groups and drafts; isolate edits with copy-on-write.
+2. Encode group JSON once and hash each field's encoded slice.
+3. Read native JSON directly into detached Python results; share repeated immutable dictionary keys.
+4. Publish editions from native objects without serializing and reparsing them.
+5. Encode SQL column batches directly and construct cell wrappers only at the receiver.
+6. Adopt each carrier once per operation and reuse its immutable identity.
+
+Largest remaining exclusive components, in seconds:
+1.008954: native workflow metadata receipt.
+0.796257: native release and sealing.
+0.603275: native receipt and opening.
+0.560003: serialize and persist retained publications.
+0.493404: native policy output construction.
+0.488693: authorize payload access and check opened values.
+0.358444: dataframe.
+0.336931: validate source cells and build encoded fields/facts.
+
+The remaining native receipt work includes first-use metadata parsing, canonical encoding,
+field-hash verification, decryption and copying cached manifest fields into working objects.
+The remaining sealing work includes encoding, field HMACs, encryption, signing and envelope construction.
+
+37 focused checks passed for detached reads, carrier bindings, SQL batching, metadata admission,
+prepared-operation binding and dataframe governance. The canonical/hash implementation passed
+142 native unit checks. Results are recorded in performance-100k.json.

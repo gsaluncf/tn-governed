@@ -5,6 +5,8 @@ from __future__ import annotations
 import operator
 from decimal import Decimal
 
+from tn_governed.native_objects import CarriedPublication
+
 from .numeric_codec import NUMERIC_TYPES, KINDS
 
 from .string import MetadataUnavailable, OperationDenied, ValueReference, _active, _exposure
@@ -26,13 +28,13 @@ class TNNumeric:
         if not isinstance(reference, ValueReference):
             raise TypeError("TNNumeric requires a native publication field reference")
         if publication is not None:
-            from tn_governed.native_objects import CarriedPublication
-            if not isinstance(publication, CarriedPublication) or publication.object.id != reference.object_id:
+            if not isinstance(publication, CarriedPublication) or publication.identity != reference.object_id:
                 raise ValueError("carried publication differs from the value reference")
-        for name, value in (("reference", reference), ("decision_id", decision_id),
-                            ("result_id", result_id), ("metadata_provider", metadata_provider),
-                            ("publication", publication)):
-            object.__setattr__(self, name, value)
+        object.__setattr__(self, "reference", reference)
+        object.__setattr__(self, "decision_id", decision_id)
+        object.__setattr__(self, "result_id", result_id)
+        object.__setattr__(self, "metadata_provider", metadata_provider)
+        object.__setattr__(self, "publication", publication)
 
     @property
     def dtype(self):

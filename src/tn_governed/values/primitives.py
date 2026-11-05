@@ -126,12 +126,13 @@ class Context(StringContext):
     def hydrate_many(self, handles):
         handles = tuple(handles)
         values = []
+        kinds = {"str", *KINDS}
         for handle in handles:
             if len(handle) not in (4, 5):
                 raise ValueError("received handles require four fields and optional native material")
             reference, decision_id, result_id, kind = handle[:4]
             carried = handle[4] if len(handle) == 5 else None
-            if kind not in {"str", *KINDS}:
+            if kind not in kinds:
                 raise TypeError("unsupported primitive kind")
             cls = TNString if kind == "str" else TNNumeric
             values.append(cls(reference, decision_id, result_id, metadata_provider=self.string_metadata,
@@ -152,7 +153,7 @@ class Context(StringContext):
             else:
                 continue
             if (not isinstance(carrier, CarriedPublication)
-                    or carrier.object.id != value.reference.object_id):
+                    or carrier.identity != value.reference.object_id):
                 raise ValueError("carried publication differs from the value reference")
             # These wrappers are private to hydration until their checked carriers are attached.
             object.__setattr__(value, "publication", carrier)
@@ -405,7 +406,7 @@ class Context(StringContext):
         return self._source_fields({"value": encode(content)}, {"value": describe(content)},
                                    policy, request, decision_id, call_id)[0]
 
-    def _source_fields(self, fields, facts, policy, request, decision_id, call_id):
+    def _source_fields(self, fields, facts, policy, request, decision_id, call_id, *, _handles=False):
         """Bind each field to the source rules under this endpoint's signed query admission."""
         if ((request.application, request.purpose, request.operation) != (self.application, self.purpose, "select")
                 or not any(policy.matches_contract(p) for p in request.policies)):
@@ -430,9 +431,13 @@ class Context(StringContext):
         publication = self._release_value(data, replace(request, policies=(policy,)))
         carrier = self._policy_carrier(publication, support)
         cls = TNString if next(iter(facts.values()))["kind"] == "str" else TNNumeric
-        return tuple(cls(ValueReference(publication.id, field, "values"), None, None,
+        identity = publication.id
+        # SQL hands references directly to its receiver; only that endpoint needs wrappers.
+        return (tuple((ValueReference(identity, field, "values"), None, None,
+                       facts[field]["kind"], carrier) for field in fields) if _handles else
+                tuple(cls(ValueReference(identity, field, "values"), None, None,
                          metadata_provider=self.string_metadata, publication=carrier)
-                     for field in fields)
+                      for field in fields))
 
     def compare(self, left, right, *, operation):
         if _active.get() is not self:

@@ -7,6 +7,7 @@ import tn
 from test_sql_query_results import sql_endpoint as sql_endpoint
 
 from tn_governed.values.primitives import Context
+from tn_governed.values.numeric import TNNumeric
 from tn_governed.values.sql import GovernedSQL
 
 
@@ -39,7 +40,16 @@ def test_native_256_cell_batches_preserve_field_positions_policies_and_claims(
     def reject_walk(*args, **kwargs):
         pytest.fail("a current SQL source must not request calculation history")
     monkeypatch.setattr(tn, "LineageVerifier", reject_walk)
+    constructions = []
+    initialize = TNNumeric.__init__
+
+    def construct(self, reference, *args, **kwargs):
+        constructions.append(reference)
+        initialize(self, reference, *args, **kwargs)
+
+    monkeypatch.setattr(TNNumeric, "__init__", construct)
     rows = driver.execute("SELECT id, amount FROM orders").fetchall()
+    assert len(constructions) == 514
     context = sql_endpoint.contexts["consumer"]
     assert len(rows) == 257
     references = [value.reference for row in rows for value in row]

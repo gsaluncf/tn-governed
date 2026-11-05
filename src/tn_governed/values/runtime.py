@@ -17,7 +17,7 @@ from tn_governed.native_objects import CarriedPublication, NativeObjects
 from .evidence import OBJECT_ID, EvidenceError, EvidenceRecorder, check_monitor
 from .obligations import ObligationResult as ObligationResult
 from .obligations import ObligationRun, run_obligations
-from .references import pack_references, unpack_references
+from .references import unpack_references
 from .string import (
     OperationDenied, StringMetadataProvider, TNString, ValueReference, _active, _exposure,
 )
@@ -168,7 +168,7 @@ class Context:
                 continue
             key = id(carried)
             previous = adopted.get(key)
-            identity = previous[1] if previous is not None else carried.object.id
+            identity = previous[1] if previous is not None else carried.identity
             if identity != value.reference.object_id:
                 raise EvidenceError("carried publication differs from the value reference")
             if previous is not None:

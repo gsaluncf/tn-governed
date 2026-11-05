@@ -12,7 +12,8 @@ import re
 from uuid import uuid4
 
 from .collection import pauses_collection
-from .numeric_codec import KINDS
+from .metadata import describe
+from .numeric_codec import KINDS, encode
 from .primitives import MAX_SOURCE_PUBLICATION_CELLS
 from .query import SQLiteQuery, digest
 from .runtime import Request
@@ -156,6 +157,19 @@ class GovernedSQL:
                             {"decision_id": decision, "error_type": type(exc).__name__})
             raise
 
+    def _publish_column(self, contents, *, first_row, kind, policy, request, decision_id, call_id):
+        """Encode a SQL column once and hand native references to its receiver."""
+        expected_type = SQL_TYPES.get(kind)
+        fields, facts = {}, {}
+        for index, content in enumerate(contents, first_row):
+            if expected_type is None or type(content) is not expected_type:
+                raise TypeError("SQL type differs from its signed column assignment")
+            field = f"value_{index}"
+            fields[field] = encode(content)
+            facts[field] = describe(content)
+        return self.gateway._source_fields(fields, facts, policy, request, decision_id, call_id,
+                                           _handles=True)
+
     def _execute_direct(self, sql, parameters, prepared):
         match = SELECT.fullmatch(sql)
         columns, table, limit = match.groups()
@@ -188,25 +202,19 @@ class GovernedSQL:
             rows = [[None] * len(columns) for _ in raw_rows]
             publications, handles, positions = [], [], []
             for start in range(0, len(raw_rows), self.batch_size):
+                batch = raw_rows[start:start + self.batch_size]
                 for column_index, column in enumerate(columns):
-                    cells = []
-                    for index in range(start, min(start + self.batch_size, len(raw_rows))):
-                        content = raw_rows[index][column_index]
-                        assigned_kind = resolution.columns[column]["kind"]
-                        if assigned_kind not in SQL_TYPES or type(content) is not SQL_TYPES[assigned_kind]:
-                            raise TypeError("SQL type differs from its signed column assignment")
-                        source = {"table": table, "column": column, "row": index,
+                    policy = resolution.policies[column]
+                    batch_handles = self._publish_column(
+                        (row[column_index] for row in batch), first_row=start,
+                        kind=resolution.columns[column]["kind"], policy=policy, request=request,
+                        decision_id=decision, call_id=query_id)
+                    source = {"table": table, "column": column, "row": start,
                               "query_id": query_id, "assignment_id": resolution.assignment_id,
                               "snapshot_sha256": identity["snapshot_sha256"]}
-                        cells.append((content, source))
-                    policy = resolution.policies[column]
-                    values = gateway.originate_batch(cells, policy, request=request,
-                                                      decision_id=decision, call_id=query_id)
-                    publications.append((values[0], policy, cells[0][1]))
-                    for value, (content, source) in zip(values, cells, strict=True):
-                        handles.append((value.reference, value.decision_id, value.result_id,
-                                        type(content).__name__, value.publication))
-                        positions.append((source["row"], column_index))
+                    publications.append((batch_handles[0][4].object, policy, source))
+                    handles.extend(batch_handles)
+                    positions.extend((start + offset, column_index) for offset in range(len(batch)))
             if publications:
                 editions = self.edition_publisher.publish_query_editions(query_id, publications,
                     directory=self.directory / query_id, application=self.consumer.application,

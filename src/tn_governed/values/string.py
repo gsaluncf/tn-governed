@@ -10,6 +10,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Protocol
 from urllib.parse import quote, urlencode
 
+from tn_governed.native_objects import CarriedPublication
 from tn_governed.publications import object_digest
 
 if TYPE_CHECKING:
@@ -112,8 +113,7 @@ class TNString(str):
         if not isinstance(reference, ValueReference):
             raise TypeError("TNString requires a native publication field reference")
         if publication is not None:
-            from tn_governed.native_objects import CarriedPublication
-            if not isinstance(publication, CarriedPublication) or publication.object.id != reference.object_id:
+            if not isinstance(publication, CarriedPublication) or publication.identity != reference.object_id:
                 raise ValueError("carried publication differs from the value reference")
         locator = (_locator_root(reference.object_id, reference.group)
                    + quote(reference.field, safe="")

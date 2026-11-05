@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import tn
 
@@ -17,10 +17,12 @@ class CarriedPublication:
     object: tn.GovernedObject
     parents: tuple[CarriedPublication, ...] = ()
     support: tuple[tn.GovernedObject, ...] = ()
+    identity: str = field(init=False)
 
     def __post_init__(self):
         if not isinstance(self.object, tn.GovernedObject):
             raise TypeError("carried publication requires a native GovernedObject")
+        object.__setattr__(self, "identity", self.object.id)
         if not isinstance(self.parents, tuple) or any(
             not isinstance(parent, CarriedPublication) for parent in self.parents
         ):

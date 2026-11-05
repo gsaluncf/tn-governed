@@ -1,0 +1,126 @@
+--- a/crypto/tn-core/src/governed/data/edit.rs
++++ b/crypto/tn-core/src/governed/data/edit.rs
+@@ -10,11 +10,7 @@
+ impl DataObject {
+     /// Read a business field, or the complete opened group when field is None.
+     pub fn get(&self, group: &str, field: Option<&str>) -> Result<Value> {
+-        business_group(group)?;
+-        let fields = self
+-            .groups
+-            .get(group)
+-            .ok_or_else(|| invalid(format!("no opened group {group:?}")))?;
++        let fields = self.group_fields(group)?;
+         match field {
+             Some(name) => fields
+                 .get(name)
+@@ -23,6 +19,12 @@
+             None => Ok(Value::Object(fields.clone())),
+         }
+     }
++    /// Borrow an opened business group without copying its JSON tree.
++    pub fn group_fields(&self, group: &str) -> Result<&Map<String, Value>> {
++        business_group(group)?;
++        self.groups.get(group).ok_or_else(|| invalid(format!("no opened group {group:?}")))
++    }
++
+     /// Change a business field or replace a group; contracts remain attached.
+     pub fn set(&mut self, group: &str, field: Option<&str>, value: Value) -> Result<()> {
+         match field {
+--- a/crypto/tn-core-py/src/governed/data.rs
++++ b/crypto/tn-core-py/src/governed/data.rs
+@@ -105,11 +105,19 @@
+         group: Option<&str>,
+     ) -> PyResult<Bound<'py, PyAny>> {
+         guard(|| {
+-            let value = self
+-                .locked()?
+-                .get(group.unwrap_or(&self.default_group), name)
+-                .map_err(to_py)?;
+-            codec::to_python(py, &value)
++            // The snapshot shares immutable native groups; Python allocation runs without a data lock.
++            let data = self.read()?;
++            let group = group.unwrap_or(&self.default_group);
++            let fields = data.group_fields(group).map_err(to_py)?;
++            match name {
++                Some(name) => {
++                    let value = fields.get(name).ok_or_else(||
++                        to_py(tn_core::Error::Malformed { kind: "governed object",
++                            reason: format!("no field {name:?} in {group:?}") }))?;
++                    codec::to_python(py, value)
++                }
++                None => codec::fields_to_python(py, fields).map(|dict| dict.into_any()),
++            }
+         })
+     }
+     #[pyo3(signature = (name, value, *, group=None))]
+--- a/crypto/tn-core-py/src/governed/codec.rs
++++ b/crypto/tn-core-py/src/governed/codec.rs
+@@ -5,6 +5,7 @@
+ use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
+ use pyo3::IntoPyObjectExt;
+ use serde_json::{Map, Value};
++use std::collections::HashMap;
+ 
+ pub(super) fn fields(dict: &Bound<'_, PyDict>) -> PyResult<Map<String, Value>> {
+     match to_json(dict.as_any(), 0)? {
+@@ -70,6 +71,13 @@
+ }
+ 
+ pub(super) fn to_python<'py>(py: Python<'py>, value: &Value) -> PyResult<Bound<'py, PyAny>> {
++    to_python_shared(py, value, &mut HashMap::new())
++}
++
++fn to_python_shared<'py, 'data>(
++    py: Python<'py>, value: &'data Value,
++    keys: &mut HashMap<&'data str, Bound<'py, PyString>>,
++) -> PyResult<Bound<'py, PyAny>> {
+     Ok(match value {
+         Value::Null => py.None().into_bound(py),
+         Value::Bool(v) => v.into_bound_py_any(py)?,
+@@ -88,18 +96,38 @@
+         Value::Array(values) => {
+             let list = PyList::empty(py);
+             for value in values {
+-                list.append(to_python(py, value)?)?;
++                list.append(to_python_shared(py, value, keys)?)?;
+             }
+             list.into_any()
+         }
+-        Value::Object(fields) => {
+-            let dict = PyDict::new(py);
+-            for (key, value) in fields {
+-                dict.set_item(key, to_python(py, value)?)?;
++        Value::Object(fields) => fields_to_python_shared(py, fields, keys)?.into_any(),
++    })
++}
++
++pub(super) fn fields_to_python<'py>(
++    py: Python<'py>, fields: &Map<String, Value>,
++) -> PyResult<Bound<'py, PyDict>> {
++    fields_to_python_shared(py, fields, &mut HashMap::new())
++}
++
++fn fields_to_python_shared<'py, 'data>(
++    py: Python<'py>, fields: &'data Map<String, Value>,
++    keys: &mut HashMap<&'data str, Bound<'py, PyString>>,
++) -> PyResult<Bound<'py, PyDict>> {
++    let dict = PyDict::new(py);
++    for (key, value) in fields {
++        // Repeated structural keys share immutable Python strings within this conversion.
++        let key_object = match keys.get(key.as_str()) {
++            Some(existing) => existing.clone(),
++            None => {
++                let text = PyString::new(py, key);
++                if keys.len() < 256 { keys.insert(key.as_str(), text.clone()); }
++                text
+             }
+-            dict.into_any()
+-        }
+-    })
++        };
++        dict.set_item(key_object, to_python_shared(py, value, keys)?)?;
++    }
++    Ok(dict)
+ }
+ 
+ pub(super) fn wire(value: &Bound<'_, PyAny>) -> PyResult<String> {
