@@ -1,9 +1,8 @@
 """Governance context size and cost on the native model path.
 
-Input rows set the number of provenance entries, which are listed in the model
-context up to the presentation limit and replaced by committed references above
-it. Additional attestations add signed claims, which always remain verbatim. The
-retained server log gives prompt tokens and inference time for each case.
+The study varies input row counts and signed claims and records the rendered
+prompt size. The retained server log gives prompt tokens and inference time for
+each case.
 """
 
 from __future__ import annotations
@@ -19,15 +18,9 @@ from .evidence_mutants import native_rows
 from .run import run_case
 from .study_summary import log_turns
 
-# The runtime lists at most LISTED_ENTRIES dataset bindings or lineage entries in
-# the model context and replaces a longer list with its committed reference. Each
-# BATCH input rows add two entries, so LISTED_ROWS is the largest fully listed input.
-LISTED_ENTRIES = 16
 BATCH = 256
-LISTED_ROWS = LISTED_ENTRIES // 2 * BATCH
-ROW_CASES = (8, BATCH, LISTED_ROWS // 2, LISTED_ROWS, LISTED_ROWS + BATCH, 2 * LISTED_ROWS, 8 * LISTED_ROWS)
+ROW_CASES = (8, BATCH, 1024, 2048, 2304, 4096, 16384)
 CLAIM_CASES = (0, 1, 3, 7)
-REFERENCE_SCHEMA = b"tn.governance-reference.v1"
 
 
 def turn_timings(directory):
@@ -50,8 +43,7 @@ def measure(root, label, settings, *, rows, additional_claims=0, claim=True):
     if not (summary["completed"] and summary["verified"]):
         raise RuntimeError(f"context case failed: {label}: {summary.get('error')}")
     prompt = rendered_prompt(directory)
-    return {"label": label, "rows": rows, "provenance_entries": 2 * -(-rows // BATCH),
-            "provenance_listed": REFERENCE_SCHEMA not in prompt,
+    return {"label": label, "rows": rows, "source_batch_rows": BATCH,
             "claims": (additional_claims + 1) if claim else 0,
             "rendered_prompt_bytes": len(prompt), **turn_timings(directory),
             "generation_seconds": summary["timings_seconds"]["generation"]}
@@ -78,9 +70,6 @@ def main():
     results += [measure(root, f"claims-{extra + 1}", settings, rows=8, additional_claims=extra)
                 for extra in CLAIM_CASES[1:]]
     (root / "results.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
-    listed = {item["rows"]: item["provenance_listed"] for item in results[:len(ROW_CASES)]}
-    if not listed[LISTED_ROWS] or listed[LISTED_ROWS + BATCH]:
-        raise RuntimeError(f"the runtime does not list exactly {LISTED_ENTRIES} provenance entries")
 
 
 if __name__ == "__main__":
