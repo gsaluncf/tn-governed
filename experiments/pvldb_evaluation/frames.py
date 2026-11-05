@@ -8,7 +8,6 @@ rows and columns, and the context publishes the numeric result with signed recor
 
 from copy import deepcopy
 import hashlib
-import io
 import json
 from pathlib import Path
 import tempfile
@@ -87,7 +86,7 @@ class DataframeGovernance(UnityGovernance):
         return self._frame_artifacts[key]
 
     def publish_edition(self, value, *, policy, source, directory, application, purpose, register=True):
-        obj = tn.GovernedObject.read(io.BytesIO(self.store.get(value.reference.object_id)))
+        obj = self.store.read(value.reference.object_id)
         dataset = source["table"] + "." + source["column"]
         edition = source["query_id"] + "-" + str(source["row"])
         uses = [tn.UseContext(application, purpose, op)
@@ -160,7 +159,7 @@ def _select_policies(context, metadata, use):
     selected, checked = {}, set()
     for index, (data, _, _) in enumerate(metadata):
         column = "name" if index % 2 == 0 else "value"
-        key = (data.snapshot.id, column)
+        key = (id(data), column)
         if key not in checked:
             edition = _checked_edition(context, data, column, use, module_cache, selected)
             sources[column].add(root_name(edition["source_object_id"], column))

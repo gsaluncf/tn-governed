@@ -159,20 +159,29 @@ class Context:
 
     def _adopt(self, values):
         """Use the native objects owned by supplied values in this endpoint."""
+        adopted = {}
+        store = self.recorder.store
+        native = isinstance(store, NativeObjects)
         for value in values:
             carried = getattr(value, "publication", None)
             if carried is None:
                 continue
-            if carried.object.id != value.reference.object_id:
+            key = id(carried)
+            previous = adopted.get(key)
+            identity = previous[1] if previous is not None else carried.object.id
+            if identity != value.reference.object_id:
                 raise EvidenceError("carried publication differs from the value reference")
-            if isinstance(self.recorder.store, NativeObjects):
-                self.recorder.store.include(carried)
+            if previous is not None:
+                continue
+            if native:
+                store.include(carried)
             else:
                 for publication in carried.objects():
                     try:
-                        self.recorder.store.read(publication.id)
+                        store.read(publication.id)
                     except FileNotFoundError:
-                        self.recorder.store.put(publication)
+                        store.put(publication)
+            adopted[key] = (carried, identity)
 
     def _retain_publication(self, data, publication):
         self.recorder.store.put(publication)

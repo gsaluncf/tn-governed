@@ -38,6 +38,9 @@ cd "$work/sdk/tn_proto-2026.9.13b1+policy.1"
 if ! rg -q 'mod manifest_cache;' crypto/tn-core/src/governed/reader/mod.rs; then
     patch --batch --forward -p1 < "$root/deployment/native_metadata.patch"
 fi
+if ! rg -q 'fn shared_groups' crypto/tn-core/src/governed/writer.rs; then
+    patch --batch --forward -p1 < "$root/deployment/native_copy_on_write.patch"
+fi
 cargo metadata --offline --format-version 1 > "$work/sdk-metadata.json"
 CARGO_TARGET_DIR="$work/sdk-target" maturin build --release --locked --compatibility linux --out "$work/wheelhouse"
 cd "$work/project"

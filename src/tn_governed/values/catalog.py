@@ -318,7 +318,7 @@ class UnityGovernance:
         return Resolution(obj.id, table, chosen, self.rules, body["columns"], packet)
 
     def publish_edition(self, value, *, policy, source, directory, application, purpose, register=True):
-        obj = tn.GovernedObject.read(io.BytesIO(self.store.get(value.reference.object_id)))
+        obj = self.store.read(value.reference.object_id)
         dataset = source["table"] + "." + source["column"]
         edition = source["query_id"] + "-" + str(source["row"])
         uses = [tn.UseContext(application, purpose, op) for op in [*sorted(OPERATIONS), "inspect-claims", "verify"]]

@@ -1,0 +1,22 @@
+Local CPU optimization, 100,000 rows
+
+Baseline: 13.060 seconds for the full case, including retained output and verification.
+All measurements use the same local WSL runtime and local Java Unity service.
+No cloud or GPU resources are used.
+
+Priority list
+1. Native working-copy and draft creation: share immutable group storage; copy on mutation.
+2. Native group encoding: serialize borrowed maps without cloning the entire JSON tree.
+3. Repeated carrier registration and metadata traversal: process each shared object once per operation.
+4. Archive/export: remove repeated opens and redundant serialization while retaining stored-data verification.
+
+Measurements
+Baseline: complete and verified, 13.060 seconds.
+Native immutable groups and borrowed encoding: 12.605 seconds, verified.
+Carrier adoption once per operation; direct native edition publication; policy selection once per data object: 9.480 seconds, verified.
+Baseline to current: 27.4% lower elapsed case time.
+Release and sealing: 1.888 to 1.039 seconds.
+Edition publication/registration: 0.839 to 0.243 seconds.
+
+Completed: priorities 1 through 3. Next: remove producer wrappers discarded during SQL handoff.
+Validation: 19 focused Python tests and 141 native unit tests passed.
