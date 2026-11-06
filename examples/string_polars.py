@@ -1,5 +1,6 @@
-"""Govern a string, transform it in Polars, and print ciphertext and authorized plaintext."""
+"""Transform a governed string in Polars and print encrypted and readable value and policy."""
 
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -25,6 +26,10 @@ def demonstrate(context, policy):
     ciphertext = result.publication.object.envelope["values"]["ciphertext"]
     print("Encrypted:", ciphertext)
     print("Decrypted:", result.reveal(context, destination="console"))
+    publication = result.publication.object
+    print("Encrypted policy:", publication.envelope["tn.agents"]["ciphertext"])
+    carried_policy = context.session.governance(publication).governance.policies[0]
+    print("Decrypted policy:", json.dumps(carried_policy.fields, indent=2))
     return result
 
 

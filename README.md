@@ -42,8 +42,33 @@ print("Decrypted:", result.reveal(context, destination="console"))
 The first print displays the encrypted content of the transformed value. `TNString.reveal()` obtains authorization for `console`, decrypts the value, and returns the ordinary string for the second print:
 
 ```text
-Encrypted: twEBeJXJYjunRoT2NYwamAE0IPvVuFnzGc2wEqH410S8t8gAAAAAAAEAmysgTDpQlYtjfV9I7Mh4OmPs+naxz1xjAYgNJhYWnX7RKdAczNQviXVMshGP9ni896HKSwAAACFs6ero7Pv8F4Q0vB9yXBP6CUUuKuRhq+5OUWzkS0fiFfc=
+Encrypted: twEBf9GbRFrI0kqGcAP4YXvWmpn6ReGXqSX+i1ooaVbt0z0AAAAAAAEAScZ1UzHZwNeAM351j/mKatkEWRg5h7z8gDY4h4N57IHb4isgmEhfh3jyfRWsoz7n5W1OPQAAACG/vsyi6uLcFdz7cOBm+AgyhshwCcd/JHj08P1Q9f8j2cU=
 Decrypted: ALICE
+```
+
+### Policy in the same publication
+
+The `string.processing` policy permits string creation and uppercase conversion for the `normalization` purpose, requires a signed monitoring record, and permits ordinary output to `console`. The transformed publication contains this policy in its encrypted `tn.agents` group.
+
+`Session.governance()` verifies the publication and decrypts its governance using the session's keys. `carried_policy.fields` contains the policy recovered from the publication:
+
+```python
+publication = result.publication.object
+print("Encrypted policy:", publication.envelope["tn.agents"]["ciphertext"])
+carried_policy = context.session.governance(publication).governance.policies[0]
+print("Decrypted policy:", json.dumps(carried_policy.fields, indent=2))
+```
+
+```text
+Encrypted policy: twEBrx+JrC3vFWN//oq0J2sHxEHj+V299IMLeiPbe/5sP14AAAAAAAEAF2vK95Xrtu2G+cqoRHV7Q1nScWz2OEtjTmwwbNsn+wMsYBqP6O8xsyYuwge85/arbi29hQAAA08CTQNfj7uvLkVFLRGhNdQ5zbep+/cCv+V9TGisu2kvZCh61uN/Of5GRe2vhpleKN4eeflMuotEn4fb/UJsA7yV/3sr+0K032RkkbxTt9hrlI5ibIGVlh6nPrjZNO9v/JLbC8BdiQ7MZvUqaICCGVuRUojOu/Jshoz/8hCUGnYVl1quYdVQpkGxp5BR3vBl889sJtSpbMx1jDzADEM655NxxwXQVRTv6HRX4Z3+UbpJ03BmzEw3WpvsnRBAzxZTlJDwu8S+Fi/+j1y7zHHZHuxbA9z3qhacUEsEiKpk/sK38fQCPIvUAY2k7UgW0ihcgj+agAn/vlxDX2vZhOQcAyUlXWoQS5YNSL6IK1uuVV8Bj1ZW8M8KDOLQjyZzz/QnUhGdOTTNsZvdEWbYDkzgs2gV0HZkULha4P6TYzs0j5A1T2wxoNWwkZBLTh/wNdn+Lq68P7vaPTFJaYlV9sV1kFc2/8JOZl23k4xDwQ/j7Kip7U2Soj6PPE6lgoMV8r6IUpYgh8GIHpfQvnmab7Vgc3xTqScLpZWKw4S2N09t1BGObN2zLn3qWz4Y00yOQ8NMRzgpKh6Q19Ur+ncEw7WEbl0q+dNz1ztawbO9B7X9Go0pdoCIpXRrWLXZ8leeagGIifIxzhu8NV9HLcPykIWGEBbqsjKRdk7p6tvX5lrPheyoLPNh7njI2kHcEo0jw4ykENOGMwHkZViq17v+Ndz/o2BquVRSi1ut0+N5S7kiOaF0EQis0OAmOq8mEE1zyFJ/aZ7/4CrN9d00AdjS3Zzqneb7Io4MbWIsi2CwNrxY4hf4k/RWEVTnyh3wlBps2aa8/ehDdg8+KvpnsD80eH1meLXOEfbYKoSgKro8VVvUSa2cfvZECqHo8OJZl7wVXJXmNWtQISBQxMpYE1IgExuClQV0QwGyObdLvEbviCfIfQuPSaec+7O6LbwipieUFQt4bUv2l/8s94vK21YyJDxnToSU50ajyzpvOF/OEN9V3krqjTcv/ADTFxIXcnT1Cz7/Yc12w9zkD5GzThsTNmvyC2jiOL6l10NHREkR3p4MKlDVHLm2EHy9sD2RmT+1fsimmtsBTIdGI9T9ZCA+SMhxpvqPDgrac1QOJEb9W7vrAquO
+Decrypted policy: {
+  "consequences": "Retain signed decisions, results, disclosures, and monitoring records.",
+  "do_not_use_for": "Other applications, purposes, operations, or disclosure destinations.",
+  "instruction": "Retain the source policy and input references when deriving a value.\nWrite a signed monitoring record before each protected operation.",
+  "on_violation_or_error": "Record the refusal or failure and stop the protected operation.",
+  "policy": "string_processing.policy#string.processing@1#sha256:1e882ad84e8347a94e8a88ba1a47349aa3cad99efece907594f66b4dbd43415e",
+  "use_for": "The string-polars application may create and uppercase strings for the\nnormalization purpose. Ordinary output may be disclosed to console."
+}
 ```
 
 The [runnable example](examples/string_polars.py) includes the imports, [policy](examples/string_processing.policy), and endpoint configuration:
