@@ -1,18 +1,22 @@
 # TN Governed
 
-TN Governed is a framework for applying data-use policies across LLM applications, tools, and data processing services. TN publications contain the computed values, source policies, attributed claims, and derivation links used for authorization at subsequent endpoints.
+TN Governed is a framework for applying data-use policies across LLM applications, tools, and data processing services. It supports workflows that combine database queries, dataframe operations, calculations, tool calls, and model inference while retaining the conditions attached to the source data.
 
-Each `Endpoint` instance has a configured session, keys, recognized authorities, policy evaluator, and required-action handlers. `Endpoint.execute()` verifies input publications and obtains authorization from the configured evaluator before opening protected values or executing the computation. On success, `Endpoint.execute()` returns an encrypted, signed artifact containing the result and source governance.
+Data-use conditions can specify a permitted purpose, a disclosure destination, or an action required before processing. Calculations, tool results, and model outputs can depend on several sources with different conditions. The SQL, Polars, tool, and inference integrations retain those source conditions in derived publications. Each receiving runtime evaluates the requested use under its configured rules before opening protected values.
+
+The framework represents protected content as governed values and artifacts. Each encrypted, signed TN publication contains the value and its governance, including source policies, attributed claims, and derivation links. Signed decisions and action records provide evidence of the processing performed. A receiving service can verify the source statements and evaluate the requested use under its own authority configuration.
 
 ![Data, tool, and LLM endpoints exchange governed publications. Each endpoint applies its own authority rules.](assets/diagrams/framework.svg)
 
-## LLMs and tools
+## Core components
 
-The Rust `tn-runtime` integration in llama.cpp verifies input publications, authorizes access to encrypted fields, checks required tool completions, and publishes encrypted model outputs with their source governance. Runtime configuration specifies permitted uses and required actions.
+`Endpoint` provides the execution boundary for a service, tool, or recipient. Each instance has its own keys, recognized authorities, policy evaluator, and required-action handlers. Before protected computation, `Endpoint` verifies the inputs, obtains a policy decision, and completes required actions. Successful computation produces a governed artifact containing the result and source governance. Disclosure as an ordinary value requires authorization for a named destination.
 
-Each `ToolSpec` defines a handler, an input schema, and an output schema. `ToolWorkflow.execute()` accepts a `Call` record containing a tool name, arguments, input handles, and dependency IDs. Before handler invocation, `ToolWorkflow.execute()` validates the arguments and invokes `Endpoint.execute()` for authorization and required-action execution. `ToolSpec.validate_output()` checks the handler result against the output schema before `Endpoint` publishes the governed result.
+`ToolWorkflow` executes registered tools over governed inputs. Tool registration specifies the handler and its input and output schemas. The workflow validates requests, executes dependent calls in order, and publishes a final result after the required calls and release actions have completed.
 
-`ToolWorkflow.execute_many()` accepts a sequence of `Call` records and executes them in dependency order. `ToolWorkflow.finish()` publishes a workflow result only after every attempted call has succeeded, every required tool has completed, and `Endpoint.execute("workflow.release", ...)` has authorized publication and completed required actions. The [tool workflow guide](docs/tool-workflows.md) specifies these inputs, validation rules, and outputs.
+The native llama.cpp integration controls access to encrypted input fields, verifies required tool completions, and publishes governed model outputs. The native runtime performs these checks within the inference service using its configured policies and keys.
+
+`GovernedSQL` and `GovernedLazyFrame` integrate SQL and Polars processing with the same publication format. Query results, transformations, and aggregates retain source policies, original claim attribution, and contributor information for subsequent processing and recipient verification.
 
 ## Installation
 
