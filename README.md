@@ -1,28 +1,28 @@
 # TN Governed
 
-TN Governed is a framework for applying data-use policies across LLM applications, tools, and data processing services. Governed values and artifacts retain their source policies, attributed claims, and derivation links through computation and transfer between endpoints.
+TN Governed is a framework for applying data-use policies across LLM applications, tools, and data processing services. TN publications contain the computed values, source policies, attributed claims, and derivation links used for authorization at subsequent endpoints.
 
-Each endpoint has its own keys, recognized authorities, policy evaluator, and required-action handlers. It verifies incoming publications and authorizes the requested use before opening protected values. Derived results are encrypted and signed, with the source governance retained for the next recipient.
+Each `Endpoint` instance has a configured session, keys, recognized authorities, policy evaluator, and required-action handlers. `Endpoint.execute()` verifies input publications and obtains authorization from the configured evaluator before opening protected values or executing the computation. On success, `Endpoint.execute()` returns an encrypted, signed artifact containing the result and source governance.
 
 ![Data, tool, and LLM endpoints exchange governed publications. Each endpoint applies its own authority rules.](assets/diagrams/framework.svg)
 
 ## LLMs and tools
 
-The native llama.cpp integration verifies governed inputs, controls access to encrypted fields, checks required tool completions, and publishes governed model outputs. Applications configure the permitted uses and actions.
+The Rust `tn-runtime` integration in llama.cpp verifies input publications, authorizes access to encrypted fields, checks required tool completions, and publishes encrypted model outputs with their source governance. Runtime configuration specifies permitted uses and required actions.
 
-`ToolWorkflow` runs registered application tools over governed artifacts. A call names the tool, arguments, input handles, and dependencies. The endpoint checks the call before invoking its handler, validates the result, and retains the contributing policies and claims. Release requires every attempted call to succeed and the configured required tools to have completed.
+Each `ToolSpec` defines a handler, an input schema, and an output schema. `ToolWorkflow.execute()` accepts a `Call` record containing a tool name, arguments, input handles, and dependency IDs. Before handler invocation, `ToolWorkflow.execute()` validates the arguments and invokes `Endpoint.execute()` for authorization and required-action execution. `ToolSpec.validate_output()` checks the handler result against the output schema before `Endpoint` publishes the governed result.
 
-The application supplies calls to `ToolWorkflow.execute` or `execute_many`. These calls can come from an application or be translated from a model's tool-call output. The [tool workflow guide](docs/tool-workflows.md) describes registration, dependencies, remote results, and release.
+`ToolWorkflow.execute_many()` accepts a sequence of `Call` records and executes them in dependency order. `ToolWorkflow.finish()` publishes a workflow result only after every attempted call has succeeded, every required tool has completed, and `Endpoint.execute("workflow.release", ...)` has authorized publication and completed required actions. The [tool workflow guide](docs/tool-workflows.md) specifies these inputs, validation rules, and outputs.
 
 ## Installation
 
-Use Python 3.12, [uv](https://docs.astral.sh/uv/), Rust 1.95 or newer, and a C/C++ build toolchain. From the repository root:
+Build requirements are Python 3.12, [uv](https://docs.astral.sh/uv/), Rust 1.95 or newer, and a C/C++ toolchain. Environment creation from the repository root:
 
 ```sh
 uv sync --locked --extra dev
 ```
 
-This builds the included native TN SDK and installs the local Polars adapter and model client. Windows builds require the Visual Studio C++ Build Tools. The tool example below runs locally with that environment.
+`uv sync` builds the included native TN SDK through Maturin and installs the local Polars adapter and model client. Windows builds require the Visual Studio C++ Build Tools. `examples/governed_tools.py` requires this Python environment.
 
 The SQL/Polars examples also use Unity Catalog and OPA. Native LLM inference uses the included server integration and compatible GGUF model weights. [Installation and native builds](docs/installation.md) covers these components and their configuration.
 
@@ -40,9 +40,9 @@ Retained claims: 1
 Verified signed records: 9
 ```
 
-The [example](examples/governed_tools.py) loads a [local policy](examples/tool_workflow.policy), creates a governed numeric value, attaches a claim, and executes a registered scaling tool. Its endpoint evaluator permits named operations and disclosure to `console`.
+[governed_tools.py](examples/governed_tools.py) loads [tool_workflow.policy](examples/tool_workflow.policy), originates the value `12`, attaches a claim, and registers a scaling handler. The example's `evaluate(request)` callback checks the application, purpose, permitted operations, recognized writer, source contract, and disclosure destination. The registered tool multiplies the value by `3`; the final JSON output is `{"scaled": 36}`.
 
-With the endpoint and governed input configured, tool registration and execution use:
+The following excerpt requires a configured `Endpoint` instance named `endpoint` and a `GovernedArtifact` named `amount`:
 
 ```python
 from tn_governed.tool_runtime import Call, ToolRegistry, ToolSpec, ToolWorkflow
@@ -64,7 +64,7 @@ completion = workflow.execute(
 )
 ```
 
-`completion.artifact` is a governed result. `workflow.finish(...)` publishes the workflow output after checking its schema and release requirements. Ordinary values are obtained through an authorized `endpoint.reveal(...)` or `workflow.expose(...)` call to a named destination.
+`ToolWorkflow.execute()` returns a `ToolCompletion`; its `artifact` field contains the governed result. `ToolWorkflow.finish(value, schema=..., destination=...)` validates and publishes the final workflow artifact. `Endpoint.reveal(artifact, destination=...)` and `ToolWorkflow.expose(handle, destination=...)` return ordinary values after authorization for the named destination.
 
 ## Interfaces
 
@@ -78,7 +78,7 @@ completion = workflow.execute(
 | `GovernedLazyFrame` | Apply Polars expressions and plans, retaining policies, claims, and contributor information. |
 | `AuthorityEvaluator`, `ValueHistory` | Configure local authority decisions and required actions; retain signed value revisions. |
 
-The [execution guide](docs/governed-execution.md) describes endpoint authorization, required actions, claim attribution, and transfers. [Interfaces and source layout](docs/interfaces.md) links these contracts to their implementations.
+[Governed execution](docs/governed-execution.md) specifies endpoint authorization, required actions, claim attribution, and artifact transfer. [Interfaces and source layout](docs/interfaces.md) lists the implementation modules.
 
 ## Documentation
 
@@ -92,4 +92,4 @@ The [execution guide](docs/governed-execution.md) describes endpoint authorizati
 | [Examples](docs/examples.md) | Scalar operations, SQL/Polars, calculations, and an LLM report application. |
 | [Evaluation](docs/evaluation.md) | Workloads, timing boundaries, recipient checks, and fault experiments. |
 
-The research paper, *Governance That Travels: Governed Values Across SQL, Dataframes, and Language Models*, evaluates the SQL, dataframe, and LLM integrations.
+Research paper: *Governance That Travels: Governed Values Across SQL, Dataframes, and Language Models*.

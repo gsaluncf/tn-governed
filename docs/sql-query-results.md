@@ -18,10 +18,10 @@ frame = tn_polars.from_admitted_query(
 )
 ```
 
-The SQL processing admission evaluates the requested operation and destination,
-performs required actions, verifies the signed result and typed values, and
-returns a native governed working object. The receiving adapter supplies its
-own endpoint evaluators for every carried policy. `reveal(destination)` is the
+`GovernedQueryResult.open_for_processing(operation, destination)` evaluates the
+requested use, performs required actions, verifies the signed result and typed
+values, and returns a native governed working object. `tn_polars.from_admitted_query(..., evaluators=...)` requires a local evaluator
+for each carried policy. `reveal(destination)` is the
 separate boundary for extracting ordinary Python values. Duplicate SQL aliases
 remain distinguishable by column position; the Polars bridge requires explicit
 unique output names when aliases repeat.
@@ -81,9 +81,9 @@ admitted = received.open_for_processing("select", "recipient-reporting")
 
 The transport carries canonical native TN wires, signed source assignments,
 policy revisions, dataset edition evidence, and the query's Decision and Result
-ancestry. It requires no publisher object store, source database, or online
-catalog at receipt. The recipient resolves the carried assignments against its
-own trust configuration, verifies the native signatures and signed bindings,
-and evaluates its own requested use. Transport metadata supplies no authority
+ancestry. `GovernedQueryResult.receive()` requires no publisher object store,
+source database, or online catalog. `GovernedQueryResult.receive()` verifies signatures and signed bindings
+and resolves the carried assignments under `recipient_context`.
+`open_for_processing()` evaluates the recipient's requested operation and destination. Transport metadata supplies no authority
 by itself. Attributed claims are signed Claim records with their original
 subjects and writers; ordinary unsigned catalog fields do not become claims.
