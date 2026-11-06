@@ -68,11 +68,7 @@ for the requested use.
 authority, determinism, and additional source dependencies. Declared external
 dependencies participate in source admission and produce partial row support
 when their row mappings are unavailable. Overridden SQLite built-in functions
-use the original statement and source-scope lineage. A configured
-`LineageProvider` can supply result-position mappings with a separate validation
-callback; exact precision requires identified contributors and coverage of each
-result position. The gateway checks these structural requirements and the
-configured validator's answer before publication.
+use the original statement and source-scope lineage.
 
 ```python
 from tn_governed.values.query_result import GovernedQueryResult, QueryTransport
