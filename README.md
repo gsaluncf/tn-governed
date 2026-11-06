@@ -18,6 +18,27 @@ The native llama.cpp integration controls access to encrypted input fields, veri
 
 `GovernedSQL` and `GovernedLazyFrame` integrate SQL and Polars processing with the same publication format. Query results, transformations, and aggregates retain source policies, original claim attribution, and contributor information for subsequent processing and recipient verification.
 
+## Application code
+
+The programming task is to total nonnegative order amounts by customer. The `orders` argument is an admitted `GovernedLazyFrame`; Unity source assignments, keys, policy evaluators, and required-action handlers are configured before invocation.
+
+```python
+import polars as pl
+
+
+def customer_totals(orders):
+    return (
+        orders.filter(pl.col("amount") >= 0)
+        .group_by("customer_id")
+        .agg(pl.col("amount").sum().alias("total"))
+        .sort("customer_id")
+    )
+```
+
+The programmer or coding agent implements the filtering, grouping, and aggregation. `GovernedLazyFrame` requests authorization for each operation from the configured policy evaluators and retains source policies, claims, and contributor information in the result plan. `customer_totals` returns a governed frame for further processing or authorized publication.
+
+The [complete function](examples/customer_totals.py) uses the same Polars expressions as an ordinary dataframe calculation. Policy resolution, keys, and action-handler registration belong to the configured adapters and endpoint definitions.
+
 ## Installation
 
 Build requirements are Python 3.12, [uv](https://docs.astral.sh/uv/), Rust 1.95 or newer, and a C/C++ toolchain. Environment creation from the repository root:
