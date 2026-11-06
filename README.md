@@ -18,26 +18,39 @@ The native llama.cpp integration controls access to encrypted input fields, veri
 
 `GovernedSQL` and `GovernedLazyFrame` integrate SQL and Polars processing with the same publication format. Query results, transformations, and aggregates retain source policies, original claim attribution, and contributor information for subsequent processing and recipient verification.
 
-## Application code
+## Governed string through Polars
 
-The programming task is to total nonnegative order amounts by customer. The `orders` argument is an admitted `GovernedLazyFrame`; Unity source assignments, keys, policy evaluators, and required-action handlers are configured before invocation.
+`originate` applies a policy to `"alice"` and returns a `TNString`. Polars stores that value in an object column. `TNString.upper()` requests authorization, transforms the protected content, and returns a governed string containing `"ALICE"`.
+
+The configured `context` and `policy` are the inputs to this sequence:
 
 ```python
-import polars as pl
+name = originate(context, "alice", policy, "name")
+frame = pl.DataFrame({"name": [name]}, schema={"name": pl.Object})
 
-
-def customer_totals(orders):
-    return (
-        orders.filter(pl.col("amount") >= 0)
-        .group_by("customer_id")
-        .agg(pl.col("amount").sum().alias("total"))
-        .sort("customer_id")
+with context:
+    frame = frame.with_columns(
+        frame["name"].map_elements(TNString.upper, return_dtype=pl.Object)
     )
+
+result = frame["name"][0]
+ciphertext = result.publication.object.envelope["values"]["ciphertext"]
+print("Encrypted:", ciphertext)
+print("Decrypted:", result.reveal(context, destination="console"))
 ```
 
-The programmer or coding agent implements the filtering, grouping, and aggregation. `GovernedLazyFrame` requests authorization for each operation from the configured policy evaluators and retains source policies, claims, and contributor information in the result plan. `customer_totals` returns a governed frame for further processing or authorized publication.
+The first print displays the encrypted content of the transformed value. `TNString.reveal()` obtains authorization for `console`, decrypts the value, and returns the ordinary string for the second print:
 
-The [complete function](examples/customer_totals.py) uses the same Polars expressions as an ordinary dataframe calculation. Policy resolution, keys, and action-handler registration belong to the configured adapters and endpoint definitions.
+```text
+Encrypted: twEBeJXJYjunRoT2NYwamAE0IPvVuFnzGc2wEqH410S8t8gAAAAAAAEAmysgTDpQlYtjfV9I7Mh4OmPs+naxz1xjAYgNJhYWnX7RKdAczNQviXVMshGP9ni896HKSwAAACFs6ero7Pv8F4Q0vB9yXBP6CUUuKuRhq+5OUWzkS0fiFfc=
+Decrypted: ALICE
+```
+
+The [runnable example](examples/string_polars.py) includes the imports, [policy](examples/string_processing.policy), and endpoint configuration:
+
+```sh
+uv run python examples/string_polars.py
+```
 
 ## Installation
 
