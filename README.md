@@ -152,23 +152,18 @@ Native dataframe releases carry `tn_polars_audit` beside their rows. The audit r
 
 ## Setup
 
-Use Windows and Python 3.12 for the pinned native runtime. Run commands from the repository root in PowerShell.
+Use Python 3.12, uv, Rust 1.95 or newer, and a C/C++ build toolchain. The locked environment builds the included TN SDK source and installs the included Polars adapter and model client. Run from the repository root:
 
-Automatic Unity installation requires Docker Desktop running Linux containers.
-
-Place the external files needed by your chosen example in `.runtime/dependencies/`:
-
-- `tn_proto-2026.9.10b2.dev2-cp39-abi3-win_amd64.whl` for installation.
-- `opa.exe` for SQL/dataframe execution.
-- One compatible `.gguf` model file for report generation.
-
-This directory is excluded from Git. If the native wheel is stored elsewhere, set `TN_WHEEL` to its actual location. The installer checks its SHA-256 against [config/sdk-build.json](config/sdk-build.json), installs the bundled Polars adapter and model-client source, and installs this application.
-
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python scripts/install.py
+```sh
+uv sync --locked --extra dev
+uv run python scripts/runtime_sources.py
 ```
+
+On Windows, use the Visual Studio C++ Build Tools. Linux builds use the system C/C++ toolchain. The complete model example runs its Linux inference server through WSL on Windows.
+
+Automatic Unity installation requires Docker running Linux containers. SQL/dataframe execution needs OPA, and report generation needs a compatible GGUF model. Keep external executables and model files under `.runtime/dependencies/`, which is excluded from Git. Select OPA with `TN_POLARS_OPA`.
+
+The existing `scripts/install.py --tn-wheel PATH` installer also supports the pinned prebuilt Windows wheel described in `config/sdk-build.json`.
 
 The SQL/dataframe runs also require:
 
