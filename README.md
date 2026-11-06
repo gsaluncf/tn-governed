@@ -208,7 +208,7 @@ bash scripts/build_llama.sh cpu
 
 The build installs `llama-server` **and its shared libraries** together in `.runtime/dependencies/tn-llama/`. The launcher discovers that server automatically. Keep the directory together when moving it. `build.json` records the backend and SHA-256 of every installed binary and library. `native/tn-llama/source-manifest.json` identifies the included source files and upstream revisions. Model weights are not downloaded by the build.
 
-Before compiling, the build verifies the source manifest. When a sibling `tn-llama` checkout is present, it also requires matching runtime sources, headers, and llama.cpp integration patches. Run `python scripts/runtime_sources.py --against PATH` to compare another checkout. After reviewing and synchronizing source changes, `python scripts/runtime_sources.py --refresh` records their digests; it refuses divergent runtime copies. Standalone Python bindings remain in `tn-llama` and use the same native session.
+Before compiling, the build verifies the included source manifest. Run `python scripts/runtime_sources.py --against PATH` to compare a separate runtime checkout. `python scripts/runtime_sources.py --refresh` records digests for the included source; an explicit comparison must succeed before its digests can be refreshed. The Python SDK source is included under `native/tn-llama/upstream/tn-proto/python`; installation does not require a sibling repository or a private wheel download.
 
 ## Install Unity and run the complete example
 

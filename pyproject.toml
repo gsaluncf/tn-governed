@@ -35,7 +35,7 @@ tn-governed = "tn_governed.cli:main"
 [tool.uv.sources]
 tn-polars = { path = "dependencies/tn-polars", editable = true }
 tn-llama-client = { path = "dependencies/tn-llama-client", editable = true }
-tn-proto = { path = "vendor/wheels/799dbb899c5bdd08c6915ab3d3c1d945847b60fec076d6255ca2250d0e8642ed/tn_proto-2026.9.13b1+policy.1-cp39-abi3-win_amd64.whl" }
+tn-proto = { path = "native/tn-llama/upstream/tn-proto/python", editable = true }
 
 [tool.uv]
 # All adapters use the same pinned native runtime.

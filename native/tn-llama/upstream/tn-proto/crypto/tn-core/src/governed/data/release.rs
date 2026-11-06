@@ -14,10 +14,9 @@ impl DataObject {
     /// manifest, the causal inputs, and the whole holders of every unopened group.
     pub(crate) fn draft(&self, object_type: &str, release_context: Value) -> Result<GovernedDraft> {
         let mut policy = self.governance.clone();
-        policy.fields.insert(
-            "source_lineage".to_owned(),
-            serde_json::to_value(&self.sources)?,
-        );
+        if !self.sources.is_empty() {
+            policy.fields.insert("source_lineage".to_owned(), serde_json::to_value(&self.sources)?);
+        }
         policy.fields.insert("release_context".to_owned(), release_context);
         let mut draft = GovernedDraft::new(object_type, policy)?;
         for (name, fields) in &self.groups {

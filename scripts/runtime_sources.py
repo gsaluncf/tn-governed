@@ -1,4 +1,4 @@
-"""Verify native source digests and agreement with a standalone runtime checkout."""
+"""Verify native source digests and optionally compare a standalone runtime checkout."""
 
 import argparse
 import hashlib
@@ -87,15 +87,11 @@ def main():
     parser.add_argument("--against", type=Path, help="Standalone tn-llama checkout to compare")
     parser.add_argument("--refresh", action="store_true", help="Record reviewed source digests")
     args = parser.parse_args()
-    sibling = ROOT.parent / "tn-llama"
-    against = args.against
-    if against is None and args.source.resolve() == SOURCE.resolve() and sibling.is_dir():
-        against = sibling
     try:
-        total, shared = verify(args.source, against, refresh=args.refresh)
+        total, shared = verify(args.source, args.against, refresh=args.refresh)
     except (ValueError, KeyError, TypeError, OSError) as error:
         parser.exit(1, f"Native source verification failed: {error}\n")
-    comparison = f" and {shared} shared runtime files" if against else ""
+    comparison = f" and {shared} shared runtime files" if args.against else ""
     print(f"Verified {total} source digests{comparison}")
 
 

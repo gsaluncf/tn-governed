@@ -20,6 +20,22 @@
       "sha256": "daa381322ed2c4e424a8ebfdda5e3722aa0d6625f9a49e07cbfb9701e606d7ac"
     },
     {
+      "path": "crates/tn-runtime-py/Cargo.toml",
+      "sha256": "ab674cd09cfdf3280432c02b005ba9a4401a2aeb18841bc7dc11c89c22767697"
+    },
+    {
+      "path": "crates/tn-runtime-py/pyproject.toml",
+      "sha256": "5f702dc1fe153031ef97631f8f4dd94843e28cc23286d15cb7c55a9d6bdba59e"
+    },
+    {
+      "path": "crates/tn-runtime-py/src/lib.rs",
+      "sha256": "23bc7c110085f27d6727d84673ba0a338bb1c0b61bd14156c4f4c0dbfd8bf6c9"
+    },
+    {
+      "path": "crates/tn-runtime-py/tests/test_bridge.py",
+      "sha256": "0cdd3d05f0139ac3331e23d9f0196331295de9108587c36f91c4d2efa17781d5"
+    },
+    {
       "path": "crates/tn-runtime/Cargo.toml",
       "sha256": "0842720a8811e8bad61cc9dff726f3858f0fe1819fd5b26a3857581d5f0ab076"
     },
@@ -184,6 +200,10 @@
       "sha256": "9f43f1ccfdbe1cb16d03b200167056c06290e5a8fa62931a82ad07cd7dd9aff9"
     },
     {
+      "path": "crates/tn-runtime/tests/fixtures/carried-decision.json",
+      "sha256": "4be200cb2141385f27cc11c264afee118b20b506f965fff97a96ef90ebb07ff1"
+    },
+    {
       "path": "crates/tn-runtime/tests/fixtures/chain-row-1.json",
       "sha256": "6586b3827c87c9623ec46797e1d8d81c245cbfc20ca78357c23b44bfdac41a83"
     },
@@ -196,12 +216,12 @@
       "sha256": "0fe1608cf588f324a257f2d087e4b04b97f3a80fcaf817ce61bb0d1fc2781d2a"
     },
     {
-      "path": "crates/tn-runtime/tests/fixtures/carried-decision.json",
-      "sha256": "4be200cb2141385f27cc11c264afee118b20b506f965fff97a96ef90ebb07ff1"
-    },
-    {
       "path": "crates/tn-runtime/tests/fixtures/decision-context.json",
       "sha256": "90ea954de63fa86f146959fc3e99984cd6d495541917f0c59e8254d7fe8f3a96"
+    },
+    {
+      "path": "crates/tn-runtime/tests/fixtures/governed/README.md",
+      "sha256": "00f27d05c8e6d61ff6434b4acc40de38a271ca1371ae1bb326c0da14cc0f4507"
     },
     {
       "path": "crates/tn-runtime/tests/fixtures/governed/m1-manifest.json",
@@ -210,10 +230,6 @@
     {
       "path": "crates/tn-runtime/tests/fixtures/governed/manifest.json",
       "sha256": "ea4362ec2b3e22ee1cf9b6d0d9d3a4857a5d13f4992030fe7009bcf249545419"
-    },
-    {
-      "path": "crates/tn-runtime/tests/fixtures/governed/README.md",
-      "sha256": "00f27d05c8e6d61ff6434b4acc40de38a271ca1371ae1bb326c0da14cc0f4507"
     },
     {
       "path": "crates/tn-runtime/tests/fixtures/official-genesis-request.json",
@@ -284,22 +300,6 @@
       "sha256": "e0c45f3aa26e00c811ed6a51feec85c2c0d7996e092c614e7bfb2dd14b13138e"
     },
     {
-      "path": "crates/tn-runtime-py/Cargo.toml",
-      "sha256": "ab674cd09cfdf3280432c02b005ba9a4401a2aeb18841bc7dc11c89c22767697"
-    },
-    {
-      "path": "crates/tn-runtime-py/pyproject.toml",
-      "sha256": "5f702dc1fe153031ef97631f8f4dd94843e28cc23286d15cb7c55a9d6bdba59e"
-    },
-    {
-      "path": "crates/tn-runtime-py/src/lib.rs",
-      "sha256": "23bc7c110085f27d6727d84673ba0a338bb1c0b61bd14156c4f4c0dbfd8bf6c9"
-    },
-    {
-      "path": "crates/tn-runtime-py/tests/test_bridge.py",
-      "sha256": "0cdd3d05f0139ac3331e23d9f0196331295de9108587c36f91c4d2efa17781d5"
-    },
-    {
       "path": "crates/tn-test-tools/Cargo.toml",
       "sha256": "624c41d9371ecd72dc899bfc722ba7952ae102517abec5455b3531a279559e69"
     },
@@ -356,8 +356,20 @@
       "sha256": "2041df13da90d7ef48103126be2252ba274ef829a1c9613a2276b9ab05bc27f5"
     },
     {
+      "path": "upstream/tn-proto/Cargo.lock",
+      "sha256": "00f20026759bccdbf6d27e8025c8d0c52919c65b4890aa616b498611636832cd"
+    },
+    {
       "path": "upstream/tn-proto/Cargo.toml",
-      "sha256": "ef9cb2302f43826bfdc4837bd3468a3c15920dcd2276a72f5351e8b2df5bc5ee"
+      "sha256": "c343b07e4c9aa0e440361cc6764d126becfeec3bc28fcdafee235e817b120cd5"
+    },
+    {
+      "path": "upstream/tn-proto/LICENSE",
+      "sha256": "2be23a4360b0f4ad40a49a09b1f73614d0fbc029db5c7bf7a67843a135726796"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/.gitignore",
+      "sha256": "73d63dcdfe2faa6a411388866672eefe0a39d2685aabfc045602f40d9f7d23bc"
     },
     {
       "path": "upstream/tn-proto/crypto/tn-bbg/Cargo.toml",
@@ -408,20 +420,88 @@
       "sha256": "de29a5e3fa75c63cccd115fbd1d5f6b2eef75c41d445fd311e8e9fbf0f4a79f2"
     },
     {
-      "path": "upstream/tn-proto/crypto/tn-btn/benches/btn_bench.rs",
-      "sha256": "b774158bc2b4d2aaa4e910cb50f2279fa708fc584a541e3fbd1a94f69fac263e"
+      "path": "upstream/tn-proto/crypto/tn-btn-py/.gitignore",
+      "sha256": "8586a7c5dfdb94f004d46eeacf2ee98c6b17f3b6b2bb3083401d8f751c0ed01b"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-btn-py/Cargo.toml",
+      "sha256": "1ec686aba2d694d48566a09779ed2c53b4f7eb51c67ca243698acca26be24e40"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-btn-py/examples/bench_4kits.py",
+      "sha256": "26a200d2980233561eccf64241fddbc1caa0807fcafa1eae261df632aa9c4a80"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-btn-py/examples/bench_full_tn_4kb.h8.results.txt",
+      "sha256": "3fc53ee1b7d698d1fb78a4665240ff5397e1eeed7f9f783cf486ebf7c3b91b75"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-btn-py/examples/bench_full_tn_4kb.py",
+      "sha256": "58ae479c90dcbc0714794ffdfebec1729bc4ec898d405e8024a3bce34e8c75e5"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-btn-py/examples/bench_full_tn_4kb.results.txt",
+      "sha256": "6094ac36519e9ba24884f14e86cfd57e11f43876ba2736779f95acdfaa3ef223"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-btn-py/examples/bench_instrument.h8.results.txt",
+      "sha256": "f2d01be3cd42b498404914debe80b5493b905df88d29bae6d01c1f3e83b93498"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-btn-py/examples/bench_instrument.py",
+      "sha256": "763a417e0724008d796cc21457684fac5063bc00820cec7e83cec6eee20d29e7"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-btn-py/examples/bench_pipeline_rust.py",
+      "sha256": "59e4b4e4392d90ee54fc39b6fbba67288d725dc912593bfb765bfa07c71d5758"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-btn-py/examples/bench_pipeline_rust.results.txt",
+      "sha256": "10b5603352d6aab75fc960b9c01dd9480fd0b139968978a2491a36a5e0157861"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-btn-py/examples/python_stress.py",
+      "sha256": "e666ae276b59d49b1c707579db2752a1d0fe805f9bf3d98fdaba65a97f852639"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-btn-py/pyproject.toml",
+      "sha256": "07bcec359fc806003a57e1011a2c61c295514e5a85572426501c917972bafcc6"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-btn-py/python/tn_btn/__init__.py",
+      "sha256": "437a11235907359d1c7868802567ad5296f08685c6fadb61f8769462d025cb70"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-btn-py/src/lib.rs",
+      "sha256": "53272997afe1a4d11817a1897ea80ec02988e61540a64eca667fbabeb8f5ecb1"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-btn-py/src/pipeline.rs",
+      "sha256": "081ed06a63d331912562ed6d983d4d6911d5ea7ea4259b06d35788d172346988"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-btn-py/tests/test_btn.py",
+      "sha256": "5e3c616f761ceb21b21b300ba51608d84bd252c65e5691c63bc021f92a193216"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-btn-py/tests/test_runtime.py",
+      "sha256": "e29117bfb848f5f3b7b0e215bf2fcc79b15cd0b79594eb28d6700426b0499b0e"
     },
     {
       "path": "upstream/tn-proto/crypto/tn-btn/Cargo.toml",
       "sha256": "52a5fd49e4aa3b50161730ac093b41dbdf540dc993f7fca05f5ae41ef92c69b3"
     },
     {
-      "path": "upstream/tn-proto/crypto/tn-btn/examples/stress.rs",
-      "sha256": "449525e0945f5014e399d51552f2d1f22bce4463e61ca47a7c98d0c9e6b04977"
-    },
-    {
       "path": "upstream/tn-proto/crypto/tn-btn/README.md",
       "sha256": "2adb21008836a12c2406b2e12d23e3dc6dec396fc7013779b3864570e76e9199"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-btn/benches/btn_bench.rs",
+      "sha256": "b774158bc2b4d2aaa4e910cb50f2279fa708fc584a541e3fbd1a94f69fac263e"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-btn/examples/stress.rs",
+      "sha256": "449525e0945f5014e399d51552f2d1f22bce4463e61ca47a7c98d0c9e6b04977"
     },
     {
       "path": "upstream/tn-proto/crypto/tn-btn/src/ciphertext.rs",
@@ -496,16 +576,136 @@
       "sha256": "b26eca7795f01768739386edd0ce6318800308968aabf44a5b3ddaefacb42a62"
     },
     {
+      "path": "upstream/tn-proto/crypto/tn-core-ffi/Cargo.toml",
+      "sha256": "8c2bf37b682a6282e20bfb853fd31ac0da79d27d41e0f4df7562c769895ff202"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-ffi/src/lib.rs",
+      "sha256": "d6aca4a5d1390d37cb46f8dab69866dc0f00d0cb6be7e01d42bf61efe95a2172"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/.gitignore",
+      "sha256": "86c38c4e1f6539d76995577e366a819b824292e3cbe75ea1d140ddbbf4fcb879"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/Cargo.toml",
+      "sha256": "0d5e00ae8c99c660e2b57ba0e6f222d22056e9421ce88f7a2cba61a7dd0b8a8e"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/pyproject.toml",
+      "sha256": "f657fd5577d0974ea471cda5bb3ab323ef6ab55a6c8f475b5615d56562964b73"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/python/tests/test_pyo3_basic.py",
+      "sha256": "58f1dc4a2e98e1288dd26a79620fded6585d254d9b5eda10430958cc5ff77277"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/python/tn_core/__init__.py",
+      "sha256": "5c526fbd4c2a25fd6ca757e860c51f5e4862486bef423cfd276c90891ddee298"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/src/admin.rs",
+      "sha256": "2bbe5643778a2dbf0a861b65013ead4ef90d40c1a2e4c2ce1269bb048fc80837"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/src/governed/codec.rs",
+      "sha256": "c6bca96a6d1c67888735eaf0e2d75ede4c833eeab1818df2aa175198e994a29e"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/src/governed/contexts.rs",
+      "sha256": "c1432d81653ca392c1f2dc89dad65edafc680433b63e4a599473685fa18e3cb4"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/src/governed/data.rs",
+      "sha256": "85d01b0f90651d35617bf193f5cffdf0981218c330b4c8795a361a68422689cb"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/src/governed/dataset.rs",
+      "sha256": "70fd3aaa8e0aa70219c3f41c9c4ca9e21ac477a8c1fe2ee0b7cea9c271d9abc5"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/src/governed/lineage.rs",
+      "sha256": "002ed82b5ebe96adbe30b3a96de9a553165e2dc8c26d3bf2b97f8cad5d8c349e"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/src/governed/mod.rs",
+      "sha256": "e788377e59f2114e997954b8b55851822320d37338377d651f293675144c63e8"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/src/governed/objects.rs",
+      "sha256": "6bb5d16a6621639e3240d99ed1903459a6fd73f110eb28cc7c0f13e941be3a64"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/src/governed/providers/catalog.rs",
+      "sha256": "a14a2393802a3aae1bb8e02de05dae2380b341f01c90ec4781bd2926fcb8d92c"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/src/governed/providers/file.rs",
+      "sha256": "654efeb4e78e4acb6dac02cf92648bff21a615b1808b19c4ffaf6fe81c51f4cc"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/src/governed/providers/governance.rs",
+      "sha256": "538afe1e7e93baea8ba60646977819bf45060520a702bd45fea10b2096edce98"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/src/governed/providers/identity.rs",
+      "sha256": "7cfb7f108db845c0a1555993eaf93aff61c7141bade81e7a7518d2e46406ff50"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/src/governed/providers/keys.rs",
+      "sha256": "7e79a5c2f8b87bdf20a7fbf3de77d0937d3e77360379e44de2ee5cdb4b374f70"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/src/governed/providers/mod.rs",
+      "sha256": "76fb5778eee5f1435aa6105e11275f60383bb09ad24292247be14af997a341a9"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/src/governed/providers/register.rs",
+      "sha256": "e3376688c8b5de2dad33917824ee9c366f1eaf5c1c33b782ebd6b65bb774365d"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/src/governed/reader.rs",
+      "sha256": "f7508192e89c1f68ae9e0bb65716b2ba28b42e653005d845522401d47d9995a2"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/src/governed/revision.rs",
+      "sha256": "6f2134e2653095ffae6890a58d0ad74891381caa63ce95ea349eeea45055f7a3"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/src/governed/session.rs",
+      "sha256": "78ea633088b92dc971d2c00b66d907a9995d68c9c6602655faac3982aed3df03"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/src/governed/use_context.rs",
+      "sha256": "5482eec1af7bbd9aa1bf45810ed3aee959259e0a456c59df69045b79b6923258"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/src/governed/workflow.rs",
+      "sha256": "922a46d0a247eb0339dfaa9f8e322f4f680cbd91a0d5a95ada4b10d4eee2d208"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/src/lib.rs",
+      "sha256": "3f2088b28c9be60b382b14395062b77b72d7a028c8ddb7bcaa98b3d7cded98fe"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core-py/src/read_policy.rs",
+      "sha256": "429adbdad0b0d8e2f7bcb5f1657b56ccda689d7eeaf7c4013370133b64c2021c"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core/Cargo.toml",
+      "sha256": "b8d8cbf51b1ecb0117f09bd16bbdcb960441013196bce7c9a7766c35510b5c63"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-core/README.md",
+      "sha256": "b8dfb5307d3398e6a7ef1518f5a1b599756fa42fbd7185d5e26568e8e6b0be8c"
+    },
+    {
       "path": "upstream/tn-proto/crypto/tn-core/benches/pipeline.rs",
       "sha256": "9e18cef95f365558e49610038179e4a900b588d3a73b172893a1c13f80cdf124"
     },
     {
       "path": "upstream/tn-proto/crypto/tn-core/bin/tn-core-cli.rs",
       "sha256": "bc206ede66ebec7a55f0b0cb7e5933eaa6c527e1fe0a8439fdb54da7517764c0"
-    },
-    {
-      "path": "upstream/tn-proto/crypto/tn-core/Cargo.toml",
-      "sha256": "b8d8cbf51b1ecb0117f09bd16bbdcb960441013196bce7c9a7766c35510b5c63"
     },
     {
       "path": "upstream/tn-proto/crypto/tn-core/examples/governed_fixture_manifest/export.rs",
@@ -530,10 +730,6 @@
     {
       "path": "upstream/tn-proto/crypto/tn-core/examples/governed_workflow.rs",
       "sha256": "8c8998e040d387e996a1db1444d438fba9196a03c0d48245089ce7b618a81cc3"
-    },
-    {
-      "path": "upstream/tn-proto/crypto/tn-core/README.md",
-      "sha256": "b8dfb5307d3398e6a7ef1518f5a1b599756fa42fbd7185d5e26568e8e6b0be8c"
     },
     {
       "path": "upstream/tn-proto/crypto/tn-core/src/admin_cache/build.rs",
@@ -625,7 +821,7 @@
     },
     {
       "path": "upstream/tn-proto/crypto/tn-core/src/governed/contracts.rs",
-      "sha256": "cb0b352bdc86f4bae7f02dda3a3b665bd1d618047bb0f0d311bdf4da8a55ede2"
+      "sha256": "5f5631ce178bd7c3a02e7eeaa11bf72be22d68577c4297cc84eff0cc591522a1"
     },
     {
       "path": "upstream/tn-proto/crypto/tn-core/src/governed/data/edit.rs",
@@ -641,7 +837,7 @@
     },
     {
       "path": "upstream/tn-proto/crypto/tn-core/src/governed/data/release.rs",
-      "sha256": "b133017a7209d2829593de0166adad2ebc3bd3bd9290cc2eca94e2acf89e3570"
+      "sha256": "594010043eff94579e73f59c4169cff290b2c0c622df961377c9ba3f56de84e5"
     },
     {
       "path": "upstream/tn-proto/crypto/tn-core/src/governed/data/tests.rs",
@@ -876,6 +1072,10 @@
       "sha256": "ddede422c00a4804eba1f869300bbe541f76de90caa18cbd947378e0bd632edf"
     },
     {
+      "path": "upstream/tn-proto/crypto/tn-core/src/runtime/read.rs",
+      "sha256": "405ff54da788ce2ed961c20eab33f707cebdb597afab28173692b21deb7b18cb"
+    },
+    {
       "path": "upstream/tn-proto/crypto/tn-core/src/runtime/read/decrypt.rs",
       "sha256": "d4a64b514ab1558d192c0531da7eef825f5d322fedc470fc28bfcf56f89b1138"
     },
@@ -900,16 +1100,12 @@
       "sha256": "8df078d4f572a92b92de45e0e17854628604e1e6fe988aaa5332233c1e75d4ef"
     },
     {
-      "path": "upstream/tn-proto/crypto/tn-core/src/runtime/read.rs",
-      "sha256": "405ff54da788ce2ed961c20eab33f707cebdb597afab28173692b21deb7b18cb"
+      "path": "upstream/tn-proto/crypto/tn-core/src/runtime/seal.rs",
+      "sha256": "989e557ac4e8f2487fc2c1eecbc7a0ff0fa643ce29cee351ec7ddf7085b44add"
     },
     {
       "path": "upstream/tn-proto/crypto/tn-core/src/runtime/seal/candidates.rs",
       "sha256": "c3b61b42ab1bddc74f6f96eba42042018306a1f8ea8d0f053fb97d92c3b628ce"
-    },
-    {
-      "path": "upstream/tn-proto/crypto/tn-core/src/runtime/seal.rs",
-      "sha256": "989e557ac4e8f2487fc2c1eecbc7a0ff0fa643ce29cee351ec7ddf7085b44add"
     },
     {
       "path": "upstream/tn-proto/crypto/tn-core/src/runtime/session.rs",
@@ -1076,6 +1272,10 @@
       "sha256": "ff1642a3381c6d3959ca5153515f290561ad4a320acb2e5d1350dc82e9014cf2"
     },
     {
+      "path": "upstream/tn-proto/crypto/tn-core/tests/fixtures/README.md",
+      "sha256": "3e4dd013332fccd790317cea18e48241c334eb7cc4dad204f7c15f78bd74ff0a"
+    },
+    {
       "path": "upstream/tn-proto/crypto/tn-core/tests/fixtures/admin_events_canonical.json",
       "sha256": "3f48217f4ba45347346e0a64b1b699d46ba60aeccefbb110e89923133a2b7556"
     },
@@ -1094,10 +1294,6 @@
     {
       "path": "upstream/tn-proto/crypto/tn-core/tests/fixtures/index_token_vectors.json",
       "sha256": "7c8d917fb177e69a4ae1cb2642e5e50747a20dd48def3d711d833aa35b59278d"
-    },
-    {
-      "path": "upstream/tn-proto/crypto/tn-core/tests/fixtures/README.md",
-      "sha256": "3e4dd013332fccd790317cea18e48241c334eb7cc4dad204f7c15f78bd74ff0a"
     },
     {
       "path": "upstream/tn-proto/crypto/tn-core/tests/fixtures/row_hash_vectors.json",
@@ -1141,7 +1337,7 @@
     },
     {
       "path": "upstream/tn-proto/crypto/tn-core/tests/governed_dataset_propagation.rs",
-      "sha256": "7e623996ee9666e89837cf2bf6e78bc249001813d2ce67c7081c295592f506f7"
+      "sha256": "c4bd9e53725180e85c811a098156f81a127f6613f41a9d5d3bb5381b806745c0"
     },
     {
       "path": "upstream/tn-proto/crypto/tn-core/tests/governed_file_keystore.rs",
@@ -1312,6 +1508,14 @@
       "sha256": "9aca640b480ee843bbdd18f4704703b9ad8d1b3016b9c5b70dbac37119450abe"
     },
     {
+      "path": "upstream/tn-proto/crypto/tn-hibe-py/Cargo.toml",
+      "sha256": "34af602fe79c2d9c563853dca07e510f05771da85cc3419385c503f065011f92"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-hibe-py/src/lib.rs",
+      "sha256": "ec1e215950ce17c718de5c4906fb04cbb3ba5338860feff50de49fe3e27e2a7b"
+    },
+    {
       "path": "upstream/tn-proto/crypto/tn-hibe/Cargo.toml",
       "sha256": "f1f89245dce3d8fc37429d4aa0626858d72076a85eae71a118e61111ad5ade99"
     },
@@ -1328,12 +1532,12 @@
       "sha256": "d931d67d39bdbf5205e709667f4b431d02e58a8ceb0f1523dad6eb9ba9e6c031"
     },
     {
-      "path": "upstream/tn-proto/crypto/tn-hibe/tests/golden/vectors.json",
-      "sha256": "d93121ff24bc69225fa8ae9e8acc4184e1c7529911e8255aaafea8a98aafdd39"
-    },
-    {
       "path": "upstream/tn-proto/crypto/tn-hibe/tests/golden.rs",
       "sha256": "dab5b7c13246cd471f2adf89dd0d1f2292f0ccb61f2dca556cffad2200793ef4"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-hibe/tests/golden/vectors.json",
+      "sha256": "d93121ff24bc69225fa8ae9e8acc4184e1c7529911e8255aaafea8a98aafdd39"
     },
     {
       "path": "upstream/tn-proto/crypto/tn-hibe/tests/lifecycle.rs",
@@ -1346,6 +1550,2758 @@
     {
       "path": "upstream/tn-proto/crypto/tn-hibe/tests/roundtrip.rs",
       "sha256": "d80932ab71a770876b3f9bddc93192c48ce16ce9c713a9516e52e0d2d6275540"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-py/Cargo.toml",
+      "sha256": "52f9b6d3fbb9513c5773bd5b9947026a6ca0ad9c7c945f6d6355308cbfb5ff9b"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-py/src/lib.rs",
+      "sha256": "e39440a37430851508eccd4ed0e523237fb588ce102c0ca2f4b378dbe43a3d99"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-wasm/.gitignore",
+      "sha256": "3d55798d37c4ee685c45dd102b4e7276a9d7cc6689b57fb329aa1d1a3ab6053d"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-wasm/Cargo.toml",
+      "sha256": "2d0b3de9af7e21477085f4ee873c6d5ab95a3fbdb4958628cff48603e99d36d1"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-wasm/src/handlers.rs",
+      "sha256": "ac534389eb0a2290742817d12022e4a107d107b4f3a9bf2cca4529d64b0a0d70"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-wasm/src/lib.rs",
+      "sha256": "5ea32065c9dff0787a3a7cb6e9ea40f0cd71a0fd85ee09ac2b354a9bb0a998b4"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-wasm/src/runtime.rs",
+      "sha256": "983603300c129f2d5d442857da43fb14dc5f447c535ec12b249e92c752bf30f1"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-wasm/src/storage.rs",
+      "sha256": "0723a52b938b6197eaeccf807a048481ac3805331813c546e16b8d841f2b1c8a"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-wasm/test/browser-smoke.html",
+      "sha256": "624d2cfae3a19d5a7af3993b4e39d288c8ee517349aa441ce44002635c54c142"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-wasm/test/btn_interop.mjs",
+      "sha256": "51242596734395a2b74e56763467b0cfd515c80fd3a80c2709008c846fae0ed6"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-wasm/test/btn_py_check.py",
+      "sha256": "1e72a0e72351527e0bccb9f8576b568826e193f08c186b97824043f378ff64b7"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-wasm/test/conformance_golden.mjs",
+      "sha256": "a10c035ae4951382945088a4e10e206e5b5afb0e93a13f9d7c6df1fdce13bb30"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-wasm/test/fixtures.json",
+      "sha256": "e729cfe8dc661c6eac4422dac9c9cad93302a0cd9b0c8ef1f46779d0ad14ea8a"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-wasm/test/hibe_interop.mjs",
+      "sha256": "da87223a7066365be5d8a550237cacae0bd8a2ba8d767a86f68ae7286158f539"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-wasm/test/hibe_lifecycle.mjs",
+      "sha256": "dbd00cd0cd2082d526ed41f026a5ff2d7bc2abb0049a0b447f1349e584e6171f"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-wasm/test/hibe_primitives.mjs",
+      "sha256": "dfd921c19b1ce0a7ae369530692b1e66b041753aec6b38925c1cbc23d68aca0d"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-wasm/test/hibe_py_check.py",
+      "sha256": "8f3cc7412f05f373ab4702751f95a3d46cf0f771658facafc8afdc7bd1bbf215"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-wasm/test/node_smoke.mjs",
+      "sha256": "7da56e35c76b6f7044abbe384b16ae9f38dfdcb346d2039e1a8385faaa99415d"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-wasm/test/py_cross_check.py",
+      "sha256": "75e6d30fd3e6c8f267e6770da73d96bb98ae976fcb67a06cc743de004dd1f085"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-wasm/test/run_btn_interop.sh",
+      "sha256": "42826da979286d5c05e0300d42a8f03d46131ec8d8c5723b962caed151596c92"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-wasm/test/run_hibe_interop.sh",
+      "sha256": "e0368b7d9ae2e98351a841d6275e2d1910ab69f915031a754c52022178771c8b"
+    },
+    {
+      "path": "upstream/tn-proto/crypto/tn-wasm/test/run_interop.sh",
+      "sha256": "7905117aa53bf1021f7c6c14b7fd3db64780fe3da616fd8f0eed4da3e39380c8"
+    },
+    {
+      "path": "upstream/tn-proto/csharp-sdk/tests/TnProto.Tests/Fixtures/README.md",
+      "sha256": "fd016b49fe7a2aaf557bc76a7b58d581c4c8f052db572f51eb21d09506249af0"
+    },
+    {
+      "path": "upstream/tn-proto/csharp-sdk/tests/TnProto.Tests/Fixtures/jwe_aad_bound.json",
+      "sha256": "5fb98fa8dc88020f63daf6ce137a09ebeff7fb5b367d40b81ba19fbb791468ec"
+    },
+    {
+      "path": "upstream/tn-proto/csharp-sdk/tests/TnProto.Tests/Fixtures/jwe_rotation_walk.json",
+      "sha256": "8637ec6814f84225f9c93c026cdf802f50577a27378c3515e1984b97230bfceb"
+    },
+    {
+      "path": "upstream/tn-proto/csharp-sdk/tests/TnProto.Tests/Fixtures/jwe_single_recipient.json",
+      "sha256": "421f33c2e247616cb51470a6dec815659794b25c1b824b30090ee6673562316d"
+    },
+    {
+      "path": "upstream/tn-proto/csharp-sdk/tests/TnProto.Tests/Fixtures/jwe_two_recipients.json",
+      "sha256": "8422fdfa5c031f0f57b27bff5cfa02949453bd6bdc4017c80b2b99f7f8f846c1"
+    },
+    {
+      "path": "upstream/tn-proto/csharp-sdk/tests/TnProto.Tests/Fixtures/make_jwe_fixtures.py",
+      "sha256": "f6a60100095e6cc557502f2bd025f2ada6f8f99fee9d7ce59c592c49dd586a4b"
+    },
+    {
+      "path": "upstream/tn-proto/docs/JWE-cipher-spec.md",
+      "sha256": "2db896794ae80b1a4bc2bc0133847cc8b20ecb86a74586bda7a1a51cd9d0ab1c"
+    },
+    {
+      "path": "upstream/tn-proto/docs/guide/getting-started.md",
+      "sha256": "00d188796eda239c52e43ce084d40b26e3a0f920b5f2efb36466b9741313cd5b"
+    },
+    {
+      "path": "upstream/tn-proto/docs/guide/groups-readers-rotation.md",
+      "sha256": "9817e44d38c27b62293a0034e1b3f8dfed4f5fc3caa21030769485af80bc4988"
+    },
+    {
+      "path": "upstream/tn-proto/docs/guide/hibe-howto.md",
+      "sha256": "4e86c888df769142f404f1069dcbf138d1d8f74534b0a38bff0eecb7ba1b8537"
+    },
+    {
+      "path": "upstream/tn-proto/docs/guide/hibe-library.md",
+      "sha256": "3692bd94992926f7a30196dbaf10f67059f381350a53495ada09f3784b689943"
+    },
+    {
+      "path": "upstream/tn-proto/docs/guide/jwe-hibe-key-ceremonies.md",
+      "sha256": "566bcba220c05dd1a94c20a953b104b47c8b3b27803835a38af6caf70b1411f6"
+    },
+    {
+      "path": "upstream/tn-proto/docs/guide/protocol.md",
+      "sha256": "81cd967720206dc6c280f78e57deeae0c10dae71868e9e89059726db01f63894"
+    },
+    {
+      "path": "upstream/tn-proto/llms.txt",
+      "sha256": "8627fbc28b5253fb5704c3e68d39484681a33fbcf7c381d0c9bb97a139d91c3b"
+    },
+    {
+      "path": "upstream/tn-proto/python/MANIFEST.in",
+      "sha256": "cecf0628adefa9def977d82fab06f4ce55196855a6ecf1dafdfa2ff7d3000180"
+    },
+    {
+      "path": "upstream/tn-proto/python/README.md",
+      "sha256": "992c1fe86f23e8029c0aaa54919103a5fe0c80ae929f5160f935613f1a57b731"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/README.md",
+      "sha256": "131da67e751ae10f1bcc8e6bce8df69a24b6829d73279c7cf6a2292463f3e83a"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/_capture_for_docs.py",
+      "sha256": "de2d7705cb1f83f65378f719131652869e55bb83e3acfe04aaded199aaf95761"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/bank_vendor.py",
+      "sha256": "cd2c67af51944b9b80e8b63175c12a0e58df5087f097940a4962d408151feef3"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/bench_1kb_breakdown.py",
+      "sha256": "6203fa4dcaccffbf15cda636db3085fb9b8fc5153c592abf47bd13887fb09295"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/bench_1kb_breakdown.results.md",
+      "sha256": "c19c52dd7d993d6547816b94955c3a4ca60a877264030d03fe4b7e04df84607c"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/bench_file_isolate.py",
+      "sha256": "2ab142cc1d157d0ecff678020d211be78fb7b2a2e10a78ce029425a3bd3e86a6"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/bench_info_read.py",
+      "sha256": "c7d9c00c2213a54749d364d87ed0a0893147b79d1325aa08379e33eb690b0902"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/bench_info_read.results.md",
+      "sha256": "a982098687504ab649ccb6c21ff6d32955f0c2d4108a0948682467eb17b501c4"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/bench_signing_cost.py",
+      "sha256": "cfa8a6aee1cfad24609038965e561156f31c6b8678a4e4c79d9e1c318b02d557"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/bench_signing_cost.results.md",
+      "sha256": "6d3e96a896e5126e523f356f6aff8349c215c713f0b740e2124097293a00961e"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/btn/governed_marker.py",
+      "sha256": "0d8a0c9c4281661d241c49813b2e66e6a39910bcc2709ff64bccdd065065963c"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/btn/quickstart.py",
+      "sha256": "3a4fdd40e530e0f7159786116c861980e4ec0d58673d28a678751468f5dc9a56"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/btn/revoke.py",
+      "sha256": "284f31cbefbec17c031c9749f8c67994ca0a70188f77c210abbb14fbdd1eb248"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/btn/save_and_restore.py",
+      "sha256": "008a8aa34a71fac809a99fc68f8e31f6e89fb3c979e181c317914dcb39da7fdb"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/demo_revocation.py",
+      "sha256": "77156d8c4a9632e784f21e30d1ca7f82b0579f8635db86910951c8986ffc29ba"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/enterprise/README.md",
+      "sha256": "57bee0d76d2b5ab2965dab39d7f8e8db28c80695df166d05666374291dfb189f"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/enterprise/pattern_environment.py",
+      "sha256": "794ab08f84cafbb3ec2b5355c64ca6bc3e3f2e6d4da7634ea6c55594fb808129"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/enterprise/test_pattern_key_access.py",
+      "sha256": "8bc857b527ba6bb16e5009dd8a5436ec051131f761c833dfb9e37500f34907d1"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/enterprise/test_verb_patterns.py",
+      "sha256": "503ca87305a6b1c9538a979ef8350f111fcc2173c3e68314a1a522d4df54b720"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/enterprise/verb_edition_fixture.py",
+      "sha256": "9d616f58677300e211c569a3cab53c8d5ad24c799cf9a710c5f49abb8ac3cce6"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/enterprise/verb_patterns.py",
+      "sha256": "d0a4f80f8d94cc7b52358ec82231d75d9e4f726f95a1cccd9e36c02dac1c85dc"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/enterprise/verb_support.py",
+      "sha256": "98f0cf170f6da47dae1417a92f1763a91b5236a52545b8ae35b9fefa3458f947"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/ex01_hello.py",
+      "sha256": "8247a74764ab39e8dbddc87242d9b4157eaccbdc6f240326930359fce432ee62"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/ex02_reading.py",
+      "sha256": "4c6eee8f33a8e69aad4af14913fd64efb91169588ec56f7024d7477e157ccaee"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/ex03_groups.py",
+      "sha256": "b50942e67a5292c949a1bf4d4ca03ad1092a8bcb14944e1c67dcbe7ec9b4c5d0"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/ex05_rotate.py",
+      "sha256": "aab209a885ef66707587ea6a94b03bc7635fe88befd2e3541d08f993efda266a"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/ex06_multi_handler.py",
+      "sha256": "c13186cca3c701f13a00b5a3f9fa06842d5ebdf71d9242dca926bcf205fc8a08"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/ex07_context.py",
+      "sha256": "79a2906a48a32b020e735bc4914481d36b6b057936da3b0fbbfca7e9276ec080"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/ex08_stdout.py",
+      "sha256": "f0c86ae296f8b3bb6077464fb27f5f9e24eb0d6bd391493d945a1971bdcd91da"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/governed_data.py",
+      "sha256": "868100d892661ba07fb0420f1f81997b5acef5f4ce53834c684b56ca073b1806"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/governed_hello.py",
+      "sha256": "7139fcc39443e7642412382165f1e51e72384e611afe2fe2c67168df9560ea7a"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/governed_outbox.py",
+      "sha256": "92a018a3db16def0cc1998462132ef978fce93088eef3b20343689eecac35eee"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/governed_sessions.py",
+      "sha256": "9f82c72fb353fec150445143c12d7875e48336179a07067eeb32f826f427d09a"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/governed_workflow.py",
+      "sha256": "73421152740bae73b8ca138c32c9a0aa5ffe103df81e63c228fc67ca5f1c6444"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/persistent_keys/README.md",
+      "sha256": "8d50cc34ac49731b38520c64973b4121fe99999e1d6490e9a33161eeb0a54f0e"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/persistent_keys/agents.md",
+      "sha256": "a7106ca63665267012395cbfd3edf32e1ce2c81acc24eb848665f983a66c985b"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/persistent_keys/configuration.py",
+      "sha256": "00342ae3fa8f34b482275f3bfffa3e5a88be9926f302061c0080cc29332e18f1"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/persistent_keys/hello_btn.py",
+      "sha256": "42034b6a818075ae3a6e2149a44449ed86ae0a61de4d60a0ad1bcbe4c2c0e318"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/persistent_keys/hello_hibe.py",
+      "sha256": "59b922aee30c4680e4b775b84d06b7061ec03f9dcdcb587a269a7aafe3704d1f"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/persistent_keys/hello_jwe.py",
+      "sha256": "0cac6760b23bebd073ec39d0a5184e5cff473820ea9a2e270438dbabfbe33d5b"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/persistent_keys/hibe_delegation.py",
+      "sha256": "f7ebdefcb1688bdec4891a0f2995a36a2eb8270cced82fabfbeb0e1b0bf79643"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/persistent_keys/setup.py",
+      "sha256": "b4f51ec020457ce8abb661d671554c5fe3a29c1193b6dd41545cf67568e12fc9"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/persistent_keys/workflow.py",
+      "sha256": "ee49413ddceac08d77a0df074fe0385c363b32e431ad54b31a57ba0dc39bbfa7"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/providers/README.md",
+      "sha256": "79b68fe865e480881d2252f9f3e6db7e5134d858dd0257b7cee9e0e1c68243ed"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/providers/catalog.py",
+      "sha256": "7bdf4f85296970c4dfa317daa7d9ce01dd2954fbdb5afd9a6aa0db47c4cf0f87"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/providers/governance.py",
+      "sha256": "2d144b7222b1cb984f77003b0ea0f1f1b2b22d43f004af088845bbbea2058bf9"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/providers/hello.py",
+      "sha256": "45735afb02ab9c4ee8cdf511e6f43b85c6c50b15b81af5c725137b37b46c4256"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/providers/identity.py",
+      "sha256": "99100682d2efa289b8c3e3d1b12758c92873f24ecae597260139f85c82e8ba0c"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/providers/keys.py",
+      "sha256": "93eeed2a55881ed791a3e938c05a11eeca87b102cb871ce7e14302855aa91410"
+    },
+    {
+      "path": "upstream/tn-proto/python/examples/providers/register.py",
+      "sha256": "6faa770c89a14679d0c3b8828d103affcd1d9e6d937be5e75e75d1d09010f13b"
+    },
+    {
+      "path": "upstream/tn-proto/python/pyproject.toml",
+      "sha256": "3035610516745706fe902130f8471f5f38950d0eee76fb29402788dda63efb8e"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/__init__.py",
+      "sha256": "d6996d9277c02d8b25f37a7f22f6d7f42ed78aba8b8f736e9ca9dac22bf30f74"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/__main__.py",
+      "sha256": "f497288957a643748d87b391255e8cf16645d387749258ac474cafa1317116bb"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/_harness/__init__.py",
+      "sha256": "a552ae3a367e92e0d1f6b5515ada4240219a97a13b40be7da10abaa7f93328ae"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/_harness/env.py",
+      "sha256": "c8ad7557ba8211ce5ab8d92b7625abb716039cfaedb39a7e94fa3dfa1c907c26"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/_harness/fixtures.py",
+      "sha256": "1f2457ccb3ae4f581fcf880ebe09e8733c51e8f166bb4980bc4842c4cc1cf8bb"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/_harness/metrics.py",
+      "sha256": "d73942bf622a011b129559d402e7299a81afe5de1b6dde88f7ab15bdd43c1601"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/_harness/registry.py",
+      "sha256": "ef0f4fa7ccce8909272a5408a94cd4d9b1acaa103865365b7af584ce55a0e292"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/_harness/scenario.py",
+      "sha256": "da5763b2eb2c0022f8d3ad523e8be02067c0b110c9df9faf52508562fe9fde82"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/_harness/vault.py",
+      "sha256": "a9933757f9f568c53b953d2f8268558d7d17aaa501c3e39e37fe8ff030aaff67"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/_harness/yaml_capture.py",
+      "sha256": "7a06c99adae972225138ef1d8c882387a60b9314ad1786c55197c96edf88c219"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/alice/__init__.py",
+      "sha256": "81e366decec82e7a682756f77d5ad475cd7872d1ed4100ad06bf53cd8d8a35c4"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/alice/s01_hello.py",
+      "sha256": "8cdf72826396967bfd058c4fcb805287f828a7f2d667bee02fd945a10bc28686"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/alice/s02_rotate.py",
+      "sha256": "69fcaa6e907bcd8b373f82603ce1d1ebf187badcfb744494cd5389c2f5a5a61b"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/alice/s03_ceremony_matrix.py",
+      "sha256": "415c0a695e74a80b4476007af69c7ec044d5f6f8f3d11d7e5540bb72f5d40d52"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/alice/s04_context_scopes.py",
+      "sha256": "6ea5e9d6f11e8c466f4232081a6824c995ceb3383c32d2f0e5dbd2909fb867be"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/alice/s06_rollover.py",
+      "sha256": "e4cb70e4977d69ff046982b369c29eb7eba92db330e9e95f7d070d6186417f94"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/alice/s07_field_routing.py",
+      "sha256": "6919fb9e123baa54cfa7b650402ed51a44155685cb99ec77e80fbd179513ddbd"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/alice/s08_resume.py",
+      "sha256": "00fe31889c642401dd0be1dec65ba7edf12d70150ada4289b425c17f95a94a40"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/bob/__init__.py",
+      "sha256": "a11a814cd3e4b6c9450d91282eaf79dd3f96e98657fac5350c6ebb1b4dc854a9"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/bob/s01_recipient_read.py",
+      "sha256": "5f1593afcc022f13ecca000d23cac3d7b2b2530a093285436eb0a119d7c8bc61"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/carol/__init__.py",
+      "sha256": "43dc6d293c2697f32a8dece26e2891b7521a5a5765921754f5673adf0d14aaf6"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/carol/s01_revoke_then_cannot_read.py",
+      "sha256": "32c581d45983a215d7afb2a423a030d2e3981fc4cd21bd2d1881a3178ff00046"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/carol/s02_web_revocation.py",
+      "sha256": "71dee2d05482268270ebd01aa2ca49abad7ab6a5035431e339de6b057539c9c5"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/dana/__init__.py",
+      "sha256": "7a504e3f357e6487738e9bfff6f28a4b6a50225f66bd209bb2403f12790829df"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/dana/s01_multi_ceremony_one_identity.py",
+      "sha256": "82352afec3991b351ba942fd6ca1d9cdab1160678240b94a8522572f001b8105"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/erin/__init__.py",
+      "sha256": "f17f395e877e263c04bfe748b39431b71b769325bea3a613d10e74c6f1aeef90"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/erin/s01_link_and_upload.py",
+      "sha256": "37c2603799194970346c512c256ea283aa238c4e0734d6da1a54e2610a73a572"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/erin/s04_link_existing_ceremony.py",
+      "sha256": "df1d73925324fc97319aabe42364d63dde5dc9421334ae33b0c19cc9541c8c37"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/erin/s05_unlink_keeps_vault_data.py",
+      "sha256": "b6284eef3b83dd835abcfff6ffa77441af1356e93a0a734d23f2854a6163da2b"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/erin/s06_per_ceremony_opt_in.py",
+      "sha256": "69fdab2869e92aa10ebe83bd99bc20f665055a30f3b478d4a97e935a60027270"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/erin/s07_idempotent_link.py",
+      "sha256": "17842a647068d5e503eae8b0b4bddaf15ec8d2f58be910314bc492e59687c469"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/erin/s08_prefs_pull_roundtrip.py",
+      "sha256": "35546f930529f5b4a8b415d339c68d05bb5aad9b0ace8d853b7c48baf9af6bf9"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/frank/__init__.py",
+      "sha256": "008bbb3e5744f442ee88c77a9c08c1ac811c940816b4b5b8247f00e81f7ddb62"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/frank/s01_cross_machine_decrypt.py",
+      "sha256": "a7a410dfbb1a070a2a4517bd7a4b44f3047d1efa8dd5eaf355935d00a67efbb4"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/grace/__init__.py",
+      "sha256": "ff0ad948a3ee89fcf69ef50ee284ce11320fc9dbbf68285f69b2f798c1fb4151"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/grace/s01_rotate_and_sync.py",
+      "sha256": "7085d8e6cd3c6405252a4cea3c07a9d781cc34c771cd1926c868d14f15ea442d"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/grace/s02_file_overwrite.py",
+      "sha256": "9d1fe35ecc868476d44aa485710a9f4f691dd4213fee2c724cdcaab12026327f"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/grace/s03_log_sync_roundtrip.py",
+      "sha256": "bc9cb1aaa5853024470f6211cf6c30cf9219f2d02f88d78cd5faf5d267ad2d23"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/ivan/__init__.py",
+      "sha256": "5d4d69a9a16f2ae5742039b708d1e54c980af8e357cf274b9cfe851c01533d33"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/ivan/s01_cli_bootstrap.py",
+      "sha256": "55eaa0e23c417cd44423890ac06a0f46fc2b5c7ec1af46d27869838e2909c1de"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/mallory/__init__.py",
+      "sha256": "0593473a6a2b03dadc4b54a178968725173b1676dcc578771aa8e56a90155038"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/mallory/m01_sealing_edges.py",
+      "sha256": "71202c6b01a6d606da3e8ab7bdc8edfc991647cd2f6d10ecf73e774075dfbc43"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/mallory/m02_auth_reset_edges.py",
+      "sha256": "0b640acde00d72d4c0dab019bbd30dc9fadcbaccb728c8c76fe41a8b2fa21a0e"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/mallory/m03_replayed_nonce.py",
+      "sha256": "7cb0e0e39eb4d05b4b73864fc76843e0abffec7c29ba84eadb483a7def5a1a36"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/mallory/m05_path_traversal.py",
+      "sha256": "8c73bd918648459397d5cc9142fc40b8bec012eefaaad546930753bfbfeca759"
+    },
+    {
+      "path": "upstream/tn-proto/python/scenarios/mallory/m06_oversize_upload.py",
+      "sha256": "ba6f0f7e8360f1b04f7bf2968feb8832ffe2c7ebe40ce97ae380b88836cac33b"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/_chain_persistence_probe.py",
+      "sha256": "c0a3312501f9c0cf9f6216535f133756db14f49a978bdea7375fd8372ff6c515"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/conftest.py",
+      "sha256": "7f999e6296edff131592ec0eca049bc91214c908e3f3c7c931930e50202ea18b"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/demo_hibe_primitives.py",
+      "sha256": "1b5538cb159f39fa1cbafd3923261dea6060960aa491ec69ddf57f041b51e20f"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/demo_hibe_walkthrough.py",
+      "sha256": "1a6cb8f8f0425ae7ada42ef8c600245ac3c27ec07017f24eff1953d6b21e8762"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/demo_jwe_cipher.py",
+      "sha256": "7a67cfe67c72193e2f5a197e46a985534406786ea055665f70f822d9ed6f1acb"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/fixtures/admin_events_canonical.json",
+      "sha256": "3f48217f4ba45347346e0a64b1b699d46ba60aeccefbb110e89923133a2b7556"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/fixtures/build_admin_snapshot_fixture.py",
+      "sha256": "985a5077814ff9683160bdc23ba63934264fff16265c92f97768def5311724ee"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/fixtures/python_admin_snapshot.tnpkg",
+      "sha256": "8dc4d9e0dfb0dd24bfa4bc77ee0b9f03a56e5631b78259c48b9389a0dcfacde6"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/fixtures/secure_read_canonical.json",
+      "sha256": "491e9e27a9336c5b9e077b52b61422355e6e367adc960739de5d0945c2d165f6"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/fixtures/tn_agents_pre_encryption.json",
+      "sha256": "5b947fd59ac0f85b708a1498191fdeec68efbef61977c9cf91f792bee00cad2b"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/integration/test_cash_register_stage6.py",
+      "sha256": "76092d2ece67419bb5fbe1fae2ed1f395bf6b6cb98f6aced43233328175accbb"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/integration/test_env_var_interop.py",
+      "sha256": "d1445b886eb5f43a0d7a52e93033a473e6d5682673ff7c61ef530ae988c53047"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/integration/test_vault_api_key_persistent_e2e.py",
+      "sha256": "58d70d595e16b0afb5ee8cbffdeba8d9da0e2baff108b4110618c2df58de8c1c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/integration/test_vault_api_key_single_pickup_e2e.py",
+      "sha256": "e60636505be9d0d8f462859d561910b509be6738c36c25d64ab7ff2e3df84bfa"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/integration/test_vault_push_pull_e2e.py",
+      "sha256": "b9f312021c6e7941c30f451901e47b36d27d1c0c55363bd37cd2cb9f9b057ae7"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/perf_smoke/artifact/test_local_perf_artifact.py",
+      "sha256": "1ede434555b0a7106c0ba316f139a1869718b37aae48be640c160b9080347d2c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/perf_smoke/artifact/test_text_jwe_io.py",
+      "sha256": "221097e098c674d2132101e56214ddf354477b6e5109ffe9ae7e2f633f5adf6d"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/perf_smoke/conftest.py",
+      "sha256": "ea045c013c4978bf560072c42c3c9474df81c35a8fe6a0de9137afe84301b7d0"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/perf_smoke/functional/test_three_cipher_functional.py",
+      "sha256": "f81f41b32555968468ff57fd9b3c82e2f1db18cab1c375b198408fbe267cf718"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/perf_smoke/instrumentation/test_python_emit_perf_stages.py",
+      "sha256": "edffa64ea9569b747494c651a5d86118a8576a3bbe545e68419ec4fe61a0a768"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/perf_smoke/instrumentation/test_python_perf_counters.py",
+      "sha256": "4d7f5390be905195fc12ef5018f005d4a3ce60ad6b1cda700d6b773a2ce8aba8"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/perf_smoke/instrumentation/test_verified_read_perf_stages.py",
+      "sha256": "4180815d79dd2474c7d0c9d1876941eeab6bbaf5283885a1f8939267d441ff4c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/run_cipher_sweep.py",
+      "sha256": "d0ebcbcb43aa42600eb1693575a85c952e91c0701688e1f5411affd2ccf4eb91"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_0_4_2a9_regression.py",
+      "sha256": "f1821e0dc686984b15ec7ee3046129d0fb6e6aebc1708aeed10e5c196c8f8a07"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_absorb.py",
+      "sha256": "af7a216758b00e05f0b77da54a1c56f345ffc1554b0ba81cbb5e820e910d00e2"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_absorb_equivocation.py",
+      "sha256": "f8944053f514c105acb93a3a2c4f02d4b3f689cea2f3f5af97dd2ab27449b63a"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_absorb_received_kit_post.py",
+      "sha256": "60c72f2e5a69649bebf67660f9c24ad61f81ce208a7af05712384ef78665d465"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_absorb_vault_adoption_contract.py",
+      "sha256": "31cb570944d1667d48a91a9be9005463b9dc3070af3fffa91ba146dec7ff07a9"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_account_connect_cascade.py",
+      "sha256": "d1404677d614adfda9f0ed901e1c27fb7b6374fb360e7769f0eba7e768a53aef"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_account_sync_full_live.py",
+      "sha256": "e82203d826b36b270fc334e6e497dcc812f047631776cd3d2c2a81c20d77cff0"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_admin_add_agent_runtime.py",
+      "sha256": "36df0388a333f68950de83131eaaa97ac6c1108e0267aec342582fd37f46cef9"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_admin_auto_compile.py",
+      "sha256": "b039a504c22eecc5dfc44d61490bde3ad80e87395495e90300e83a36c8b0b208"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_admin_catalog_py.py",
+      "sha256": "0e650246dfcd44021cc1aebdb9f8ce4e8ab9eed3a99c42423c12de4245e2dd0e"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_admin_log.py",
+      "sha256": "a7f06b5527fd8039a304a10d56100694b41d5b1860b8457e44bcb88512d6cc49"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_admin_log_routing.py",
+      "sha256": "7dbec7b9cc9f62716ec61f4de33c0591c7d53f72f215e4f78423ead00dadbca0"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_admin_pending.py",
+      "sha256": "d635e8217fa5e6e111a2a25c0d02716447d2d2b3ee699be2712f20581548f051"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_admin_revoke_no_epoch_bump.py",
+      "sha256": "94b9aa68e3cdd376fa0353677b1cad29906c60ec61b6600b1a243d4d1a7b2f47"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_admin_rust.py",
+      "sha256": "20277ef5fe95de88258f90588b352b10afc8109b5be9122eb89aeafca6552196"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_admin_state.py",
+      "sha256": "c51793ba78ab22ebef3ad455a9d873f34c77aa5fdcfe8f8e2610082956662084"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_admin_state_cache.py",
+      "sha256": "8900354f168fb7a4b35ba5a740c746c96d8ee32a977f39bf4b24ec8e882f4020"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_admin_unified_api.py",
+      "sha256": "8b2f86d8034e65911f215e39eb7e5fb7307dd516365eeb9c1c734f16f7180eec"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_agents_policy_accessor.py",
+      "sha256": "154fe8bcd37e7f3f2dc6b405af0101c2e49387805f292f74255dbbd72fac18be"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_agents_policy_published.py",
+      "sha256": "ea8ec4ca2c4004249504162f0841e1e64f626ebd0b0132aa9b068a8713f0fa38"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_atexit_flush.py",
+      "sha256": "b1122c2368b88480682876e3f4bf6754319041ac2906623a8c95b17282e1514f"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_atomic_write.py",
+      "sha256": "c0adef7e945afb45e2aaef7139890b14dffd126377617c476d1d1245a316b4a1"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_autoinit.py",
+      "sha256": "4938cab82a7771aaaefed8b6aac540ee3d5c031155d996aaf338ad013b0d2074"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_autoinit_layout.py",
+      "sha256": "76969fed71d877e3e2f9bc41c9f78a9d3c0690c89d9fc440a5b4094231a03258"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_awk_pickup.py",
+      "sha256": "06bcb761ba757c1d8d4193c10115c58b386a46aeb008c441277af6b651f1a4f0"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_awk_pickup_token_reuse.py",
+      "sha256": "a400019bf03c12ea08ff09315e3dc49671c1398de146105ce6b3ad6e6a45a5cf"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_bank_vendor_example.py",
+      "sha256": "9abb8096af8da848b7da52860d07148563a3ecf230e4a7f5ad8fd2528a19c9bf"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_body_encryption_zip.py",
+      "sha256": "6b3369957e61b8136e7bd52b740195fbb84db3a240d946a3045237ef197c37f9"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_bootstrap_no_prewrite.py",
+      "sha256": "316850afa5be1f204f5003060c6717448eb452b84580f5c73b2f981cbc657fa1"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_bootstrap_user_agent.py",
+      "sha256": "fa141cb633f46d61a85f0aa44aecf4b8032df4ea4e96f25bf6cc7fe88f78bbd2"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_browser_wasm_interop.py",
+      "sha256": "d2a05fe3f5e98afd87b3835bec4132a2fa674ba929a9e1a16688a7cb75caf699"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_btn_keystore.py",
+      "sha256": "e79a76fe94c7a74187cc7e8120436bd96c04116875b3c478bdbff7e71bda416b"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_btn_wire_contract.py",
+      "sha256": "cf18ee60e789140981f876f29062bd40b548fe512e0407c46551b80cf2f9997c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_bundle_for_recipient_scope.py",
+      "sha256": "ca96221116de339cae5b5738b313b5528318875809886c6708ba70bdfcd446d9"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_cache_policy.py",
+      "sha256": "24f9602e744f5168966dee6eed4b65e9a082b66dbfa444ebd6f5ce1857a49f6a"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_canonical.py",
+      "sha256": "d8b3729cb97bddd617b44d01109407ffd49632ef05ce4f29d2f047a73b78a01c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_ceremony_init_row_hash_parity.py",
+      "sha256": "f307efe69ce7fba3d880678efe78308d7bcb71b745a51a6b001245156e33c8d0"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_ceremony_link_state.py",
+      "sha256": "416a566d18ba27c6d9544ae23a3c408e9090d036f45570ef270ebd2714e53210"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_cipher_backend_integration.py",
+      "sha256": "ba9e617ad111a13dfa521b7591880dbdcc536b221c169aa328a32cd0a0952190"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_cipher_hibe.py",
+      "sha256": "9cb463fd2739e5cae4cb4ea20d04858268f46213e2fe3413cd2b61fd7c428ce3"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_cipher_jwe.py",
+      "sha256": "cb1a743d4a6b285074bc6184fe529ed160604c894884eac951720ff904c18fd1"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_cli_absorb.py",
+      "sha256": "0907b857aaf24ac7de617635553ba3d797bda10b09a5d44845508b42c4cb1ec4"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_cli_auth_awk.py",
+      "sha256": "f1545dec87a8c23408a6b74179f0b96167b260efc05e949c0b2ba8dfbb03beab"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_cli_canonical.py",
+      "sha256": "fba6679d71fc7368314f427254aa791c1d5413e5a48779145189d2b9915fad27"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_cli_compile.py",
+      "sha256": "8d3ff3ec89b7d532d691e23bcb90921a33aba9e40e323ec060ca80a8ce177952"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_cli_dispatch.py",
+      "sha256": "41fc5078efd722f09ddf3e4b193e33fe88bb4762a5d3cd776bd31c19cd2c82e5"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_cli_firehose.py",
+      "sha256": "91cbe656b7f9b67f42de5feaceb114523530e157f57b52a5e40341408e9729f7"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_cli_import_export.py",
+      "sha256": "f0f656622757907598866826f7696d97950c3f6cd6f75ba24f26503f35d95262"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_cli_info.py",
+      "sha256": "ff4e5685f0b20078f26904abdc30dc1da7f4d136b699cb188b38a7a89250c004"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_cli_init_non_tty.py",
+      "sha256": "db9bd4b1420d4b385a49d3cd8463b5d1e4cb5c8cac0056691c50c7e7c8569a93"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_cli_read_security.py",
+      "sha256": "a282993df82621d481ca0c9a74b06acaef0200dee928b12ec3ee35004dc15245"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_cli_rotate.py",
+      "sha256": "76168ff46f66343533631a5accfee2315c62eb6c7056d030cacb393199a9b849"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_cli_seal.py",
+      "sha256": "58fc806fa4a8990f38b2bb677dde246ffbd39ec3de3df01d97e81352b04b5a4d"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_cli_show_env.py",
+      "sha256": "86cb72c79d044c57d5a8f887f959f4d78a798239d8062a7f73392c8936aa5a61"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_cli_sync_pull.py",
+      "sha256": "7dc39baff8ec42439e9c2ebea713bba433406d853d7a3facaf236645f0352fe5"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_cli_vault.py",
+      "sha256": "fdf98bd0cc6ac5d54d4e5d77f0bf5d0daf50255fb77ca2073ef2f92fe731b682"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_cli_verbs_send_receive.py",
+      "sha256": "cb417a583b66d4fcefbc4ee53f65340fdbf9ee1993b1b9802fc247dda26bb6c2"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_cli_verify.py",
+      "sha256": "249fe861b761b84efa65e4f7cd70df3e9a44b05f9880d69c95080607e6bccf5c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_cli_wallet_watch.py",
+      "sha256": "afd07791a178d3dc5964bcd53a50c78872af1456aa02935977b112dc02334a0a"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_cli_warm_attach.py",
+      "sha256": "7e48de5b40cab63616ca24b2b6fdc305b9f1d38460cbafc4d61cc7acfcf85f63"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_cmd_validate.py",
+      "sha256": "41ac95db21f241616692a0b541a1fd764662ce70faf1f4fdc47a6dcedddbf9b0"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_compile.py",
+      "sha256": "4c4bdadd591758653b0db084aebb80da80c4893fa86b912f7e4a66417b592339"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_concurrent_emit.py",
+      "sha256": "b8d95e422dd7e4ff48a54a00aaf30463a4237876b86d6b8c3a22270dd58bcf36"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_concurrent_emit_chain.py",
+      "sha256": "ee3f8018c92fd66ce80d1fb76bae26a764633fa240708d5bb8f8589c6d669fb9"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_concurrent_init.py",
+      "sha256": "7cb68e6dfc595ee7aab5c6e1b7e8914426e87e591263f4887ba011aa3ccebce5"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_config_env_vars.py",
+      "sha256": "50a18a7738d3f171b5413c31800384c667f0d5b38fe2057864a506c44aef3627"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_config_pending_recipients.py",
+      "sha256": "15fcf8d983ff0b12e63579fd30faaefde7ac424bcf6c908cc828adcc52041d28"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_conformance_vectors.py",
+      "sha256": "8b4119230930294a5ade4f62bedf711581aca3d65f54c9e4e0bb02ef68f7b990"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_contact_update_tnpkg.py",
+      "sha256": "b9f900239ea7be3166f09c5f01ea76db6e68bb1e72f325e836a32a89c9fffb56"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_contacts_resolver.py",
+      "sha256": "790e742d089a7d052e64de01c4a228fc6832e29d47492594948f3a9af6101c1b"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_conventions.py",
+      "sha256": "9f286be5930f2897b2713b6dbbeacbd6d7caa5880b19b5ffadc233d16615b10a"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_day1_backup_restore_live.py",
+      "sha256": "d669ac185191a008d7eb5392988d5097b67164c76fb8a8ffab185e5452c5b4ba"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_day1_two_device_group_sync_live.py",
+      "sha256": "8a09335020cf06a4dfe8a6dfebb92dae8349c940be523073146c1008b3ae1db6"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_delta_live_databricks.py",
+      "sha256": "2b9d7a9cff6849d718e25b9fcf2a3990596154607d7dba4cc1aecf2517024b4d"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_device_flow.py",
+      "sha256": "eb0a31065c3362d829a5f514bc8e8f1dce7b0e64afdeb1b224d75b9df2194711"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_dirt_easy_flow.py",
+      "sha256": "253b3b7b40e45c9918d8dd513b71b8734999c31e25a198c7196abdcb4e7c55aa"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_dispatch.py",
+      "sha256": "d47955f265ad289356e64f85251c8b621d2234cba3895d806c5815d15b91f186"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_emit_propagation.py",
+      "sha256": "523e95bb88dbe595b2fffd15b0479039555864c7871a35f2e7bada5a33a214e6"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_emit_rejects_positionals.py",
+      "sha256": "cb103fa00ff1a882fdfd26c177afb8caccce255014459ed147463986ae6bfb68"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_enrollment_state.py",
+      "sha256": "40b9eb1c4e6c3b262a162097206d1d6ec5fb5d33060142a543b80f65663878d0"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_enrolment_events.py",
+      "sha256": "964eaf002e36d68e68bbdd0ddd7c199958458c313a4d14bc8b65b5deff783f0c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_ensure_group_hot_reload.py",
+      "sha256": "db71bfbc2e1663bcfc459659115bac6c4541e6f9532a14f38dd9d1b3bb61f7dd"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_ensure_group_stream_layout.py",
+      "sha256": "3d5390bd64fa71e4544117f9b5eb5b26fd147d0c7072370e0b60e9762af43cae"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_enterprise_workflow.py",
+      "sha256": "cd29ab72f141fdb3154bd3fe540eae50ced81eaa34089ab31a7981bcbd92dfef"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_entry.py",
+      "sha256": "98d31696eff164dbeeac558f1814d2a4905b0b13e1ff16f9389f98bfef0cf8ca"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_examples.py",
+      "sha256": "4a61dc2ebd109f95cddc12fabaafef4136182fd7966cca0fcc70963fe7cd0fc6"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_export_absorb.py",
+      "sha256": "0d23916467bb9e44fac3e044ce89e04c41362a5d820de1d0343b10355a339aca"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_extends_loader.py",
+      "sha256": "b33381c7606cb904f597ecd8e701bf4d0c71df602d6e87e663585b4333bd6822"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_fs_drop_handler.py",
+      "sha256": "ccdb077d08e387919e3c6deff37a7be1003125fbe38b199011e4c7590c6514ee"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_fs_scan_handler.py",
+      "sha256": "b64d71f8a1168ff6aae5836823e7009f3d5661f2db5d8927a81950c16d2a1f12"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_genesis_anchor.py",
+      "sha256": "5fc136b91f5c10fc22f35f8e41ea0c1489492d393192a53e927a7c0ba3e57ab4"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_governed_application_session.py",
+      "sha256": "4a719bb1a6bc0ba56cde6b741fb167092b5a66fb99e29fcd353cc7a8e8c6ed39"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_governed_cross_language.py",
+      "sha256": "4ab856cc6b0838595efe79eb1c6984eb0d6945b922051b4b5032d48d49731017"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_governed_data.py",
+      "sha256": "a32ad59aeda6e371af9c1f3b4bebc9e88c3208b389b169545b914e9e8eee78e7"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_governed_dataset_workflow.py",
+      "sha256": "ef5a2d4d8a5c96f493db723b57c6834ba454d8da02d40ecfb22145d81db19ffe"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_governed_file_keystore.py",
+      "sha256": "61bdbc3e68416bfa3f2366bff899768b52bfd68539cb2ff9094c4b14a38e5b4c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_governed_lineage.py",
+      "sha256": "e8fcb9927cf1727e39f9be7999001ccd710c3fe2241d3c78a9378663e43bf16f"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_governed_m1_fixture.py",
+      "sha256": "b5fa0d5b31b0269b8613d4a259a6624ba387539d6c5feae9d15203e362c2c98d"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_governed_outbox.py",
+      "sha256": "16e207ca7d59bd6eda2a9cf8683f935999f097e2a4caad4a61a77571f520f644"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_governed_providers.py",
+      "sha256": "a1eb48a7f4c19ae4ec7e2ec741176889f7fe3242300476ed125833216756bbb7"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_governed_receive_release.py",
+      "sha256": "259f99874a273be22135a71a10bc652c2c6323ae6706cf634bf7e862d06affd7"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_governed_revisions.py",
+      "sha256": "c0aec01559e641c5d1f2b139112bfbe6c6635de925248b98714480e512f67984"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_governed_session_release.py",
+      "sha256": "28a27b81842eebdc490c1ac60ad131089d26d3bc6d69861c9cf3d311e6dfa913"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_governed_sessions.py",
+      "sha256": "2367b6cf64b151c7b4b977fdd6457cb3232c0fb9578222ff3fea66922e31da23"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_governed_signature_defaults.py",
+      "sha256": "78bc753332f346afc51cabed6b7e0eea39e8b564f08b65cd1cdd177b10118c30"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_governed_use_context.py",
+      "sha256": "3c7cfe45cd231f169f1346f1847c0725fbf3252c650f2fa5248145f1076bc228"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_governed_verbs.py",
+      "sha256": "25b37cdf935553cd88035d75894342f5be2f5871a3f7d0b6696fb2d6cac73ceb"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_group_added_event.py",
+      "sha256": "e15aee646c78c16d5b9945ba38e1e38e36a71e57210e9b2d8aa1e9c912d7e8d2"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_handle_read_policy.py",
+      "sha256": "ea5753f2a633fcc3135aa3ec4cafacd6f88e40b8085fb86a998711278db2783e"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_handler_filter.py",
+      "sha256": "8a5e2e2ab76f6b12f3feb11fb97263a6ad32016f183a795effe20977ddffd230"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_handlers.py",
+      "sha256": "8331af500a6622e67bb9a0a3e4c7ca48a9914d334fb4604ded36542861067d06"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_handlers_zenoh_pull.py",
+      "sha256": "21acadb0e966ed5a433ed9f0b3a70fb88a4a77358f1bc3a57b61d4d88826d423"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_hibe_aad.py",
+      "sha256": "82851e8319414b912d97ba9d92074dd75ab1d650e63da74c9797d64a054dc1df"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_hibe_authority_trust.py",
+      "sha256": "97ce6396e5e4eb4c376f89b298ab73518e26456257db99d0994f3f6e1aaa954d"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_hibe_boundary.py",
+      "sha256": "fbd1cbd7cf454a5bedab1230e4d42643991a84748332d3586128e7195d52bc36"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_hibe_external_writer_rotation.py",
+      "sha256": "45d1775b494587f717db7aee467bdfd5778160bf5aa5fb67c46e0209dca9c9ad"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_hibe_grant_absorb.py",
+      "sha256": "05aafdce1e349dfcc37286ebb0e574927b2cf737e89c3bf82e9fabc7177e0c36"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_hibe_lifecycle.py",
+      "sha256": "a07d033e1e86fc3a1e2e519c597b1c6a1ad122f4239debc8ce62a1357a0ce6c7"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_hibe_revoke.py",
+      "sha256": "ef75c6c7e20d8f9f4287663b8038a3343b3a9220d9619e38c9cd4cb7d3836733"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_hibe_rotation.py",
+      "sha256": "bbc8b6506aab7d2dbf26728a3b34c6671080cb1839cc16ba31462eeab15a7ca3"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_hibe_rotation_reinit.py",
+      "sha256": "eb6f52f9d72ba1885572c854253a2c344703fdd1de6ccd62e56566b20fab5cfe"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_hibe_roundtrip.py",
+      "sha256": "7d76f86dfbed7e5653cc7f9a878a8253e1bcfc3c4ac3da6e288e89d6f04a61c4"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_identity.py",
+      "sha256": "a9970c5b17dadf2d3b38e6aef03239305d1ea2fc8592620006b6c102935625d6"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_identity_seed.py",
+      "sha256": "6bd08751ab1682a649b165bd1c91865bb8bb4827534099ac55c54d6ecd83f3cb"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_inbox_accept.py",
+      "sha256": "86bd56573034578e165808b04755035116331e4d0c3bc49d43395f61f06e46da"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_inbox_accept_roundtrip.py",
+      "sha256": "82beff5c2458844cf162f1b632a458cea1e696101ec2a8e71d4071236e339d3c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_indexing.py",
+      "sha256": "2540585317906c77d8db7cdb9d37d0174fd33dce57b79d776d588825f84aa57c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_init_attach_live.py",
+      "sha256": "45eef5a30b9cb90b178556f038d9555cb6d1fc7346208757de2062dd8eb6ad5c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_init_autoabsorb.py",
+      "sha256": "bca74f74eea06c7ec7abaca27a8766a4e706ee011e4b4e1c2259a88e236b5332"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_init_idempotence.py",
+      "sha256": "b6ad28eb6b7a623c33ebe310fa1fa56d5d4763e9286829fe86b038c1a43f5e4b"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_init_signature.py",
+      "sha256": "f1b22464df8cf26ebe7303162e9ad3a5837066b3be25f6a6a6d40bd7418afcf1"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_jwe_recipient_label_consistency.py",
+      "sha256": "7d3a6af37e81e3c2aa7bed229fa9b51673048ea8e1091c9f909a6b6b564fd18e"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_jwe_trusted_enrollment_e2e.py",
+      "sha256": "60ccee62479cad2404b2dc14ec4862ddbc88eab401af2555cc7a472efa720823"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_kafka_live_confluent.py",
+      "sha256": "adb822d1e88801e57a4f7ac91874cdfaeaad4fa22a14e791b22e96df5b71c684"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_kafka_stubs.py",
+      "sha256": "951fc2e5178acdd84d29b3c0e47ea530d0113269caccf572bfa51ac99d483f53"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_key_binding_wire.py",
+      "sha256": "0e1ed0dc1c790ed5f9a9709cc4ce54d62734fc61efe8e14387a7d8d20a470dcf"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_key_ceremony_docs.py",
+      "sha256": "3d3c23cd3befbecbf453b3ad7bd0cdabcccbe1ca6960e6a4c59b701a8280031a"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_keybag_multi_cipher.py",
+      "sha256": "002ee14effe0d4dde49892129b6c116fd7239bd6d7489922a68a7080f5acbe48"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_keystore_backend.py",
+      "sha256": "391bec26827006b3a98a964c30cd291c1680bc1faf88c0d3ab65e79e102ed07e"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_kit_bundle_fanout.py",
+      "sha256": "243855e523e765b2f4bb3f4d9d3e63723edd8979e966e5b7f2171b9fc3e0f7ea"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_kit_bundle_sealed.py",
+      "sha256": "74d45317edbd7a4e3eb3440959e189f24b8f655d8834a9521d03cc89e7abba79"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_link_kwarg.py",
+      "sha256": "649ac863f56823fcb87b0049d8ccf5040b6e880cd67069f39d6567af16cb2919"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_log_level_kwarg_and_verify_typing.py",
+      "sha256": "3bc90055224cb1d6d9c9be4cd44df815bad59577c2d023210ac3463b9b821e68"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_log_path.py",
+      "sha256": "53e256359e39175acaef3e5a87d05a78b183a5c0c6001f8daf0b77040e03ddd9"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_log_path_event_id.py",
+      "sha256": "5e96dbf810dc3268952619d27c4de2edd7f88616b17372fd8b636667853a8de4"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_log_path_template.py",
+      "sha256": "82c66d665a8db26c2e3d6440af41b06d3e0836846dd26089134c15bffe45816c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_log_returns_json_record.py",
+      "sha256": "457998c3398f692bbbeb5247f8575f1d408502ea5bc0fe79a025574b9b9492c0"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_logger.py",
+      "sha256": "8bdc7ed0161b13c11b311f7eabd1485f46eb95cf3893cf8b2714e4062448b5ee"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_manifest_contract.py",
+      "sha256": "5562074db3b26d15ee271659ef8fb9666736c3b8d096549b9fae9c8f9f1bb0e0"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_maybe_autosync_gate.py",
+      "sha256": "da14483a22ce7f3ca0734bd3b5a4a5b0b9e52c12a481753b67ce4d9f8e456c72"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_multi_ceremony.py",
+      "sha256": "81765c2a5d70641aefe3309316fece8f1401241858f349f0d0442a4ec0bfb9ca"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_multi_ceremony_tnpkg.py",
+      "sha256": "7ec32bb7dfa24699f5fb4389e1ef8f953fa463d72d0ee208413334e103701d5d"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_multi_curve_verify.py",
+      "sha256": "4e17a758605862ee3cd3bc970b6bff5abb47100bc9899b76840f402cd5b59647"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_multi_group_routing.py",
+      "sha256": "b15daf7c59793de8b404ca427bd6d165880df3c091f23244d2e0d4b74cb7beb2"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_offer.py",
+      "sha256": "e6b7613c898e47d3467637c109ff231eb9c12f77ee7a52261da06ae263cc5897"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_otel_handler.py",
+      "sha256": "66461750dbd47d5c16eaa1bc2cd49e5416b181e36712c5506ad93a8b26880227"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_outbox_layout_migration.py",
+      "sha256": "4cb3019048a30fa4a76f57c3c414e244ac42cce0280d3904f3d456b5c42d21cf"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_package_identity_binding.py",
+      "sha256": "43be0f1b6d8eb1b27c4822597e4007bbaccb7d0ba003fe3cd40a47c756927a4e"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_packaging.py",
+      "sha256": "e41415d28fe196b381b8a39c0641bd2b49306d4f0bb5fad8d158acb4763b8b22"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_per_group_cipher.py",
+      "sha256": "05e11c2ddd0aa0583da3452c64443c587e408c7713975d8501e647f0520ae044"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_profile_combinations.py",
+      "sha256": "2d9075676b7804644d201d6ab58ad9beb3c9911906e5e1e67baa7f22568e794d"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_profile_full_matrix.py",
+      "sha256": "d5dc14412c07040050bf466ca217b8c339f08825a57d8fba79cdb3cef022b59a"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_profile_wiring.py",
+      "sha256": "4facdb2be8bb2ccbf5f7f5f94d2b2a4bfe763010a5fc70a13db99984e34b7e75"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_profiles.py",
+      "sha256": "fcc00f2b17fc95231ddbd9a4d83167f036d591cb5643a44970e682b5572fd877"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_project_layout_create_runtime.py",
+      "sha256": "f91d85710749d46aba4df6b8be7ffba53a0348fcbe4c6875bd9e9263d85efc93"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_project_seed.py",
+      "sha256": "4a536f5138ad9e6f780379c602e78a35230b44e79cd490e79821a5f711045f8f"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_project_seed_roundtrip.py",
+      "sha256": "da1d10fae55abd023a311182e9716ad3c40185dc33cad78505b9677bdf3b51fc"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_project_shape_round_trip.py",
+      "sha256": "0bbe97cc4412d03ca9253aeb48b690cb310bc866220658dd709ddc2b239cf2d9"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_project_stream_layout_contract.py",
+      "sha256": "a39f403fbc19ea38615fafa2e98bfbde150537121a274dd6254c66aff02f5676"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_protocol_events_location.py",
+      "sha256": "960cbbf598738a9fcff76a442c664685a426cb406aeb210b31ba5e74e7b5a473"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_public_api.py",
+      "sha256": "4e55bc571d98af0bf9ea9e3c1e732c1e2e2255223e68d173b46567ce14d3c10f"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_read_admin_address.py",
+      "sha256": "7647b62efbcd9bac9f89596668e07782f1a3b0b4ef8f7fb8de6433c24c04acb1"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_read_all_runs_default.py",
+      "sha256": "6a18642447e8b9ac231f51acf7d6792189f6a58a4a2ce4c6cf73852da71d53e2"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_read_parse_resilience.py",
+      "sha256": "40f6d77c7cac1aaa36f9af2d9a1073677b7a83fa82a6668a0c8c3cdef9c2aa7f"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_read_secure_default.py",
+      "sha256": "0df3822413770fa981c5bbc4c4a1f2e71ddcfed32c32ba46b2d156c06b236598"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_read_security_audit.py",
+      "sha256": "b7f3c8af4731be5e754aba9216ba1fe1d6942691840cf54330bfd231397a5ee2"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_read_skip_observability.py",
+      "sha256": "192299c913a601767ed15086d3ad5fd0366a731b2b47d3d69d19dd8353300f33"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_read_trust_policy.py",
+      "sha256": "d1e39e36ddaae0db41a9c7317df94c60ac768d57d89b82d12b56e892b447a0d5"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_read_trust_provider.py",
+      "sha256": "013e59133526f1ec549d8dcb1d9f27e56bb38b151444e68890c7748cd186b70f"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_recipient_tracking.py",
+      "sha256": "a86dc5cab21f33e479461b4d0c196777ef33e7a33ddf18732187e086210d073f"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_recipient_wrap_contract.py",
+      "sha256": "cb4de5ee51f5c6fd31b241d1577c6e9d1ac1bf678bcae96ebdcf48ef2056470e"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_reconcile.py",
+      "sha256": "0ef476cbf592604a60906b81cb50afa564d8da591dcf69e55143cdc9169d992e"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_revoke_recipient.py",
+      "sha256": "b35130fb17528b66d1a6788b8bd081f264d92c63a88f3f8da70a97d94e487061"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_rotate_multi_kit.py",
+      "sha256": "235db3cf9f4c5e637a44142ac8e97ff5b43a8ca51ec6c5c98c76548fe67536aa"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_rotation_completed_event.py",
+      "sha256": "dea30162614f6453d397d4d21e4f86037128f44123d53b76ae190e51df27481c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_rotation_reload_failure.py",
+      "sha256": "8e71694b32e6b29988a58746e2b6c95e686f40baa0ca84105b175d6bc7d4ae4b"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_runtime_dedup.py",
+      "sha256": "49b4de2964368c6cfac944c4c38917f597d4b049f54320589f9582fa2ee61fa0"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_rust_runtime_interop.py",
+      "sha256": "46600e6046796a43b25b32e7df01a4407ff82da8eb1822f0cb6810cc0e13a479"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_s3_live_aws.py",
+      "sha256": "4c3b2f90cd2640af59f23db54f021c453466a3a3e9a2d49f035e91075a2ba3a9"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_scenarios.py",
+      "sha256": "c9f1badb9532aeccb9dc5e1965bd205d54a107b6b61be7b080ac535523ed86f5"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_scenarios_base.py",
+      "sha256": "73fbaccdba927d2a278380912766644dbf9efe719ae5bd0474ad612991d78622"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_scenarios_cli.py",
+      "sha256": "0daa45eef89179272124bf87eee082012d3b9fecc9c559c3952208e8cfbc57d7"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_scenarios_env.py",
+      "sha256": "874a848a665b6552beab965197127ac0d0438c129a51ab9d66ac056f1305fb08"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_scenarios_fixtures.py",
+      "sha256": "a85b6c460bc3115ff8be592d4c4be03cefdbae30dc480032f4f45034fa31542d"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_scenarios_metrics.py",
+      "sha256": "e83f131798061ac524418c97acb723e627de0932a8f114e8772402c82e03517f"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_scenarios_yaml_capture.py",
+      "sha256": "b99e5dfd1e72c2c241180c881b8a5a4dee6ba0252e308640b8ba0364c4e7cfae"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_scope_to_spawn.py",
+      "sha256": "3511c084e130c6d33d6ddce461355a63d75bbd9f236f012209492bb498de3fa6"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_seal_unseal.py",
+      "sha256": "9dea4cf92660ce7c7cd6f85f5399bc1bcdc195782c2cd15d72544fe9b69c3468"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_sealed_object_vectors.py",
+      "sha256": "58305ed542a380fa5e25237057a2c2dc79e3b03d11db1b77089c152fbbfc19c7"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_sealed_tnpkg_package_contract.py",
+      "sha256": "2db73bfa0defb7640cbd53ac1e2618db4ea6523a049ac01421cbd835e97a64fd"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_sealing.py",
+      "sha256": "06d30fb83579dfae6b261665a6edc59b111ed8827ddbeb5ec9dd33ce9a5d4952"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_secure_read_tamper.py",
+      "sha256": "f33e76664e102728f6e380d7b677f6eef9ae7744d8a027ade2ca57c1ec2cceaf"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_security_audit_contract.py",
+      "sha256": "e36ffa0dcc2628a777452c4b5707c97eb598567b53cc8ffb6d7f3ff3135a3717"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_session.py",
+      "sha256": "a3c451050c987e28c3b06ccdeb65dff126678e9e842b7f5bca59f2d44f65c078"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_session_ping.py",
+      "sha256": "4c3f97249b23a21573d9d2cd41e56c19b34c4be0e429bb0e7b1b4629360d1049"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_show_and_stdout_polish.py",
+      "sha256": "33652132d806f1e6e37ba1cdc07e51cce7a0b04f21f53a09aa69802cd43f4586"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_signing_flag.py",
+      "sha256": "c506784bed76f231ab4ca688604f0281114f924c7208d75afbef435eff51ddad"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_stdout_handler.py",
+      "sha256": "5c6ee65a0e4a301ea6845fe36a7d234ee9fe0a33e58e3642b3e46dfa783d1805"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_sync_queue_prune.py",
+      "sha256": "79809544950067fafecf949ae5ce60c00097eea5250e3cee7be501d58b35cfa1"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_sync_state.py",
+      "sha256": "cd917abdcb253d8e3ef734eb73209a94a2bbf008253f5374e8729959069e98db"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_tnlog_roundtrip.py",
+      "sha256": "b9395d44ac7126bad23445390f871c3da103dff5fa1e49ff9c63bba25917d02f"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_tnpkg_container_contract.py",
+      "sha256": "bfda0dff383c65039d44be9c61f98410239cc777c7d611a24d0d6db3332eee33"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_tnpkg_interop.py",
+      "sha256": "393f21d41f307fc883d20c9d6c8fe1104b1ec4c5925042c3a037623f66d645ee"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_trust_fixture_generator.py",
+      "sha256": "fde594f001c4b9847cfc62c23f72573c6102b4d586e7f1a7d1ecb4955941fa1c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_trusted_principals.py",
+      "sha256": "22549ca63f7d396a81596e49d5483df88c39d64eed54bbe0e4eec1904b4ed9d4"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_use_multi_ceremony.py",
+      "sha256": "772e297a75f3f4d56be8de6b714a7d3206d3486e43eff834838e60cda43b9893"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_validate_did_consistency.py",
+      "sha256": "f1c94825386bacb5793fd1d24f32b445678b16ef252a22eda434ef8354bb361b"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_vault_client_connect.py",
+      "sha256": "eb0bd9ca214c3d020b170a9ca90cbefefe10db63d40769ac020916f2d457318a"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_vault_init_upload.py",
+      "sha256": "62283f4a351724fbb9929842739c05d231af075cb6407c00e6c21226cc3468e3"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_vault_link_events.py",
+      "sha256": "0eb04a3dd90f45ae1a767ca25b6448c20be813b4d5417a20370b21a675c00f06"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_vault_normalize_contract.py",
+      "sha256": "78b5c05f6fdcf41085345b46fb1176077269591de45a822f4498dcb83f5578b5"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_vault_pull_handler.py",
+      "sha256": "842e533ac958ab7b5a4fbb4b0f126249343aaa1926dec05e0a65ed8e05b6aae1"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_vault_push_handler.py",
+      "sha256": "717966a0388772d83927f0dd3d6b19445c7580d01d643a664cf88892be53418c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_vault_push_pull_pure_functions.py",
+      "sha256": "fefc71aeb70b85b56b8b0e2c6b029df61f43ff3a5fae21bf1f9bb44a6f97442a"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_vault_sync_handler.py",
+      "sha256": "94a93072895f3602a70aab8c786d891ecb4a1afd649d2622e355052c830d73f6"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_vault_yaml_model.py",
+      "sha256": "d32ba4cb5fbdabf183b6c536e9afc38e03a7704b27771dccdda43d7aa08157b2"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_verify_respects_sign_setting.py",
+      "sha256": "597e9612dd3a68d630f32a9495332d9cdfcc31f0ce7e903e678cac71f6563f07"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_verify_roundtrip.py",
+      "sha256": "1bca959545facaf5c1238d2b785f28394a2593da8a38c89dd2043fdf3f77f22b"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_wallet_backup_scope.py",
+      "sha256": "08c61b2f8d15b95de02706ae38c8021fa7dfa03f34ac437cb6ae62d521590c4f"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_wallet_push_mint_guard.py",
+      "sha256": "f965cc9b0ea2640fd65a3aa19676e8cce221b132b5b02c13e4e244d21d54ad42"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_wallet_restore.py",
+      "sha256": "63000f8d03f938ba648d6462bf2682db705776f803020f9fdc312deb320ece09"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_wallet_status.py",
+      "sha256": "92255a87b127abaaf2680f0debd89f5fa4b112f0f891fbcfc1637bbf78cde03f"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_watch.py",
+      "sha256": "face5513c4117e688891f9be5922201ebc367d7681b6764dbfb6ae6e75ae23a1"
+    },
+    {
+      "path": "upstream/tn-proto/python/tests/test_watch_bugs_w5_w6.py",
+      "sha256": "c6c4370ab48be1643bbfa4e6ca559b228a48c39ecbae82cc16aec264ef1864d8"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/__init__.py",
+      "sha256": "bb8f3490e5d392482dff77ed5dd55574233a35f4b1f47350bf8690478b7ffa1e"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/__main__.py",
+      "sha256": "596a7b665b171c6771805c98a3b5b529d231cea928b3d7c8696df0da0158aa16"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/_agents_policy.py",
+      "sha256": "55d3f69208b983008295bf8fc5e276b679c69475dc8b6062f870fc12e33bee82"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/_autoinit.py",
+      "sha256": "6d68e476d977a74f7119a77764d7545f58112e24c112f798173e3740705b6eed"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/_cache_policy.py",
+      "sha256": "b8b09499e7e3dd582edcf49d76b95cc70b24f790382db815ed76fc9abfa4b0f0"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/_defaults.py",
+      "sha256": "fa9b20f607348d9489abf93046b00acd6e7ca2bf3921b42a3f5f7d7909d2ab53"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/_dispatch.py",
+      "sha256": "234245f383caef9404c7927c29ffc111e39d29e1ccfaf2aac97a4a029fc94a7e"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/_entry.py",
+      "sha256": "29604e53a254495fd28aceb14fee0ad3dadb33e9e5120da3576d1618381b4030"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/_handle.py",
+      "sha256": "fabbcec3942960ac035eac8fe3c41bd29e82980d29a35cf8b29cbcc13bb21b75"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/_hibe.py",
+      "sha256": "36419bbafce704bb155830501fad2c58e62746c897e865a9e89558e98c9606fd"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/_init_attach.py",
+      "sha256": "ef0076ceb01f7fe7303b5154689b155943160037bf9bc0b0e411fefe83e38e23"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/_keystore_backend.py",
+      "sha256": "296362b54a17e5047aca53f8a4d58a4fd2c01372e0ac441d5d98045c40567e1c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/_layout.py",
+      "sha256": "ab306d3383b08025a68bbb46c7483276df73cd1d3a072fd3d988084b21e9b66a"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/_log_targets.py",
+      "sha256": "cdc8ed01d743d483194227295a13686dbcb0856e7e2f86a79dc0e6495b7c75c9"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/_multi.py",
+      "sha256": "a6b4e7253993815f75eb4b865a50d2b95a40d11df5970f9f0d21dc7915264924"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/_perf.py",
+      "sha256": "47e66e8a635cc8b7de07d4e7b98365194e6a562ecabb6ed0302f0f13218cf9a8"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/_pkg_impl.py",
+      "sha256": "baea887e10c15693a1ba7e9ea75ca3a2fc14c4cf34c9e9f6714f90756fff2b66"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/_profiles.py",
+      "sha256": "44a7ebcd44f0382905508c7cff8b009da643e9344f5270482a9a01f649a85626"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/_pytest_fixtures.py",
+      "sha256": "dd38291bc0b8574e32a168338b9fcccbbb9a87d7371e46bda6859c18cce4511d"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/_read_impl.py",
+      "sha256": "14923b7e85a821cdf1f4598b24488033b20d8b2e9a1e2c8e0e6c932ba6c2de94"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/_registry.py",
+      "sha256": "cce2dc2501494423b7c69a9839b3e1ee94736c929e8a0d0a9aa6207945fb1e95"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/_session.py",
+      "sha256": "2a9ed152a7d79eccc0b72c0ad4f5ca6ea7ed19e296facfbf07da4bd9aa70e930"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/_session_impl.py",
+      "sha256": "aac1752373d629af5382d669dfdb02df0dac7b8e9e7b224fa24ee49088d383e2"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/_vault_impl.py",
+      "sha256": "30ddf5242c458216d348e6dd93e8479b406afd2a018593a0abc74948aac69fed"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/_watch_impl.py",
+      "sha256": "9f3b11059c4d60b78566c30a3001c8e340603c3bce5f7bba2491485200ce0b0a"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/absorb.py",
+      "sha256": "b28efb09e9c1c9324b763e73e0d58da980b36d202dc28cfaa1d4339c05028c4e"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/admin/__init__.py",
+      "sha256": "60652ece005b211a1287edb0025ccd8caa2d37363ce85fb7c4236be8e3668771"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/admin/cache.py",
+      "sha256": "aeffcb6b1f6d83533c68554dcd01d3a05bfa421637525503cd9429ca231a4932"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/admin/log.py",
+      "sha256": "664ed7f3cc523c77c439a1804aff1d6fffd48e6561f30892d04dbdc1e4b5a499"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/auth.py",
+      "sha256": "e2437afbb2cab06b8ce018704c2a55a6cc0c65309321f9b6f11ae0d2d4294c0c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/awk_pickup.py",
+      "sha256": "e08509d8431ab6947d94f5f05796056b76d955ceb09e10fc73a460792accfd33"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/bootstrap.py",
+      "sha256": "e99223ef39b3023329573224a3db90928f351b37b80722314d02da3eae89219f"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/btn.py",
+      "sha256": "02cd149f7d05636758f435f9d29e89475c0e16d00bd722a0ca0c7b72cf3bfba1"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/btn_keystore.py",
+      "sha256": "1f06430232672a1b18c6c9e3ab7acfb2257ca10ad8c5e57f22765c8ea1925a92"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/canonical.py",
+      "sha256": "5099185ecba7d7b9ccbe25d542c8838df2a429a1bb09d2fba47a7980b0b4138c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/chain.py",
+      "sha256": "5de8e1867d4255c21fc93ff5191acbd17d2947edb526ffe54629db59fdec8ef8"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/cipher.py",
+      "sha256": "4644efc12509d0d6b9ad0fcb7090fffd3862c3709bef452264e4296eaf8c633d"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/claim.py",
+      "sha256": "d9c8db18a55ecf58cf9a6dab857e65631e41e4ce767c89c5eb85847c849ae3eb"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/classifier.py",
+      "sha256": "3eb73c43a0d8a9a32187f2971e93faa59f59a802a1f5268095c617c14f1d1146"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/cli.py",
+      "sha256": "0951a2ea068e93d76c4399b54fa90f017eb395ffd793993d4b7cf2483ffe177c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/cli_admin.py",
+      "sha256": "54d4c955c95bf34331fe247862db7bca364a197fb1456459543c1c573bd78436"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/cli_auth.py",
+      "sha256": "c09b0a52d69a15d350900d8f3c67550e9a01aba96eadfb58bb1beae2253b57db"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/cli_canonical.py",
+      "sha256": "1e1bd46c3a89c868b6d41d6f660cd1c07109222d6218e2c1734f99d561d01c89"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/cli_common.py",
+      "sha256": "bcdfa1fc017f0e45b2ca94cd70387e7786bdcd8ca2b78306abed29772bcb8ca1"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/cli_compile.py",
+      "sha256": "e097c8bfda9a82e8a9c0f7e2709c518d3981beeb1ca0c35720926134022808ab"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/cli_firehose.py",
+      "sha256": "01a592b60f7122e4a45bb6ca05dce71d387c5cbe5fa81f9a19d24d349220d15c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/cli_info.py",
+      "sha256": "b437db6a709d4a76f85fe7e13fb6d4798a892c71be1061e8b0a3d3bc55907506"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/cli_init.py",
+      "sha256": "1a61e8e7e0123ea92401ef05d2e291a11e028ca40b5ff634a073eca93379949c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/cli_introspect.py",
+      "sha256": "752cab80b2b9c8c4d20724d142511253e3de7eaa4141e6bc0c6c136c956f0285"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/cli_invite.py",
+      "sha256": "c437a8215d902754183d413902728f8040b8c50b3213e321c000174a5d74943d"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/cli_pkg.py",
+      "sha256": "f5aeee72fd0727d5e3951d2c699e11856c25523e498ca25823d25dc18e3ec876"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/cli_read.py",
+      "sha256": "a03423bbc1a143046133a7afc690a270b13686cad304caaa43b0ffc362486422"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/cli_seal.py",
+      "sha256": "fe7fe1fa2127c8eac36fa5829f4b72e56550097dc9e61855d3f6020d0b25159a"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/cli_show.py",
+      "sha256": "dc322daf1d204592ed271f98024aa7fa419acdf112f52d5e04edff77d26bdf56"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/cli_vault.py",
+      "sha256": "57a808afd5079eb73687da767049436d3d43c1967293181a97a74480ec9bf15e"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/cli_verify.py",
+      "sha256": "f1918ab515e667d3b1b22067c4ab52e251e48e656d6258f4dc5e9d90d8822982"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/cli_wallet.py",
+      "sha256": "791044b6f757426673842a37e4e759db6bbf0f95edb65d2da235eb86384aaae3"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/compile.py",
+      "sha256": "8a69828191358bb0491a72bc7a091c3b7c5ab5afde102e3b06803d9a1e28ec80"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/config.py",
+      "sha256": "75e92d532c4fec6969f0dfa5ccf214ed4011a4818be55706d0fbcd183ef3183f"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/contacts.py",
+      "sha256": "667f4f0d2e0a4cde57ae2606a81203729ff5acc4d7c46b35804f6c955c2a8790"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/context.py",
+      "sha256": "65f10ebbaa98e706c0f42c345ccd5bc03b4255749e2446c2dbb0092ad2e4a8f4"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/conventions.py",
+      "sha256": "8f46d9b4fe871ea801541b2eb5f4cb56db5cb1750bc61e192dfa1013fdcb09b5"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/credential_store.py",
+      "sha256": "990760be50b585698b0452d7e618fd5aba99add27ebcdaf9c1eca720df621cbb"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/device_flow.py",
+      "sha256": "5e2febadff66319793f13740f6e632bf5b567aa55537b933a6f4cd4b0f55ae3c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/emit.py",
+      "sha256": "4192b60e83ec5644e9959ca48dc8eb7e791f2522d69987e9d5627e9670bfedf0"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/enrollment.py",
+      "sha256": "a0fd04300a2760a1b8044a90246a74fe9e0949b552505efeb59de4876ee3f1d3"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/export.py",
+      "sha256": "510fb0462205308121ef4898917a59c80f3418d3b14b9f0343d7c6533631db2b"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/filters.py",
+      "sha256": "8819e8515abbbb7a4865e0973d0a6280d35d15dd5bba2d5a5ed6281585c14dfa"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/governed/__init__.py",
+      "sha256": "abe5972415ad4246a6e41c4f091471fd93b94bf81874d6049fe8e375369df85a"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/governed/__init__.pyi",
+      "sha256": "fe9e75b6b768ddae6c50b3157daad06684598215f7ae2e46cb9a50a687060e2e"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/governed/_views.py",
+      "sha256": "ecdaa80fdd5481f2537fbf1c5e1efd9c20c04b2112fb094a47b83e888f1acd51"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/handlers/__init__.py",
+      "sha256": "7ec0e089bd1b05ea2ca7efa7b21068763fdb0846da64964deb8eb492985d37d7"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/handlers/base.py",
+      "sha256": "43c2951f85a1a87df0f828a5976272dfb3c0a6282da7fc0a7c623254764de0b5"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/handlers/delta.py",
+      "sha256": "ab25740f686ab856f55d07abfd6191045e81264601356baae94d2f3dff240a3e"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/handlers/file.py",
+      "sha256": "4b9f16a13f1f118ea8bc661f8eb5b8415734923dedd027565ae987332ff7b097"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/handlers/filter.py",
+      "sha256": "4ea41284669249e58065c2e07497222ba8392ed67b3d48d6a0db44fd94c6f7cc"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/handlers/firehose.py",
+      "sha256": "4c51aa42c68f9106d5e4c65f8c7309473439c500cfc6a13f8942f5f1cd25c937"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/handlers/fs_drop.py",
+      "sha256": "504bf08502e5facbc720615cb5f186e86cefd2098722f1ef703b1232b9f50d17"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/handlers/fs_scan.py",
+      "sha256": "5991dbcd058bc0a4f674d7100bc04b5cde509c71be94270f429793c3e2e0a7ad"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/handlers/kafka.py",
+      "sha256": "2c3db56226891a6aa4f56a15c509b37aa04f9fb7b842d5b3b341c0c737217bb9"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/handlers/otel.py",
+      "sha256": "f8ca9a962f58cb5a503e25d4b8d23476214d4bfe7c70c3cc9fd78f9c598471d8"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/handlers/outbox.py",
+      "sha256": "2838e68bc367a5bacc16d653b8120ef192ca0758d8cbee466135a5c1e609c8e0"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/handlers/registry.py",
+      "sha256": "5233693a397563a2ce798b8e74be3eac932ee00640d17582c5b0ab6a539e18d3"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/handlers/s3.py",
+      "sha256": "a9d5f190448627814eb4952949c65b3c5bac6fc760b0685235f342157480c922"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/handlers/stdout.py",
+      "sha256": "5177a9ea492abbfb69729fdf6113fbd0554095093493e2c644bc18fcd1d211fc"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/handlers/vault_pull.py",
+      "sha256": "fc55ae8c9f79c61733a106004ddb712faeb0bdc08ae0bfc405501f6c693b580b"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/handlers/vault_push.py",
+      "sha256": "05bc32861fbe8548fd129734a8768d42aa3648176f01a22d3342139db02c5982"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/handlers/vault_sync.py",
+      "sha256": "ef5553d8c70fb3daf6e17b9ae6927694d7615f012aa93776ad99619d92c390ee"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/handlers/zenoh.py",
+      "sha256": "d4c3d563c03bcebc7d131b851e3dbf640b9a47acba4d22c011fb80449f23da61"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/identity.py",
+      "sha256": "48621e4c1cc03008734add23f270a5830ebbdc6bf34f6ab25a0a3e7d59784428"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/inbox.py",
+      "sha256": "2dc92ae09477ab4a5683f5c6e4dca9291c6c32ba4fac782f08bc8825ef6df691"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/indexing.py",
+      "sha256": "9afd671dd4ec3fb2271e3b86c208f15c677735e962a5dd6edef6b2fbaf4b2949"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/key_binding.py",
+      "sha256": "3e235120ba0e2956484819ec93b35ce27854059f5eb2c2a7f961eb3314dc8c75"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/lifecycle.py",
+      "sha256": "e3dcd8ea20bc4b50baccf8b77a8704fdfe95764eca6273db17604cc79fea07c0"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/lint/__init__.py",
+      "sha256": "96357e1a727ef5aae5359e2c59aab922c849eae52d08fef4d608532ff3c195ee"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/lint/__main__.py",
+      "sha256": "2554b72473ec1f23909627def32b50abee516bc89cf2c59c5a75bb799afc2adc"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/lint/cli.py",
+      "sha256": "bd1527a5ef228db99a385ca44da87e7b280badf39e4fc7c4700deb77f3711260"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/lint/config.py",
+      "sha256": "01e69dc92545b79e95988070381752857362a91c78112f2b507149ff7010ef0c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/lint/engine.py",
+      "sha256": "e25ce4c88bb9bd0ab99146af75f3ea8eb7025a86d94ca1630ef3ddd19a717476"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/lint/findings.py",
+      "sha256": "bca63071de77820fb3e9bd28fc9101a5c88e686690fccae6ca46479d5bd90ab6"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/lint/rules.py",
+      "sha256": "04a9e80c799e497ed96b144d8ad7cc18fab22b66b0484b575bf18c4a38bdf7ba"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/lint/tests/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/lint/tests/fixtures/clean.py",
+      "sha256": "f08a8c900bd2de385e7eca20e201d180a52a13b9c770adcac6c44fb66012ea39"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/lint/tests/fixtures/r1_violation.py",
+      "sha256": "41901b3e6d68931bdbb445bf9bfacdc2a67250693a935fe61d142cdfa1289dec"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/lint/tests/fixtures/r2_violation.py",
+      "sha256": "462d2850e0951fc34559af9e3d83a3f7d8a3251ffeebc1d810879a827ff708b3"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/lint/tests/fixtures/r3_violation.py",
+      "sha256": "57823744e0f52ad285b8d6e07cf64ffdbd63edf4675b09629e620e83d1ae2734"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/lint/tests/fixtures/tn.yaml",
+      "sha256": "a622df567ee54c74f04cbade1e5f68622896784ba2e76bf2be4ef5d1aacb5918"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/lint/tests/test_lint.py",
+      "sha256": "e4b67e8559fca38e4d505e6242c0ea9e6dcda5ee417facf80b5564a6b59f4cf6"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/logger.py",
+      "sha256": "669693aa298f5f15d18fe78a73f43e681d0a9f8bdb4a630ed1e5d56c3ef45d9b"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/__init__.py",
+      "sha256": "8dbab92879d86ee1ee226d5bc9e68f049fc7cede536b25fb6d3aaec2a2aa9c6f"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/__main__.py",
+      "sha256": "3d3b1d141959e2bc2027061e585823f040a4788fc457518d0afcd036e2a3f081"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/errors.py",
+      "sha256": "b7f512fb9f5dff1ae48453b8f3962d28326f60e0a87b4cfcceb362db653b166a"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/exhaust/__init__.py",
+      "sha256": "e068c5c92e9587cb6eff4c32b2e4169045680777a4ab0f7dd5695e4cfee5cc47"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/exhaust/govern.py",
+      "sha256": "1176e500b00679cc2202d970c72bb702939031e79ec90225bfb2245af743f009"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/exhaust/kits_index.json",
+      "sha256": "9347a2a4551b25bd3595325c4c0780f180ee0a21c4c408d357bf61af8d73ae3f"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/exhaust/registry.py",
+      "sha256": "c7d8cc95c98e2b80f5b11d006f802611d70ab5c636fd889d8baae23250c93456"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/exhaust/sensitivity.py",
+      "sha256": "24b0df37fe7b841d774b8be81b157427a928a55824ef44f4e5b7b18174d39c93"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/exhaust/stages.py",
+      "sha256": "8ca4d12e974afd8aef5327a42bed17c341fafa4e21654724bb7ed8f3f20a898e"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/schemas.py",
+      "sha256": "1bd15629463fff8d462e78ddc90f8f8e29d70282107b80ae7bf21b1be83e3d92"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/server.py",
+      "sha256": "4d8e6c4e410c1b9580e07c42ec80beb71e2d78a588517f8c690cab752f4fd64c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tests/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tests/conftest.py",
+      "sha256": "a5beeecb9914d620c350cec6196716dd0cbd9122a181ba1bbbc7210b3ee961e7"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tests/fixtures/.gitignore",
+      "sha256": "8473a0e1360c0076cea468496f7f0eb296c99f2d88033de2c58511e6bcc8e3eb"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tests/fixtures/jwe_two_recipients/.tn/tn/admin/admin.ndjson",
+      "sha256": "b1653514618c4d171a130071c0680f42660d9662c5e7c1792c35f0879ba6e2a8"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tests/fixtures/jwe_two_recipients/.tn/tn/keys/default.jwe.mykey",
+      "sha256": "3e55137b5f1f53292739ba95c2416500517937fd10b87201e65cf27a26e33668"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tests/fixtures/jwe_two_recipients/.tn/tn/keys/default.jwe.recipients",
+      "sha256": "27701aad2b6533ab2e7fbb17be16eb34ac970780563ab2029cbf56228c2c40e7"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tests/fixtures/jwe_two_recipients/.tn/tn/keys/default.jwe.sender",
+      "sha256": "1e24ae73e33a6236ca152583f4f8b86274c4f7ee90cd3d4216e785649aacaf62"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tests/fixtures/jwe_two_recipients/.tn/tn/keys/local.private",
+      "sha256": "a665586710f929bf9827a8e2a3746da4c36a2c973360570c1be69fad9766d0df"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tests/fixtures/jwe_two_recipients/.tn/tn/keys/local.public",
+      "sha256": "2f04be16841e35f28677efe17fd9cb594793d04b506f05b4c0fce3ea6fc70c2d"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tests/fixtures/jwe_two_recipients/.tn/tn/keys/pii.jwe.mykey",
+      "sha256": "97b6a8537ad59fa6e028144cfab9cf9058e09e1d2292d9aeb2ed548b3a46c06c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tests/fixtures/jwe_two_recipients/.tn/tn/keys/pii.jwe.recipients",
+      "sha256": "2da89b827b0c5fb0434295c9a3b092753e27fa9dc7a6942c5c172af1df28566f"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tests/fixtures/jwe_two_recipients/.tn/tn/keys/pii.jwe.sender",
+      "sha256": "e4dabfe7d9d44885d2eaa52f5e559c6245baba37f34d3dd941a1a2618c92d32c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tests/fixtures/jwe_two_recipients/.tn/tn/keys/tn.agents.btn.mykit",
+      "sha256": "3f8c2a90f174b851e29cb75f8cae73225dcda50be28d06f0cf0bbf7503f1ce2e"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tests/fixtures/jwe_two_recipients/.tn/tn/keys/tn.agents.btn.state",
+      "sha256": "a92bf500a8d64de45a9858b7a805800941332abcb3a1e0c82dd12823010bbb13"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tests/fixtures/jwe_two_recipients/.tn/tn/keys/tn.agents.btn.state.lock",
+      "sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tests/fixtures/jwe_two_recipients/.tn/tn/logs/tn.ndjson",
+      "sha256": "7cb226a939a228ff6225dff7a2146f610fb0f21d1078472ba7e6bf3b78a3ff9c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tests/fixtures/jwe_two_recipients/.tn/tn/outbox/did_key_z6MkAcme__enrolment__v1.tnpkg",
+      "sha256": "ddcaedf77a72e21911088ac6967ce2e05f3f1e9727fb424f519c8118c2439b8c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tests/fixtures/jwe_two_recipients/.tn/tn/outbox/did_key_z6MkFrank__enrolment__v1.tnpkg",
+      "sha256": "76209bf4f3c790c890186b45b01c3e1e4fc08a1d8c130a1750fce8617f07108c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tests/fixtures/jwe_two_recipients/tn.yaml",
+      "sha256": "c2ad4097a48873bd8ee537228b42c781d81f111f2bac23c42e72fe31ba63b72b"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tests/test_errors.py",
+      "sha256": "0a495c9bd4e6f740c0d488212a8d2e978f4dbd3a11174d896ed3ecbf4a5418d3"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tests/test_exhaust_stages.py",
+      "sha256": "631144683c35847704748400c391db45e1af31b0965488c10d2261d84ea82bb3"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tests/test_schemas.py",
+      "sha256": "cafca899b9bc11041e46a2e3da00428056edb33210443a59a5b786ee2b73e85f"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tests/test_server.py",
+      "sha256": "07ee1c19ae2e92203368fd9638ef4cc58bf043c9b8b3cdb8a9e245f0d4e6341c"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tests/test_server_integration.py",
+      "sha256": "74c05ac3024d27c5f9af1c25450053b8bd59a3b889b27d4eec6beded7b588e71"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tests/test_tools_core.py",
+      "sha256": "496cdcacec7fa3b286a84393067f2824d944f59bd7a592f326683d580e06ee8f"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tests/test_vault_tools.py",
+      "sha256": "e5ceacf9e075f685db3fd192e15e32c39db932ff78300250a067cc0395ecea0f"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/tools_core.py",
+      "sha256": "e42c36ec282f1f867ba25ec3729591934dd203cfdeeeb310f14d78fb5066f514"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/mcp/vault_tools.py",
+      "sha256": "a5a03b360dd53dbfffa784c6aa884663f176d7ffe44aacb02700f4eb56a4ac5a"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/offer.py",
+      "sha256": "af91ec9d6087c7979d7dc5168ae0d83d34bfd448fcf211138f5f776b2ee1e4e3"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/packaging.py",
+      "sha256": "ea5d46ecc571af0dc88f88fac974ed7d61d4f9e28266308263e50b36d8720900"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/pkg.py",
+      "sha256": "53fe7530c0fd709eded1612eb7157f084ae2411257fc9e4c647734f0d7cd4994"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/providers/__init__.py",
+      "sha256": "9ae0b8cffa1685a9df6cecd9e795aa9b972e0c6164326e29f33afc2362e87fa6"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/providers/__init__.pyi",
+      "sha256": "b50e1272875dce96ae7a4b5dbc483bcb1805820810a96f10cd81b83462c3d6d1"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/providers/catalog.py",
+      "sha256": "92518e704b20637b30da80d51f83c039254eb61ff6593987cc2b0f1e9de1f0b4"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/providers/file.py",
+      "sha256": "c3460e98facf376545db90d568f4e8938a6e1a9f044a5d11107eafd16e94f10f"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/providers/governance.py",
+      "sha256": "e3e35042fa356e6a0717f3978beecbf8700477f5b2228f70df1b975166a38f07"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/providers/identity.py",
+      "sha256": "4579931d3462c597efed6b2aefed7290791bee9e644cbd697d53c8266a951078"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/providers/keys.py",
+      "sha256": "86cd28e4abcaea8b85fedfcfb15290caf2dc2855531a9b7bfbd29444f5ed6433"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/providers/register.py",
+      "sha256": "83427a733e3a3e137d5f6a43c04213d958592fc414a18de42ef9bb05fa550150"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/py.typed",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/read.py",
+      "sha256": "c5a2a07baaebb52129b1f749cfe6000d0a9d6f18e805fa9830e14657c135ae1b"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/read_policy.py",
+      "sha256": "9eb2d89fe003181b21dfd3f11d3554ac450063b64c30c9718db014c34b87e8ea"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/read_trust.py",
+      "sha256": "5a357a23badf44dadebd49b8586092cb1116f2a78b03cf9cb05157af95449aa7"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/reader.py",
+      "sha256": "78c8e00979ddceab2e2071f2c17262a137b212876552779594d9d7a1e238f967"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/recipient_seal.py",
+      "sha256": "7d6e506fbd01e711303c13aef9d0dd57682dccb362dc7842ac237d9bcca9e23a"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/reconcile.py",
+      "sha256": "3913ceee2538b3204aa03fa04b8f5c856d65fa691a16f890a91d9faf0bcf51fa"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/scope.py",
+      "sha256": "ec4b7e8667ac299233453f60208112acd22fa2adec99b37f9edd111cc488b151"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/seal.py",
+      "sha256": "4a47c4c600aae41ec17bb601e26cefd20591442893391ab53bcb1afb2c0bef0a"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/sealing.py",
+      "sha256": "b8546c7ab1b1e62cab1c673d4a64e937b78a14ff48d812d94c6c9c98cbf48754"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/security_audit.py",
+      "sha256": "ebe84dc27faaa5d1d2d2fcd38276465635fee9969768d70d3421e22cb74ecab5"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/signing.py",
+      "sha256": "072b5d3a2e69d902dc82cf4793e13d6bdd0ae501e967adc673dcb9fbddcbb4a8"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/sync_state.py",
+      "sha256": "c7263d474a0e2dfa586356dcf9c3bc2034a60366da4c3e1a2a55757a57532516"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/tnpkg.py",
+      "sha256": "f32b1b10c6a9a700e25c390b1551fe50e5fa5cda874378a28b73f2307bdea70e"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/trust.py",
+      "sha256": "29e14086bf4bc9d60c3ffc8f8cbe3c984d6fe891d08a659610761f0d592c0adf"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/vault.py",
+      "sha256": "27bf5bee2371de7172d7223e873cd36c72bfedb7e1a8f9069971ca1e0947f211"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/vault_client.py",
+      "sha256": "59b14661e3747913adad4f47b6e3ecaf81657051291b02a9138cc4a446d10ed6"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/wallet.py",
+      "sha256": "26846cdefbfe14714e01dadad5809c7c69b200084d12c6157016cb658b7489ba"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/wallet_pull.py",
+      "sha256": "dad5ebedeb4ed612b257a35e7dfed83814351f2a353867cea3bf5f767769f97f"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/wallet_push.py",
+      "sha256": "d23552c9c0d771998ac1ecdbae074ce4e0ab919162718f0140a058f75354d5df"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/wallet_restore.py",
+      "sha256": "4e7045497374c1573511e1fe941db25d5f3a06bcffda8e25246f2b95c508a0ce"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/wallet_restore_loopback.py",
+      "sha256": "e7af02391340122c77084345ca450eaf4608371833707c572b81a0775a7c39a4"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/wallet_restore_passphrase.py",
+      "sha256": "d079fb367012c4ce2bf5d4da78524c9e83ca5548cf8bac9805025faaa32ce7ba"
+    },
+    {
+      "path": "upstream/tn-proto/python/tn/watch.py",
+      "sha256": "c2ccdda74c80f58c7623ffa19531524d4d8362a9b26c91c48b181d982e275319"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/Cargo.toml",
+      "sha256": "3359bd6e95f86636ce10da594ce811f105264faed8fd6c4c6b3c30c286c7b8a7"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/GOVERNED_OBJECTS.md",
+      "sha256": "f155939d13534698db4baf609251889fff2f9884048369c2c65a757901560eac"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/README.md",
+      "sha256": "9dad05e83603700ab9aeba78e7ccd9d824517a961d5b3bf7dda0df7306f26c1f"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/examples/admin_group.rs",
+      "sha256": "6d895388edbb2e16ff365d18c6931f7cfac87657fa8e442b35d2f0020d98ba32"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/examples/governed_objects.rs",
+      "sha256": "aa7b12a793625ef9d5cb11bd6d59df7e3ca05a3ccc9e69c840441baf39169b02"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/examples/hello.rs",
+      "sha256": "9b4154930293a6a97419493dfd617059af3352fba29ee338ba87f51a3c6d878a"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/examples/invite.rs",
+      "sha256": "bf3cd5d7053106861771c518d0628b812fef53a8b9a1c25860419ad89dbadd4e"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/examples/package.rs",
+      "sha256": "c91849b7bda95165de07f50fc798aa582f0d2920ec1194e18892a21fe1eb99fa"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/examples/policy_revisions.rs",
+      "sha256": "4a8d636e1cbda96942ccf9dfc5ec80b0281137ec2de2921fd2d941f23a8abd61"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/examples/read.rs",
+      "sha256": "bd248cb5a29e5eac166640e7f2aac5bcf1a606002f1c735a493ca19a85f8abf8"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/examples/revocation.rs",
+      "sha256": "c6a1b68777e708c9fd6b23ed438805f4cc780b8db48bac474c96c193beb7524f"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/examples/vault_claim.rs",
+      "sha256": "1a56e6a451de935effedd84eab2525fbd0949e7fd9d21c9dcbf27f97dcad3bb9"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/examples/vault_passphrase.rs",
+      "sha256": "c079af709246e326d2d6a3f4535e871b13e6bdc406d957a4e73a6a1e1f822e61"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/examples/watch.rs",
+      "sha256": "0cef3ba3d092b0dbd1f85dffe7504d042ee287429e4886827e66ca0decede2f8"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/src/account.rs",
+      "sha256": "f9f2095ca74b5368f3b854ea9d3c9840e30a06a695833c520b361b43398f1ffe"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/src/admin.rs",
+      "sha256": "c0ad18ba6e2ab06f4dd46d1e810777ab128c829d77f601df352c6eb8e9e17591"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/src/bin/tn-proto.rs",
+      "sha256": "fcdea66d526f6db01d0406949c33f7b34511d85a17e376e5b09b23291f38ba6e"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/src/credential_store.rs",
+      "sha256": "81c41a5090951ffad5f873d771679e364bf70670ceee0b398bc21919defda081"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/src/enrollment.rs",
+      "sha256": "b8827e29f2fcc441a37e635be89902e7b54bcc661e65af26b0e14e397b9ca10e"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/src/entry.rs",
+      "sha256": "3d9ee66f3afb28fe8d4b9cc1d48cadc3569cd3855f38a39b36ab6b836c70039b"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/src/error.rs",
+      "sha256": "6cb56dbe377fa9d51e2c5a0e996a094b691e3681a7862cca769e7f3c548da227"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/src/identity.rs",
+      "sha256": "c85497e157e9b2e39ff4cf73015c0a6fe12db6601490c7cbf103e60219a64069"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/src/inbox.rs",
+      "sha256": "336783e9a354d90272bb4bb887411b1dd25a5ca39f993f6e28ebe7afa506e339"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/src/lib.rs",
+      "sha256": "c4da9250e9b355ed59e47b5b5abd027de976d4d0938fcdf4c7ab2520a3447865"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/src/objects.rs",
+      "sha256": "efd54147229e38914648e59ec513d6c7b955367d34137dfff43051fe5f3e01e4"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/src/pkg.rs",
+      "sha256": "cad6b40c59eb99948319cf49000003e04c70e4cd80d8a162a9bfcff95952eb02"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/src/read_trust.rs",
+      "sha256": "ffb7cf60fdf24ffcd8c8adcc7ecfd8d3cd691092b63c7ba16faf215aa35d568e"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/src/security_warning.rs",
+      "sha256": "8ac368c9e1f99943dc4fbd3440c652266beb15ceb448988450fa7fd47b18e46e"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/src/tn.rs",
+      "sha256": "a3f3ecf7d1acdcbb9ceb122c77ea2d492705216862dad844a878bff8727707d6"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/src/tn/read.rs",
+      "sha256": "f8caab288c916e616d1e713623ea430c155c630b97d2fb97cc85c65d3cf36ec4"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/src/vault.rs",
+      "sha256": "83a8116f376fb23442f5ed6198192c5444dbe6f72c103a89c554b703fa2fb74d"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/src/wallet.rs",
+      "sha256": "353305b303c97e4527be0da32bb2cf9200a21755c56dabfb1d17feaf451aecf8"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/src/watch.rs",
+      "sha256": "f9034b5fb116d341515cd0cbe1373eba78dfe0d0765ecb8fd40d28302c923cf3"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/account.rs",
+      "sha256": "0c397e67711de38716df50b5e358292a254d859ffc1621f304401cb645028490"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/admin.rs",
+      "sha256": "1f455bb0e0d1de31cc6e087328f4bf32a6dc38e0f8e7f04075b64ea51c0bebbd"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/cli.rs",
+      "sha256": "c0916f4ae84d0f288cbb77865c255deaf4986acbca3e1ba6a10d466f4b5a89e0"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/common/mod.rs",
+      "sha256": "20dbb8477f5202cc87d49c49aabdb26f1986ef4ae99c1a8c10273db5c19b1e7e"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/credential_store.rs",
+      "sha256": "24a74556823349b93fb735dd73c2f460dcfc32c215149e65d998b9814f400794"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/governed_objects.rs",
+      "sha256": "c4a280d68935987e80667548b299f5b889229b5bc67e726fc28d089099e105c3"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/governed_use_api.rs",
+      "sha256": "5908a4c20c3e94224459bd3c258da384fb615c33145b2b5a81608e26970fa282"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/hibe_trusted_authority.rs",
+      "sha256": "f3c45f6af3bc3740e963a242c4a8ebeebf4e958bdb4ff68b79bb1e9a17ef2099"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/identity.rs",
+      "sha256": "27810a640bb3018a6cc3aaf017694b4a4991cb43228ebd4f3e7a52b63d793f2d"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/inbox.rs",
+      "sha256": "a0545e722c152e7f79b11ce50d1ca963fc5bc9dce574712f000fa2212f05f8a5"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/interop_python.rs",
+      "sha256": "4c3ddfe0777ccdf8d3ef037b706b8f09d616490ad40d9df074e31aceec4a2da4"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/interop_typescript.rs",
+      "sha256": "662765db60baf171cc0101887f123f77965f5a4ab36aa60a40c0b2c59268c40b"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/jwe_local_send.rs",
+      "sha256": "3086dbbf757424db7beeb251782edf4e5a9bc6cc43b5d17cbfbfe67190fca4cb"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/jwe_trusted_enrollment.rs",
+      "sha256": "67da1085942e9d8815cfb2ec68e34643fc619012eb7d0a46d7a4c810764a1e2f"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/mutable_workflow.rs",
+      "sha256": "f92d84105f440877d63c090aabb313dd5920495c25bc84b7bd142161587649e3"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/pkg.rs",
+      "sha256": "0bbd95dcdb6b3cbede66f0b486941e98e71d6770ae508eb78c1c71df9a1efc1d"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/policy_revisions.rs",
+      "sha256": "5a435c2b137d93d450385e0748870ca4b310a6827b5543172f0afe0645b7a85b"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/privacy.rs",
+      "sha256": "c33384c101702d5f414325a5106f36789a604e8fdce94e42da0f1864a8e890c3"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/seal_unseal.rs",
+      "sha256": "ed7d1c7c8a71795b1f83ce4c9c7edf08bb05c6d8e10964cc112c8522eff7cf64"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/secure_default_read.rs",
+      "sha256": "6c49297b9761b164c8648427053090d299b712b206e7f6fa53225bb5b8bf9a80"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/smoke.rs",
+      "sha256": "296f9b6691e1f054b18dcb09c102f59f93b7bf2cbe839b881c3a3d463015b4ae"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/trusted_enrollment.rs",
+      "sha256": "46bb927e9a0f17e9b09d9741a0431933f461f362731c5698051b14e8327b392b"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/vault.rs",
+      "sha256": "d8e19147e69b25ca9c2305dc71a802ac8c60f4de5133df16a12825efb087ec07"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/vault_live.rs",
+      "sha256": "40fe297075bd784b29059777b8ec42b6603e5d3a691ae61ea2128c742ae5b3b3"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/verify.rs",
+      "sha256": "f818deb2a9dd5b26e50d5ede2472a3f20f6295aa28f7c5de76c30b28d402de10"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/wallet.rs",
+      "sha256": "cf6c767a5ce3523f65621715460f9a46415f98e8dcecd79e03edf1382b3d19d9"
+    },
+    {
+      "path": "upstream/tn-proto/rust-sdk/tests/watch.rs",
+      "sha256": "644d824d6eebb8e031f5d7919904cf168dbdb9d4c67cda6f0c0ad04b8f1330d4"
+    },
+    {
+      "path": "upstream/tn-proto/tests/fixtures/absorb/vault_adoption_cases.json",
+      "sha256": "376c74f672293d64e45b45cec85fe408b9750b19e1616cd3d7fe1433dfe7361d"
+    },
+    {
+      "path": "upstream/tn-proto/tests/fixtures/body_encryption/plaintext_zip.hex",
+      "sha256": "98d5f0afd890fe8c27d3393fe0fa4dc66a7b4659d1a34353245eba4f56a24ae3"
+    },
+    {
+      "path": "upstream/tn-proto/tests/fixtures/body_encryption/sealed_blob.hex",
+      "sha256": "86a94f6aa3538611d1e062c3df4e2b8a90bb5e448442facc79b1936a98119648"
+    },
+    {
+      "path": "upstream/tn-proto/tests/fixtures/body_encryption/vector.json",
+      "sha256": "808d8b3b67d37c9475608a90ca32062ebf351f7f63c8bb4ca3601ebcefccd4cf"
+    },
+    {
+      "path": "upstream/tn-proto/tests/fixtures/governed/v1/README.md",
+      "sha256": "196955c97306275ac7b3a149151f068a11fc914ef16a0072829652471c423498"
+    },
+    {
+      "path": "upstream/tn-proto/tests/fixtures/governed/v1/manifest.json",
+      "sha256": "b3d1c3eef53ce65161edef07d38be79fd83b82b40d7b8c7f44d96b437a3d4342"
+    },
+    {
+      "path": "upstream/tn-proto/tests/fixtures/layout/project_stream_paths.json",
+      "sha256": "37ef3387f740274d29e6aad5501b52ed697603e1d8ce71241af2307a55839273"
+    },
+    {
+      "path": "upstream/tn-proto/tests/fixtures/manifest/kinds.json",
+      "sha256": "6a83728cc9f1cc2b97f68393349c473ad6e64167003fc698d3eab414560699ac"
+    },
+    {
+      "path": "upstream/tn-proto/tests/fixtures/manifest/project_seed_signed.canonical.hex",
+      "sha256": "5ff6cbd536ab1216440c0ab64d1332d1a857508b110f9624757a1efaba41001e"
+    },
+    {
+      "path": "upstream/tn-proto/tests/fixtures/manifest/project_seed_signed.json",
+      "sha256": "4f591e13fbbfc11adc08cb0339a996d27bd20894edfe0b0d3ac84628b0c81322"
+    },
+    {
+      "path": "upstream/tn-proto/tests/fixtures/manifest/project_seed_unsigned.canonical.hex",
+      "sha256": "e57b4fdba7108f4e3aeff4d681ec06f3c7c2428db5c98e17611a69636f726d9d"
+    },
+    {
+      "path": "upstream/tn-proto/tests/fixtures/manifest/project_seed_unsigned.json",
+      "sha256": "78a1dfa65ae9e8e9a1a8841a32375c35a786f1e4e336c3adf3ab4e757b246028"
+    },
+    {
+      "path": "upstream/tn-proto/tests/fixtures/recipient_wraps/vector.json",
+      "sha256": "51014e95f25e9da0efe8abeb855d034ff61c7ef4398ba351617481333f6c1f4f"
+    },
+    {
+      "path": "upstream/tn-proto/tests/fixtures/trust/v1/did_key_vectors.json",
+      "sha256": "524b68bac68140bec6aae01c58bf2c461ab8c8cba4d49901cc9812cb199ac2ad"
+    },
+    {
+      "path": "upstream/tn-proto/tests/fixtures/trust/v1/enrollment_lifecycle.json",
+      "sha256": "eb321cd54fa9020c662fc899fc13efcd24b046ff51c0ea622a5d05cf149611d4"
+    },
+    {
+      "path": "upstream/tn-proto/tests/fixtures/trust/v1/package_body_index.json",
+      "sha256": "cff541e2ff835ef5f71524161043897956da9c3d1703439730d67f9411e71411"
+    },
+    {
+      "path": "upstream/tn-proto/tests/fixtures/trust/v1/read_cursor_vectors.json",
+      "sha256": "3682657f3e41d05a5bda845bf1f01f9c5adabc32e4b65bfbcf5ad2a1377dbf33"
+    },
+    {
+      "path": "upstream/tn-proto/tests/fixtures/trust/v1/read_policy_matrix.json",
+      "sha256": "e2136cd34412d4015d8f8d09144964bf6549805ea00fc7c0ee36064745c04dfd"
+    },
+    {
+      "path": "upstream/tn-proto/tests/fixtures/trust/v1/signed_statements.json",
+      "sha256": "d110cac09380100e8ee9fd8cc84323817b4bb95c653b937afcc839c9788ba9ff"
+    },
+    {
+      "path": "upstream/tn-proto/tests/fixtures/trust/v1/state_transitions.json",
+      "sha256": "55cc5b1bb1eb0f9618c6f120a131dc4aa87da0f00b67fba14e216f86e5f1cc5b"
+    },
+    {
+      "path": "upstream/tn-proto/tests/fixtures/trust/v1/unsafe_operation_event.json",
+      "sha256": "6d52928f06a8c3ca9d933f4542d0fc93ae5db8fd7ddbd4ba0c83dfddbbf93311"
+    },
+    {
+      "path": "upstream/tn-proto/tests/fixtures/vault/normalize_cases.json",
+      "sha256": "4e86d17e9ec7cd32fac045453f865fd51dfb5c19be5ae4b10852fc8c34c36417"
+    },
+    {
+      "path": "upstream/tn-proto/tools/bench_artifact_py/tn_bench/__init__.py",
+      "sha256": "12b1a0a2cb267ee3e11dfab4aa32b6b4c3b89ab28f40cb825ae93224c3493b60"
+    },
+    {
+      "path": "upstream/tn-proto/tools/bench_artifact_py/tn_bench/artifact.py",
+      "sha256": "3d0a3e8d55d47d2eea814a792b7f88bb010e7f1d3f109a71f832b48f6ca748d8"
+    },
+    {
+      "path": "upstream/tn-proto/tools/bench_artifact_py/tn_bench/cells.py",
+      "sha256": "d9aeeb65105a1761afcc957265de7b9acde5a0eb2de22dba06e8dc0571c71f36"
+    },
+    {
+      "path": "upstream/tn-proto/tools/bench_artifact_py/tn_bench/local_perf.py",
+      "sha256": "6cda0eee3bd172269e66be6a1b5d626806ae158408617c9dd1996d8a65dd0099"
+    },
+    {
+      "path": "upstream/tn-proto/tools/bench_artifact_py/tn_bench/stats.py",
+      "sha256": "2f7eabd178e1d263965308fc7598dc43b01f7ccc08a127f016f30c4b598bd14b"
+    },
+    {
+      "path": "upstream/tn-proto/tools/bench_artifact_py/tn_bench/sufficiency.py",
+      "sha256": "6259e85f91ce671c71f92946d0ecadeeb18c7326c517b44cf30a3b5446d7e23a"
+    },
+    {
+      "path": "upstream/tn-proto/tools/bench_artifact_py/tn_bench/text_jwe_io.py",
+      "sha256": "312c9611d4a70e4f847a71fb60b3093759ac189132f11132f26341b58659ffce"
+    },
+    {
+      "path": "upstream/tn-proto/tools/fixtures/build_trust_v1.py",
+      "sha256": "63f3c7be50f7da34ed55e6ef2dc5a2ced0eb3c267347be76c4b974a87add6463"
+    },
+    {
+      "path": "upstream/tn-proto/ts-sdk/test/fixtures/Agentic20.project.tnpkg",
+      "sha256": "b05887a6411be5ad9d45c90d6ebaea4994efae6e5eee2b1975bf345a98812156"
+    },
+    {
+      "path": "upstream/tn-proto/ts-sdk/test/fixtures/admin_events_canonical.json",
+      "sha256": "3f48217f4ba45347346e0a64b1b699d46ba60aeccefbb110e89923133a2b7556"
+    },
+    {
+      "path": "upstream/tn-proto/ts-sdk/test/fixtures/awk_bek_vectors.json",
+      "sha256": "dc6f4cc4002a40abf904215d7d41ecc6fbc35079c6b53ea2b5b14bfaa8ad54cf"
+    },
+    {
+      "path": "upstream/tn-proto/ts-sdk/test/fixtures/build_admin_snapshot_fixture.ts",
+      "sha256": "ab7bb58d8afc252182e24a9eafad3a4c08bc18c602e9d80144d1be19123e68f8"
+    },
+    {
+      "path": "upstream/tn-proto/ts-sdk/test/fixtures/build_agentic20_project_seed.ts",
+      "sha256": "a7f88a5e8ee68e2509ffb192441266e891802d725a95786787fb5f1a0229a77e"
+    },
+    {
+      "path": "upstream/tn-proto/ts-sdk/test/fixtures/build_python_fixture.py",
+      "sha256": "222143875fe4eb8e1c18b194c822d4af24520b62125596d2fc6fe4ae79df7879"
+    },
+    {
+      "path": "upstream/tn-proto/ts-sdk/test/fixtures/build_secure_read_fixtures.ts",
+      "sha256": "09019e2476c35ae278c0899b824c0b6490c338d92db2ffe85c86726f983e8280"
+    },
+    {
+      "path": "upstream/tn-proto/ts-sdk/test/fixtures/jwe_ceremony/.tn/tn/admin/default.ndjson",
+      "sha256": "6622e0fda039dcc818000a0fe97b66b4e3f814b8178c28647e5011d8918bf93c"
+    },
+    {
+      "path": "upstream/tn-proto/ts-sdk/test/fixtures/jwe_ceremony/.tn/tn/keys/default.jwe.mykey",
+      "sha256": "47ce6e29504fd3009917738e79e98cb0709c92b896540a56b42913bb37f855c4"
+    },
+    {
+      "path": "upstream/tn-proto/ts-sdk/test/fixtures/jwe_ceremony/.tn/tn/keys/default.jwe.recipients",
+      "sha256": "217b771ef626a32694c0bf98dbdde078f05c9a0dbf3d6815dd2c6126c2239127"
+    },
+    {
+      "path": "upstream/tn-proto/ts-sdk/test/fixtures/jwe_ceremony/.tn/tn/keys/default.jwe.sender",
+      "sha256": "34c9a08aade0824e60ee4380ddc8d76028e6ef755ecb6e78a4042e8c84f21a06"
+    },
+    {
+      "path": "upstream/tn-proto/ts-sdk/test/fixtures/jwe_ceremony/.tn/tn/keys/index_master.key",
+      "sha256": "3030d41492b6169d3ef2b692efc673d6e99b19427b3d5e4ecb1a63fc30987376"
+    },
+    {
+      "path": "upstream/tn-proto/ts-sdk/test/fixtures/jwe_ceremony/.tn/tn/keys/local.private",
+      "sha256": "1cf6fde6c54dc283703e7e97b77a96e7ee64750a7f7d387c12a1747d6ad12196"
+    },
+    {
+      "path": "upstream/tn-proto/ts-sdk/test/fixtures/jwe_ceremony/.tn/tn/keys/local.public",
+      "sha256": "1c604c433617ac39342c4aa6324a3508861a2505df637d7d12c54ee2b2054ebb"
+    },
+    {
+      "path": "upstream/tn-proto/ts-sdk/test/fixtures/jwe_ceremony/.tn/tn/keys/tn.agents.btn.mykit",
+      "sha256": "559008e00f1317a814623c38f44b29ced2b5db90e7ce4960a45b87cab9534b08"
+    },
+    {
+      "path": "upstream/tn-proto/ts-sdk/test/fixtures/jwe_ceremony/.tn/tn/keys/tn.agents.btn.state",
+      "sha256": "1bd7fd0a72a856ddb840aa6b0c32969b97134109f58a529f4322d985de0c52c7"
+    },
+    {
+      "path": "upstream/tn-proto/ts-sdk/test/fixtures/jwe_ceremony/.tn/tn/logs/tn.ndjson",
+      "sha256": "7a8d7afe90a6a4e6430805797a96094e6fb7f6606ad966a7d84c3a60b6af3e5c"
+    },
+    {
+      "path": "upstream/tn-proto/ts-sdk/test/fixtures/jwe_ceremony/tn.yaml",
+      "sha256": "070e42ab76eb803dbab69f1129338255e9f6f3b73dc08881b27ae26d3b6c96c8"
+    },
+    {
+      "path": "upstream/tn-proto/ts-sdk/test/fixtures/jwe_from_python.json",
+      "sha256": "ac1130ba83ee4b745c081304bf2d2ab8737c88828d54bc7eb883ab3f479f1291"
+    },
+    {
+      "path": "upstream/tn-proto/ts-sdk/test/fixtures/secure_read_canonical.json",
+      "sha256": "491e9e27a9336c5b9e077b52b61422355e6e367adc960739de5d0945c2d165f6"
+    },
+    {
+      "path": "upstream/tn-proto/ts-sdk/test/fixtures/secure_read_canonical_scenario.ts",
+      "sha256": "5de3423b7cd830af17887afd02598086e4a81d989ec06e711daf02f66314354c"
+    },
+    {
+      "path": "upstream/tn-proto/ts-sdk/test/fixtures/tn_agents_pre_encryption.json",
+      "sha256": "5b947fd59ac0f85b708a1498191fdeec68efbef61977c9cf91f792bee00cad2b"
+    },
+    {
+      "path": "upstream/tn-proto/ts-sdk/test/fixtures/ts_admin_snapshot.tnpkg",
+      "sha256": "2e8699f9a1a17a20985b8c31ab3dce6b61481ec7944108797548c6a1645e9a8c"
     }
   ]
 }

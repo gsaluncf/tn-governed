@@ -428,6 +428,28 @@ impl Workflow {
 }
 
 #[test]
+fn calculated_output_carries_catalog_rules_without_its_operands() {
+    let workflow = Workflow::new();
+    let reader = workflow.fixture.reader();
+    let view = reader.governance(&workflow.joined).unwrap();
+    // Even a previously published input with a calculation history becomes
+    // just its contracts and catalog bindings when computing a new value.
+    let policy = view.governance().for_output([view.governance()]).unwrap();
+    let mut value = tn_core::governed::DataObject::new("finance.calculation", policy, "finance",
+        json!({"amount": 51})).unwrap();
+    let result = workflow.fixture.writer().release_for(&mut value, "finance.calculation",
+        &calculation_use(), "recipient", |_| Ok(true)).unwrap();
+    let rules = reader.governance(&result).unwrap();
+    assert!(rules.governance().get("source_lineage").is_none());
+    assert!(result.carried().is_empty());
+    let arrived = reader.receive_for(result.wire(), &calculation_use(), ["finance"], None,
+        |ctx| workflow.catalog.accepts(ctx, &workflow.dag)).unwrap();
+    assert_eq!(arrived.policies().unwrap(), workflow.policies);
+    assert_eq!(arrived.dataset_bindings().unwrap(), workflow.bindings);
+    assert_eq!(arrived.group("finance").unwrap()["amount"], json!(51));
+}
+
+#[test]
 fn two_datasets_keep_contracts_bindings_and_immediate_parents_through_two_releases() {
     let workflow = Workflow::new();
     let reader = workflow.fixture.reader();

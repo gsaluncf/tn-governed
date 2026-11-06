@@ -3,7 +3,7 @@ revision = 3
 requires-python = "==3.12.*"
 
 [manifest]
-overrides = [{ name = "tn-proto", path = "vendor/wheels/799dbb899c5bdd08c6915ab3d3c1d945847b60fec076d6255ca2250d0e8642ed/tn_proto-2026.9.13b1+policy.1-cp39-abi3-win_amd64.whl" }]
+overrides = [{ name = "tn-proto", editable = "native/tn-llama/upstream/tn-proto/python" }]
 
 [[package]]
 name = "annotated-doc"
@@ -764,7 +764,7 @@ requires-dist = [
     { name = "sqlglot", specifier = "==28.10.1" },
     { name = "tn-llama-client", editable = "dependencies/tn-llama-client" },
     { name = "tn-polars", editable = "dependencies/tn-polars" },
-    { name = "tn-proto", path = "vendor/wheels/799dbb899c5bdd08c6915ab3d3c1d945847b60fec076d6255ca2250d0e8642ed/tn_proto-2026.9.13b1+policy.1-cp39-abi3-win_amd64.whl" },
+    { name = "tn-proto", editable = "native/tn-llama/upstream/tn-proto/python" },
     { name = "uvicorn", marker = "extra == 'engine-service'", specifier = ">=0.34,<1" },
     { name = "wasmtime", specifier = ">=25" },
 ]
@@ -803,7 +803,7 @@ requires-dist = [
 [[package]]
 name = "tn-proto"
 version = "2026.9.13b1+policy.1"
-source = { path = "vendor/wheels/799dbb899c5bdd08c6915ab3d3c1d945847b60fec076d6255ca2250d0e8642ed/tn_proto-2026.9.13b1+policy.1-cp39-abi3-win_amd64.whl" }
+source = { editable = "native/tn-llama/upstream/tn-proto/python" }
 dependencies = [
     { name = "base58" },
     { name = "cryptography" },
@@ -817,9 +817,6 @@ dependencies = [
     { name = "pynacl" },
     { name = "pyyaml" },
     { name = "typing-extensions" },
-]
-wheels = [
-    { filename = "tn_proto-2026.9.13b1+policy.1-cp39-abi3-win_amd64.whl", hash = "sha256:799dbb899c5bdd08c6915ab3d3c1d945847b60fec076d6255ca2250d0e8642ed" },
 ]
 
 [package.metadata]
@@ -853,7 +850,7 @@ requires-dist = [
     { name = "websocket-client", marker = "extra == 'all'", specifier = ">=1.7" },
     { name = "websocket-client", marker = "extra == 'firehose'", specifier = ">=1.7" },
 ]
-provides-extras = ["all", "delta", "exhaust", "firehose", "kafka", "s3", "test"]
+provides-extras = ["kafka", "delta", "s3", "firehose", "exhaust", "test", "all"]
 
 [[package]]
 name = "truststore"

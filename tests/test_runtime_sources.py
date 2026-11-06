@@ -35,6 +35,24 @@ def test_source_change_is_rejected_before_build(tmp_path):
     assert "session.rs" in result.stderr
 
 
+@pytest.mark.parametrize("explicit_source", [False, True])
+def test_local_verification_ignores_sibling_runtime(tmp_path, explicit_source):
+    repository = tmp_path / "tn-governed"
+    script = repository / "scripts/runtime_sources.py"
+    script.parent.mkdir(parents=True)
+    script.write_bytes(SCRIPT.read_bytes())
+    source = repository / "native/tn-llama"
+    snapshot(source)
+    snapshot(tmp_path / "tn-llama", b"other execution")
+    args = ["--source", str(source)] if explicit_source else []
+
+    result = subprocess.run([sys.executable, str(script), *args],
+                            text=True, capture_output=True)
+
+    assert result.returncode == 0, result.stderr
+    assert "Verified 1 source digests" in result.stdout
+
+
 def test_matching_snapshot_and_runtime_are_accepted(tmp_path):
     source, upstream = tmp_path / "source", tmp_path / "upstream"
     snapshot(source)

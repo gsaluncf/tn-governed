@@ -67,6 +67,22 @@ pub(crate) fn included_policies<'g>(
 }
 
 impl Governance {
+    /// Governance for a new value computed from admitted inputs. Carry the
+    /// contracts and their signed catalog bindings, never the inputs' release
+    /// contexts, source objects, or calculation histories.
+    pub fn for_output<'g>(&self, others: impl IntoIterator<Item = &'g Governance>) -> Result<Self> {
+        let mut output = base_contract(self);
+        let mut policies = self.policies()?;
+        let mut bindings = self.dataset_bindings()?;
+        for input in others {
+            policies.extend(input.policies()?);
+            bindings.extend(input.dataset_bindings()?);
+        }
+        merge_policies(&mut output, policies)?;
+        super::dataset::merge_bindings(&mut output, bindings)?;
+        Ok(output)
+    }
+
     /// Primary and appended contracts, each retaining its own authority and revision.
     pub fn policies(&self) -> Result<Vec<Governance>> {
         let mut policies = vec![base_contract(self)];
