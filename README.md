@@ -20,9 +20,9 @@ The native llama.cpp integration controls access to encrypted input fields, veri
 
 ## Governed string through Polars
 
-The example helper [`originate`](examples/local_policy.py) creates a `TNString` from `"alice"` under the supplied policy. `pl.Object` preserves that `TNString` instance in a regular Polars dataframe column. `map_elements` invokes `TNString.upper()` on the stored object; `Context` authorizes the operation, decrypts the input within the runtime, computes the uppercase text, and encrypts the derived result.
+The example helper [`originate`](examples/local_policy.py) creates a `TNString` from `"alice"` under the supplied policy. `pl.Object` preserves that `TNString` instance in a regular Polars dataframe column. `map_elements` invokes `TNString.upper()` on the stored object; `Context` obtains a decision from its registered policy evaluator and completes required actions before decrypting the input within the runtime, computing the uppercase text, and encrypting the derived result.
 
-`context` is a configured `Context` containing a native `Session`, a policy evaluator, and required-action handlers. The `Session` provides the keys and native publication operations. `policy` is the selected source contract. The sequence returns a governed `TNString`; the separate `GovernedLazyFrame` interface covers governed dataframe expressions and plans.
+`context` is a configured `Context` containing a native `Session`, a policy evaluator, and required-action handlers. The `Session` provides the keys and native publication operations. `Context` and `Endpoint` use the same `Request`/`Assessment` evaluator contract for value and artifact operations, respectively. `policy` is the selected source contract. The sequence returns a governed `TNString`; the separate `GovernedLazyFrame` interface covers governed dataframe expressions and plans.
 
 ```python
 name = originate(context, "alice", policy, "name")
