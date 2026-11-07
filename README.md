@@ -4,7 +4,7 @@ TN Governed is a framework for applying data-use policies across LLM application
 
 Data-use conditions can specify a permitted purpose, a disclosure destination, or an action required before processing. Calculations, tool results, and model outputs can depend on several sources with different conditions. The SQL, Polars, tool, and inference integrations retain those source conditions in derived publications. Each receiving runtime evaluates the requested use under its configured rules before opening protected values.
 
-The framework represents protected content as governed values and artifacts. Each encrypted, signed TN publication contains the value and its governance, including source policies, attributed claims, and derivation links. Signed decisions and action records provide evidence of the processing performed. A receiving service can verify the source statements and evaluate the requested use under its own authority configuration.
+The framework represents protected content as governed values and artifacts. Each encrypted, signed TN publication contains the value and its governance, including source policies, attributed claims, and derivation links. Signed decisions and action records provide evidence of the processing performed. A receiving service can verify the authorship and integrity of source statements and evaluate the requested use under its own authority configuration.
 
 ![Data, tool, and LLM endpoints exchange governed publications. Each endpoint applies its own authority rules.](assets/diagrams/framework.svg)
 
@@ -16,13 +16,13 @@ The framework represents protected content as governed values and artifacts. Eac
 
 The native llama.cpp integration controls access to encrypted input fields, verifies required tool completions, and publishes governed model outputs. The native runtime performs these checks within the inference service using its configured policies and keys.
 
-`GovernedSQL` and `GovernedLazyFrame` integrate SQL and Polars processing with the same publication format. Query results, transformations, and aggregates retain source policies, original claim attribution, and contributor information for subsequent processing and recipient verification.
+`GovernedSQL` and `GovernedLazyFrame` publish SQL and Polars results as native TN publications. Query results, transformations, and aggregates retain source policies, original claim attribution, and contributor information for subsequent processing and recipient verification.
 
 ## Governed string through Polars
 
-`originate` applies a policy to `"alice"` and returns a `TNString`. Polars stores that value in an object column. `TNString.upper()` requests authorization, transforms the protected content, and returns a governed string containing `"ALICE"`.
+The example helper [`originate`](examples/local_policy.py) creates a `TNString` from `"alice"` under the supplied policy. `pl.Object` preserves that `TNString` instance in a regular Polars dataframe column. `map_elements` invokes `TNString.upper()` on the stored object; `Context` authorizes the operation, decrypts the input within the runtime, computes the uppercase text, and encrypts the derived result.
 
-The configured `context` and `policy` are the inputs to this sequence:
+`context` is a configured `Context` containing a native `Session`, a policy evaluator, and required-action handlers. The `Session` provides the keys and native publication operations. `policy` is the selected source contract. The sequence returns a governed `TNString`; the separate `GovernedLazyFrame` interface covers governed dataframe expressions and plans.
 
 ```python
 name = originate(context, "alice", policy, "name")
@@ -48,7 +48,7 @@ Decrypted: ALICE
 
 ### Policy in the same publication
 
-The `string.processing` policy permits string creation and uppercase conversion for the `normalization` purpose, requires a signed monitoring record, and permits ordinary output to `console`. The transformed publication contains this policy in its encrypted `tn.agents` group.
+The `string.processing` policy states the permitted operations, purpose, destination, and monitoring requirement. In this example, `evaluate(request)` is the evaluator registered on `Context`: it checks the requested use and adds the required `monitor` action to permitted decisions. `Context` invokes its registered monitoring handler to sign the record before protected processing. The transformed publication contains the source policy in its encrypted `tn.agents` group.
 
 `Session.governance()` verifies the publication and decrypts its governance using the session's keys. `carried_policy.fields` contains the policy recovered from the publication:
 
@@ -103,7 +103,7 @@ Retained claims: 1
 Verified signed records: 9
 ```
 
-[governed_tools.py](examples/governed_tools.py) loads [tool_workflow.policy](examples/tool_workflow.policy), originates the value `12`, attaches a claim, and registers a scaling handler. The example's `evaluate(request)` callback checks the application, purpose, permitted operations, recognized writer, source contract, and disclosure destination. The registered tool multiplies the value by `3`; the final JSON output is `{"scaled": 36}`.
+[governed_tools.py](examples/governed_tools.py) loads [tool_workflow.policy](examples/tool_workflow.policy), originates the value `12`, attaches a claim, and registers a scaling handler. The example registers `evaluate(request)` as the policy evaluator on `Endpoint`. `Endpoint` invokes that callback to check the application, purpose, permitted operations, recognized writer, source contract, and disclosure destination. The registered tool multiplies the value by `3`; the final JSON output is `{"scaled": 36}`.
 
 The following excerpt requires a configured `Endpoint` instance named `endpoint` and a `GovernedArtifact` named `amount`:
 
@@ -127,7 +127,7 @@ completion = workflow.execute(
 )
 ```
 
-`ToolWorkflow.execute()` returns a `ToolCompletion`; its `artifact` field contains the governed result. `ToolWorkflow.finish(value, schema=..., destination=...)` validates and publishes the final workflow artifact. `Endpoint.reveal(artifact, destination=...)` and `ToolWorkflow.expose(handle, destination=...)` return ordinary values after authorization for the named destination.
+`ToolWorkflow.execute()` returns a `ToolCompletion`. Its `artifact` field contains the governed result, and its `handle` field contains the result identifier `result:scaled` for subsequent calls. `ToolWorkflow.finish(value, schema=..., destination=...)` validates and publishes the final workflow artifact. `Endpoint.reveal(artifact, destination=...)` returns an ordinary value after destination-specific authorization. `workflow.expose(completion.handle, destination=...)` resolves the result handle and invokes the same disclosure operation.
 
 ## Interfaces
 
