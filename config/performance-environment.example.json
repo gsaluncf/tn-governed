@@ -1,0 +1,11 @@
+{
+  "python": ".venv/Scripts/python.exe",
+  "unity_url": "http://127.0.0.1:18080",
+  "opa": ".runtime/dependencies/opa.exe",
+  "binary": ".runtime/dependencies/tn-llama/llama-server",
+  "plain_binary": ".runtime/llama-build/plain-cpu/bin/llama-server",
+  "model_path": ".runtime/dependencies/Qwen3-4B-Q4_K_M.gguf",
+  "wsl_distribution": "Ubuntu",
+  "model_port": 18325,
+  "polars_threads": 16
+}

@@ -1,0 +1,35 @@
+## tool.input
+
+### instruction
+Retain source policies, attributed claims, and input references in derived values.
+
+### use_for
+The tool-example application may originate values, attach claims, execute registered
+tools, and release workflow results for the calculation purpose. Ordinary values
+may be disclosed to console.
+
+### do_not_use_for
+Other applications, purposes, operations, or disclosure destinations.
+
+### consequences
+Keep signed records of decisions, tool results, and disclosures.
+
+### on_violation_or_error
+Record the refusal or failure and stop the protected operation.
+
+## operation.records
+
+### instruction
+Retain signed decisions and operation records for verification by the endpoint.
+
+### use_for
+Verification and inspection by this endpoint.
+
+### do_not_use_for
+Treating an attributed claim as an endorsement by another source.
+
+### consequences
+Retain the writer, subject, requested use, and operation.
+
+### on_violation_or_error
+Reject records whose signatures, context, or sequence fail verification.

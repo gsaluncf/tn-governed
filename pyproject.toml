@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tn-governed"
+version = "0.1.0"
+description = "Governed data processing through SQL, Polars, calculations, and language models"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "polars==1.39.3",
+  "tn-proto==2026.9.13b1+policy.1",
+  "tn-llama-client==0.1.0",
+  "tn-polars==2026.9.11b1",
+  "wasmtime>=25",
+  "python-dotenv>=1.0",
+  "numpy>=2,<3",
+  "sqlglot==28.10.1",
+  "jsonschema==4.26.0",
+]
+
+[project.optional-dependencies]
+engine-service = [
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.34,<1",
+]
+dev = [
+  "pytest>=8.4,<9",
+  "ruff>=0.12,<1",
+]
+
+[project.scripts]
+tn-governed = "tn_governed.cli:main"
+
+[tool.uv.sources]
+tn-polars = { path = "dependencies/tn-polars", editable = true }
+tn-llama-client = { path = "dependencies/tn-llama-client", editable = true }
+tn-proto = { path = "native/tn-llama/upstream/tn-proto/python", editable = true }
+
+[tool.uv]
+# All adapters use the same pinned native runtime.
+override-dependencies = ["tn-proto==2026.9.13b1+policy.1"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tn_governed"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "dependencies/tn-polars"]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = ["paper"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

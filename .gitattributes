@@ -1,0 +1,27 @@
+*.sh text eol=lf
+*.patch text eol=lf -whitespace
+native/** text eol=lf
+native/tn-llama/upstream/tn-proto/crypto/tn-btn-py/examples/bench_full_tn_4kb.h8.results.txt -text
+native/tn-llama/upstream/tn-proto/crypto/tn-btn-py/examples/bench_full_tn_4kb.results.txt -text
+native/tn-llama/upstream/tn-proto/crypto/tn-btn-py/examples/bench_instrument.h8.results.txt -text
+native/tn-llama/upstream/tn-proto/crypto/tn-btn-py/examples/bench_pipeline_rust.results.txt -text
+native/tn-llama/upstream/tn-proto/crypto/tn-core/tests/fixtures/rust_admin_snapshot.tnpkg -text
+native/tn-llama/upstream/tn-proto/python/tests/fixtures/python_admin_snapshot.tnpkg -text
+native/tn-llama/upstream/tn-proto/python/tn/mcp/tests/fixtures/jwe_two_recipients/.tn/tn/keys/default.jwe.mykey -text
+native/tn-llama/upstream/tn-proto/python/tn/mcp/tests/fixtures/jwe_two_recipients/.tn/tn/keys/default.jwe.sender -text
+native/tn-llama/upstream/tn-proto/python/tn/mcp/tests/fixtures/jwe_two_recipients/.tn/tn/keys/local.private -text
+native/tn-llama/upstream/tn-proto/python/tn/mcp/tests/fixtures/jwe_two_recipients/.tn/tn/keys/pii.jwe.mykey -text
+native/tn-llama/upstream/tn-proto/python/tn/mcp/tests/fixtures/jwe_two_recipients/.tn/tn/keys/pii.jwe.sender -text
+native/tn-llama/upstream/tn-proto/python/tn/mcp/tests/fixtures/jwe_two_recipients/.tn/tn/keys/tn.agents.btn.mykit -text
+native/tn-llama/upstream/tn-proto/python/tn/mcp/tests/fixtures/jwe_two_recipients/.tn/tn/keys/tn.agents.btn.state -text
+native/tn-llama/upstream/tn-proto/python/tn/mcp/tests/fixtures/jwe_two_recipients/.tn/tn/keys/tn.agents.btn.state.lock -text
+native/tn-llama/upstream/tn-proto/python/tn/mcp/tests/fixtures/jwe_two_recipients/.tn/tn/outbox/did_key_z6MkAcme__enrolment__v1.tnpkg -text
+native/tn-llama/upstream/tn-proto/python/tn/mcp/tests/fixtures/jwe_two_recipients/.tn/tn/outbox/did_key_z6MkFrank__enrolment__v1.tnpkg -text
+native/tn-llama/upstream/tn-proto/ts-sdk/test/fixtures/Agentic20.project.tnpkg -text
+native/tn-llama/upstream/tn-proto/ts-sdk/test/fixtures/jwe_ceremony/.tn/tn/keys/default.jwe.mykey -text
+native/tn-llama/upstream/tn-proto/ts-sdk/test/fixtures/jwe_ceremony/.tn/tn/keys/default.jwe.sender -text
+native/tn-llama/upstream/tn-proto/ts-sdk/test/fixtures/jwe_ceremony/.tn/tn/keys/index_master.key -text
+native/tn-llama/upstream/tn-proto/ts-sdk/test/fixtures/jwe_ceremony/.tn/tn/keys/local.private -text
+native/tn-llama/upstream/tn-proto/ts-sdk/test/fixtures/jwe_ceremony/.tn/tn/keys/tn.agents.btn.mykit -text
+native/tn-llama/upstream/tn-proto/ts-sdk/test/fixtures/jwe_ceremony/.tn/tn/keys/tn.agents.btn.state -text
+native/tn-llama/upstream/tn-proto/ts-sdk/test/fixtures/ts_admin_snapshot.tnpkg -text

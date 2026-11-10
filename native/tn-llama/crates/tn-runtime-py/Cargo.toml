@@ -1,0 +1,17 @@
+[package]
+name = "tn-runtime-py"
+version = "2026.9.11-beta.1"
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "tn_runtime_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+tn-runtime = { path = "../tn-runtime" }
+pyo3 = { version = "0.23", features = ["extension-module", "abi3-py310"] }
+serde_json = "1"
+
+[package.metadata.maturin]
+name = "tn-runtime-native"

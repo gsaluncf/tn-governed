@@ -1,0 +1,103 @@
+--- a/crypto/tn-core/src/governed/data/mod.rs
++++ b/crypto/tn-core/src/governed/data/mod.rs
+@@ -67,11 +67,25 @@
+         S: AsRef<str>,
+         V: Serialize,
+     {
++        let mut data = Self::empty_with_policy(object_type, policy)?;
++        for (name, fields) in groups {
++            let name = name.as_ref();
++            if data.groups.contains_key(name) {
++                return Err(invalid(format!("duplicate business group {name:?}")));
++            }
++            data.set_group(name, fields)?;
++        }
++        if data.groups.is_empty() {
++            return Err(invalid("creation requires at least one business group"));
++        }
++        Ok(data)
++    }
++    fn empty_with_policy(object_type: &str, policy: Governance) -> Result<Self> {
+         validate_name(object_type)?;
+         policy.policies()?;
+         policy.dataset_bindings()?;
+         let sources = policy.source_references()?;
+-        let mut data = Self {
++        let data = Self {
+             object_type: object_type.to_owned(),
+             governance: policy,
+             groups: Arc::new(BTreeMap::new()),
+@@ -84,18 +98,21 @@
+             unreleased_changes: true,
+             register_error: None,
+         };
+-        for (name, fields) in groups {
+-            let name = name.as_ref();
+-            if data.groups.contains_key(name) {
+-                return Err(invalid(format!("duplicate business group {name:?}")));
+-            }
+-            data.set_group(name, fields)?;
+-        }
++        Ok(data)
++    }
++
++    /// Move parsed JSON into working groups without serializing the tree again.
++    pub fn new_with_owned_groups(
++        object_type: &str, policy: Governance, groups: Map<String, Value>,
++    ) -> Result<Self> {
++        let mut data = Self::empty_with_policy(object_type, policy)?;
++        for (name, fields) in groups { data.set_owned_group(&name, fields)?; }
+         if data.groups.is_empty() {
+             return Err(invalid("creation requires at least one business group"));
+         }
+         Ok(data)
+     }
++
+     /// Use admitted selected plaintext while retaining every unopened source group.
+     pub fn from_opened(opened: OpenedObject) -> Result<Self> {
+         let source = SourceReference::from_opened(&opened)?;
+--- a/crypto/tn-core/src/governed/data/edit.rs
++++ b/crypto/tn-core/src/governed/data/edit.rs
+@@ -71,7 +71,12 @@
+     /// Set a complete plaintext group. Governance names are reserved.
+     pub fn set_group(&mut self, name: &str, fields: impl Serialize) -> Result<()> {
+         business_group(name)?;
+-        let Value::Object(fields) = serde_json::to_value(fields)? else {
++        self.set_owned_group(name, serde_json::to_value(fields)?)
++    }
++    /// Adopt a parsed group while retaining business-name and field validation.
++    pub(crate) fn set_owned_group(&mut self, name: &str, fields: Value) -> Result<()> {
++        business_group(name)?;
++        let Value::Object(fields) = fields else {
+             return Err(invalid("group fields must be a JSON object"));
+         };
+         for field in fields.keys() {
+--- a/crypto/tn-core-py/src/governed/data.rs
++++ b/crypto/tn-core-py/src/governed/data.rs
+@@ -190,7 +190,7 @@
+                 .map(|input| Ok(input.locked()?.governance().clone()))
+                 .collect::<PyResult<Vec<_>>>()?;
+             let policy = self.locked()?.governance().for_output(&additional).map_err(to_py)?;
+-            let inner = DataObject::new_with_groups(object_type, policy, groups).map_err(to_py)?;
++            let inner = DataObject::new_with_owned_groups(object_type, policy, groups).map_err(to_py)?;
+             Ok(Self::new(inner, self.session.clone(), default))
+         })
+     }
+--- a/crypto/tn-core/src/governed/data/tests.rs
++++ b/crypto/tn-core/src/governed/data/tests.rs
+@@ -201,3 +201,15 @@
+     assert_eq!(data.group("keep").unwrap()["from"], "keep");
+     assert_eq!(copy.group("keep").unwrap()["from"], "edited");
+ }
++
++#[test]
++fn owned_group_creation_validates_groups_and_preserves_nested_values() {
++    let device = crate::DeviceKey::generate();
++    let policy = crate::governed::testing::policy(&device);
++    let groups = json!({"keep": {"nested": {"items": [1, true, "text"]}}});
++    let data = super::DataObject::new_with_owned_groups("data", policy.clone(), groups.as_object().unwrap().clone()).unwrap();
++    assert_eq!(data.get("keep", Some("nested")).unwrap(), json!({"items": [1, true, "text"]}));
++    for bad in [json!({}), json!({"tn.agents": {}}), json!({"keep": []})] {
++        assert!(super::DataObject::new_with_owned_groups("data", policy.clone(), bad.as_object().unwrap().clone()).is_err());
++    }
++}

@@ -1,0 +1,227 @@
+--- a/crypto/tn-core/src/canonical.rs
++++ b/crypto/tn-core/src/canonical.rs
+@@ -79,6 +79,28 @@
+     Ok(())
+ }
+ 
++
++/// Encode once, exposing each field's canonical bytes before advancing.
++pub(crate) fn canonical_object_fields(
++    fields: &Map<String, Value>,
++    mut field_encoded: impl FnMut(&str, &[u8]) -> Result<()>,
++) -> Result<Vec<u8>> {
++    let mut out = Vec::with_capacity(64);
++    out.push(b'{');
++    let mut keys: Vec<&String> = fields.keys().collect();
++    keys.sort();
++    for (i, key) in keys.into_iter().enumerate() {
++        if i > 0 { out.push(b','); }
++        write_json_string(key, &mut out);
++        out.push(b':');
++        let start = out.len();
++        encode(&fields[key], &mut out)?;
++        field_encoded(key, &out[start..])?;
++    }
++    out.push(b'}');
++    Ok(out)
++}
++
+ fn write_json_string(s: &str, out: &mut Vec<u8>) {
+     out.push(b'"');
+     for c in s.chars() {
+@@ -108,3 +130,24 @@
+     m.insert("$b64".into(), Value::String(STANDARD.encode(b)));
+     Value::Object(m)
+ }
++
++#[cfg(test)]
++mod field_encoding_tests {
++    use super::*;
++    #[test]
++    fn field_slices_match_the_existing_canonical_encoding() {
++        let fields = serde_json::json!({
++            "z": {"nested": [null, true, "escaped\ntext", "Unicode: λ"]},
++            "a": [0, -3, 0.125], "quoted\"key": "value"
++        }).as_object().unwrap().clone();
++        let mut names = Vec::new();
++        let bytes = canonical_object_fields(&fields, |name, encoded| {
++            assert_eq!(encoded, canonical_bytes(&fields[name])?);
++            names.push(name.to_owned());
++            Ok(())
++        }).unwrap();
++        assert_eq!(bytes, canonical_bytes(&Value::Object(fields.clone())).unwrap());
++        assert_eq!(names.len(), fields.len());
++        assert!(names.windows(2).all(|pair| pair[0] < pair[1]));
++    }
++}
+--- a/crypto/tn-core/src/indexing.rs
++++ b/crypto/tn-core/src/indexing.rs
+@@ -97,10 +97,17 @@
+     field_name: &str,
+     value: &Value,
+ ) -> Result<String> {
++    index_token_canonical_with_template(template, field_name, &canonical_bytes(value)?)
++}
++
++/// Hash a field already encoded by the native canonical encoder.
++pub(crate) fn index_token_canonical_with_template(
++    template: &Hmac<Sha256>, field_name: &str, canonical: &[u8],
++) -> Result<String> {
+     let mut mac = template.clone();
+     mac.update(field_name.as_bytes());
+     mac.update(&[0u8]);
+-    mac.update(&canonical_bytes(value)?);
++    mac.update(canonical);
+     // One-allocation build (avoids `format!` + `hex::encode` double
+     // alloc). Prefix length is `INDEX_TOKEN_PREFIX.len()`; hex is 64
+     // chars (32-byte HMAC digest).
+--- a/crypto/tn-core/src/governed/writer.rs
++++ b/crypto/tn-core/src/governed/writer.rs
+@@ -6,11 +6,11 @@
+ use serde_json::{Map, Value};
+ use sha2::Sha256;
+ 
+-use crate::canonical::{canonical_bytes, canonical_object_bytes};
++use crate::canonical::{canonical_bytes, canonical_object_fields};
+ use crate::chain::{compute_row_hash, GroupInput, RowHashInput};
+ use crate::cipher::{GroupCipher, PublicationCapability};
+ use crate::envelope::{build_envelope, EnvelopeInput, GroupPayload};
+-use crate::indexing::{build_hmac_template, index_token_with_template};
++use crate::indexing::{build_hmac_template, index_token_canonical_with_template};
+ use crate::{DeviceKey, Result};
+ 
+ use super::binding::{self, Binding, Input, CARRIED_FIELD};
+@@ -287,6 +287,18 @@
+         }
+     }
+ 
++    fn encode_group(
++        &self, name: &str, fields: &Map<String, Value>,
++    ) -> Result<(Vec<u8>, BTreeMap<String, String>)> {
++        let mut hashes = BTreeMap::new();
++        let index = &self.groups[name].index;
++        let bytes = canonical_object_fields(fields, |field, canonical| {
++            hashes.insert(field.to_owned(), index_token_canonical_with_template(index, field, canonical)?);
++            Ok(())
++        })?;
++        Ok((bytes, hashes))
++    }
++
+     fn encrypt(
+         &self,
+         binding: &Binding,
+@@ -294,23 +306,23 @@
+         governance: &Map<String, Value>,
+     ) -> Result<Sealed> {
+         let mut sealed = Sealed::default();
+-        let bytes = canonical_object_bytes(governance)?;
++        let (bytes, field_hashes) = self.encode_group(GOVERNANCE_GROUP, governance)?;
+         let governance_digest = binding::digest(&bytes);
+-        self.encrypt_group(&mut sealed, binding, GOVERNANCE_GROUP, governance, &bytes, Input::Governance)?;
++        self.encrypt_group(&mut sealed, binding, GOVERNANCE_GROUP, governance, &bytes, field_hashes, Input::Governance)?;
+         let mut manifest_digest = None;
+         if let Some(name) = &binding.manifest {
+-            let bytes = canonical_object_bytes(&groups[name])?;
++            let (bytes, field_hashes) = self.encode_group(name, &groups[name])?;
+             let input = Input::Manifest { governance_digest: &governance_digest };
+-            self.encrypt_group(&mut sealed, binding, name, &groups[name], &bytes, input)?;
++            self.encrypt_group(&mut sealed, binding, name, &groups[name], &bytes, field_hashes, input)?;
+             manifest_digest = Some(binding::digest(&bytes));
+         }
+         let index = &self.groups[GOVERNANCE_GROUP].index;
+         let hash_key = binding::hash_key(index, &binding.id, &governance_digest, manifest_digest.as_deref());
+         for (name, fields) in groups {
+             if name != GOVERNANCE_GROUP && !binding.is_manifest(name) {
+-                let bytes = canonical_object_bytes(fields)?;
++                let (bytes, field_hashes) = self.encode_group(name, fields)?;
+                 let input = Input::Data { hash_key: &hash_key };
+-                self.encrypt_group(&mut sealed, binding, name, fields, &bytes, input)?;
++                self.encrypt_group(&mut sealed, binding, name, fields, &bytes, field_hashes, input)?;
+             }
+         }
+         Ok(sealed)
+@@ -323,13 +335,10 @@
+         name: &str,
+         fields: &Map<String, Value>,
+         plaintext: &[u8],
++        field_hashes: BTreeMap<String, String>,
+         input: Input<'_>,
+     ) -> Result<()> {
+         let group = &self.groups[name];
+-        let mut field_hashes = BTreeMap::new();
+-        for (field, value) in fields {
+-            field_hashes.insert(field.clone(), index_token_with_template(&group.index, field, value)?);
+-        }
+         let ciphertext = group.cipher.encrypt_with_aad(plaintext, &binding.aad(name, input)?)?;
+         let payload = serde_json::to_string(&GroupPayload {
+             ciphertext: ciphertext.clone(),
+--- a/crypto/tn-core/src/governed/reader/mod.rs
++++ b/crypto/tn-core/src/governed/reader/mod.rs
+@@ -438,10 +438,7 @@
+                     }
+                 }
+             }
+-            let fields = decrypted_fields(&bytes, block, object.bound())?;
+-            if let Some(index) = self.indexes.get(name) {
+-                verify_field_hashes(index, &fields, block)?;
+-            }
++            let fields = decrypted_fields(&bytes, block, object.bound(), self.indexes.get(name))?;
+             if cacheable {
+                 let cached = Arc::new(VerifiedManifest { fields: fields.clone(), bytes: bytes.clone() });
+                 self.manifests.lock().map_err(|_| invalid("manifest cache lock poisoned"))?
+@@ -457,35 +454,34 @@
+ 
+ /// Parse decrypted group bytes. A bound object's digests cover these exact bytes,
+ /// so they must also be the one canonical encoding of what they say.
+-fn decrypted_fields(bytes: &[u8], block: &GroupBlock, bound: bool) -> Result<Map<String, Value>> {
++fn decrypted_fields(
++    bytes: &[u8], block: &GroupBlock, bound: bool, index: Option<&Hmac<Sha256>>,
++) -> Result<Map<String, Value>> {
+     #[cfg(test)]
+     DECRYPTED_GROUP_PARSES.with(|n| n.set(n.get() + 1));
+     let source = std::str::from_utf8(bytes).map_err(|_| invalid("opened group must be UTF-8 JSON"))?;
+-    let value = parse_json(source)?;
+-    if bound && canonical_bytes(&value)? != bytes {
+-        return Err(invalid("a bound group's plaintext must be canonical JSON"));
+-    }
+-    let Value::Object(fields) = value else {
++    let Value::Object(fields) = parse_json(source)? else {
+         return Err(invalid("opened group must be a JSON object"));
+     };
+     if fields.len() != block.field_hashes.len()
+-        || !fields.keys().all(|f| block.field_hashes.contains_key(f))
++        || !fields.keys().all(|field| block.field_hashes.contains_key(field))
+     {
+         return Err(invalid("opened fields must match the group's signed field names"));
+     }
++    if bound || index.is_some() {
++        let canonical = crate::canonical::canonical_object_fields(&fields, |field, encoded| {
++            if let Some(index) = index {
++                let recomputed = crate::indexing::index_token_canonical_with_template(index, field, encoded)?;
++                let signed = &block.field_hashes[field];
++                if !bool::from(recomputed.as_bytes().ct_eq(signed.as_bytes())) {
++                    return Err(invalid(format!("opened {field:?} does not match its signed field hash")));
++                }
++            }
++            Ok(())
++        })?;
++        if bound && canonical != bytes {
++            return Err(invalid("a bound group's plaintext must be canonical JSON"));
++        }
++    }
+     Ok(fields)
+ }
+-
+-/// Recompute each opened field's hash under the group's index key. The writer
+-/// computed them from these values, so a value that differs is refused.
+-fn verify_field_hashes(index: &Hmac<Sha256>, fields: &Map<String, Value>, block: &GroupBlock) -> Result<()> {
+-    for (field, value) in fields {
+-        let recomputed = crate::indexing::index_token_with_template(index, field, value)?;
+-        // `decrypted_fields` already matched the opened names to the signed ones.
+-        let signed = &block.field_hashes[field];
+-        if !bool::from(recomputed.as_bytes().ct_eq(signed.as_bytes())) {
+-            return Err(invalid(format!("opened {field:?} does not match its signed field hash")));
+-        }
+-    }
+-    Ok(())
+-}

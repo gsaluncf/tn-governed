@@ -1,0 +1,8 @@
+{
+  "distribution": "tn-proto",
+  "version": "2026.9.13b1+policy.1",
+  "wheel_sha256": "799dbb899c5bdd08c6915ab3d3c1d945847b60fec076d6255ca2250d0e8642ed",
+  "install": {
+    "native_module_sha256": "74650901332759418fdde5f72ad0554fad48ee5612bdc00b59bef20ec621f304"
+  }
+}

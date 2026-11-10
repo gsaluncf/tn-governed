@@ -1,0 +1,48 @@
+//! Combined PyO3 extension for the single `tn-proto` wheel.
+//!
+//! Historically the Python package depended on two separately-published
+//! Rust wheels (`tn-core` exposing `tn_core._core`, `tn-btn` exposing
+//! `tn_btn._core`). They always shipped on the same version axis, so we
+//! fold the native pieces into one extension here: `tn._native` with `core`,
+//! `governed`, `btn`, and `hibe` submodules. One `pip install tn-proto` carries
+//! the Rust governed workflow, event runtime, and cipher bindings in one wheel.
+
+use pyo3::prelude::*;
+use pyo3::types::PyModule;
+
+#[pymodule]
+#[pyo3(name = "_native")]
+fn native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // core submodule = former tn_core._core
+    let core = PyModule::new(py, "core")?;
+    tn_core_py::populate(py, &core)?;
+    m.add_submodule(&core)?;
+
+    let governed = PyModule::new(py, "governed")?;
+    tn_core_py::governed::populate(py, &governed)?;
+    m.add_submodule(&governed)?;
+
+    // btn submodule = former tn_btn._core
+    let btn = PyModule::new(py, "btn")?;
+    tn_btn_py::populate(&btn)?;
+    m.add_submodule(&btn)?;
+
+    // hibe submodule: BBG HIBE cipher core (cipher: hibe groups)
+    let hibe = PyModule::new(py, "hibe")?;
+    tn_hibe_py::populate(&hibe)?;
+    m.add_submodule(&hibe)?;
+
+    // PyO3 only wires attribute access for submodules; register them (and
+    // the nested `core.admin`) in sys.modules so explicit imports like
+    // `from tn._native.core import Runtime` and
+    // `from tn._native.core.admin import reduce` resolve.
+    let modules = py.import("sys")?.getattr("modules")?;
+    modules.set_item("tn._native.core", &core)?;
+    modules.set_item("tn._native.governed", &governed)?;
+    modules.set_item("tn._native.btn", &btn)?;
+    modules.set_item("tn._native.hibe", &hibe)?;
+    if let Ok(admin) = core.getattr("admin") {
+        modules.set_item("tn._native.core.admin", &admin)?;
+    }
+    Ok(())
+}

@@ -1,0 +1,280 @@
+"""Package compilation verbs — publisher-side.
+
+compile_enrolment(cfg, group, peer_did)  - JWE: tell peer how to decrypt
+emit_to_outbox(cfg, pkg) - write to <yaml_dir>/outbox/
+
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import io
+import json
+import logging
+import zipfile
+from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+from ._keystore_backend import atomic_write_bytes
+from .cipher import JWEGroupCipher
+from .config import LoadedConfig
+from .conventions import outbox_dir, tnpkg_filename
+from .enrollment import EnrollmentStore
+from .key_binding import EnrollmentResponseV1
+from .packaging import Package, _canonical_bytes, sign
+from .tnpkg import TnpkgManifest, sign_manifest_with_body, verify_manifest_body_index
+from .trust import AcceptedOffer, TrustError, TrustReason
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _signing_key(cfg: LoadedConfig):
+    """Return the device's Ed25519PrivateKey for signing packages."""
+    return cfg.device.signing_key()
+
+
+def compile_enrolment(
+    cfg: LoadedConfig,
+    group: str,
+    peer_did: str,
+    *,
+    accepted_offer: AcceptedOffer,
+    ttl: timedelta = timedelta(minutes=10),
+) -> Package:
+    """Build and sign an `enrolment` package addressed to peer_did.
+
+    Raises RuntimeError with a pointed message if the group isn't JWE or
+    this party isn't the publisher.
+    """
+    if group not in cfg.groups:
+        raise RuntimeError(
+            f"compile_enrolment: group {group!r} is not in this ceremony "
+            f"(known groups: {list(cfg.groups)}). Add it with "
+            f"admin.ensure_group(cfg, {group!r}, cipher='jwe') first."
+        )
+    gcfg = cfg.groups[group]
+    if not isinstance(gcfg.cipher, JWEGroupCipher):
+        raise RuntimeError(
+            f"compile_enrolment: group {group!r} uses cipher "
+            f"{gcfg.cipher.name!r}, but enrolment packages are JWE-only. "
+            f"For btn groups use tn.admin_add_recipient + compile_kit_bundle."
+        )
+    sender_pub = gcfg.cipher.sender_pub()
+    if not sender_pub:
+        raise RuntimeError(
+            f"compile_enrolment: group {group!r} has no sender_pub in the "
+            f"JWE cipher — this party isn't the publisher. Only the "
+            f"ceremony creator can compile enrolment packages."
+        )
+    if not isinstance(ttl, timedelta) or ttl <= timedelta(0):
+        raise TrustError(TrustReason.STATEMENT_INVALID, "enrollment response ttl must be positive")
+    issued_at = datetime.now(timezone.utc)
+    accepted = EnrollmentStore(cfg, cfg.device).require_accepted_offer(
+        accepted_offer,
+        now=issued_at,
+    )
+    principal = accepted.binding.principal
+    if (
+        principal.did != peer_did
+        or principal.audience_did != cfg.device.device_identity
+        or principal.ceremony_id != cfg.ceremony_id
+        or principal.group != group
+    ):
+        raise TrustError(
+            TrustReason.SCOPE_MISMATCH,
+            "accepted offer does not match response reader, publisher, ceremony, and group",
+        )
+    response = EnrollmentResponseV1(
+        version=1,
+        kind="tn-enrollment-response",
+        publisher_did=cfg.device.device_identity,
+        reader_did=peer_did,
+        ceremony_id=cfg.ceremony_id,
+        group=group,
+        accepted_offer_digest=accepted.offer_digest,
+        x25519_public_key_sha256=accepted.binding.public_key_sha256,
+        group_epoch=gcfg.index_epoch,
+        issued_at=issued_at,
+        expires_at=issued_at + ttl,
+        signature_b64="",
+    ).sign(cfg.device)
+    pkg = Package(
+        package_version=1,
+        package_kind="enrolment",
+        ceremony_id=cfg.ceremony_id,
+        group=group,
+        group_epoch=gcfg.index_epoch,
+        device_identity=cfg.device.device_identity,
+        signer_verify_pub_b64="",
+        recipient_identity=peer_did,
+        payload={
+            "publisher_identity": cfg.device.device_identity,
+            "sender_pub_b64": base64.b64encode(sender_pub).decode("ascii"),
+            "enrollment_response": response._wire_value(include_signature=True),
+        },
+        compiled_at=_now_iso(),
+    )
+    signed_pkg = sign(pkg, _signing_key(cfg))
+
+    # Attested event: an enrolment package was successfully compiled.
+    # Downstream observers (vault, dashboard) use this to track offer state.
+    # Uses _canonical_bytes() — the deterministic serialization that covers
+    # every field except sig_b64 — so the hash matches what the recipient
+    # verifies against.
+    from . import logger as _lg
+
+    if _lg._runtime is not None:
+        try:
+            pkg_sha = "sha256:" + hashlib.sha256(_canonical_bytes(signed_pkg)).hexdigest()
+            compiled_at = datetime.now(timezone.utc).isoformat()
+            _lg._require_init().emit(
+                "info",
+                "tn.enrolment.compiled",
+                {
+                    "group": group,
+                    "peer_identity": peer_did,
+                    "package_sha256": pkg_sha,
+                    "compiled_at": compiled_at,
+                },
+            )
+        except Exception as emit_err:  # noqa: BLE001 — preserve broad swallow; see body of handler
+            logging.getLogger("tn.compile").warning(
+                "enrolment.compiled attestation failed for group=%s to_did=%s: %s",
+                group,
+                peer_did,
+                emit_err,
+            )
+
+    return signed_pkg
+
+
+def _build_outbox_artifact(cfg: LoadedConfig, pkg: Package) -> tuple[Path, bytes]:
+    """Build exact target-aware `.tnpkg` bytes without publishing them.
+
+    The target ceremony and group come from the signed inner package. This
+    matters for reader-generated offers: the reader's local bootstrap
+    ceremony is not the publisher ceremony it is asking to join.
+    """
+    out = outbox_dir(cfg.yaml_path) / tnpkg_filename(
+        pkg.recipient_identity,
+        pkg.package_kind,
+        pkg.package_version,
+    )
+    body = {
+        "body/package.json": (
+            json.dumps(asdict(pkg), sort_keys=True, indent=2) + "\n"
+        ).encode("utf-8")
+    }
+    manifest = TnpkgManifest(
+        kind=pkg.package_kind,
+        publisher_identity=cfg.device.device_identity,
+        ceremony_id=pkg.ceremony_id,
+        as_of=_now_iso(),
+        scope=pkg.group,
+        recipient_identity=pkg.recipient_identity,
+    )
+    sign_manifest_with_body(manifest, body, cfg.device.signing_key())
+    verify_manifest_body_index(manifest, body, require_index=True)
+    manifest_bytes = (
+        json.dumps(manifest.to_dict(), sort_keys=True, indent=2) + "\n"
+    ).encode("utf-8")
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("manifest.json", manifest_bytes)
+        for name in sorted(body):
+            archive.writestr(name, body[name])
+    return out, buffer.getvalue()
+
+
+def emit_to_outbox(cfg: LoadedConfig, pkg: Package) -> Path:
+    """Atomically publish a target-aware package to the conventional outbox."""
+    out, artifact = _build_outbox_artifact(cfg, pkg)
+    atomic_write_bytes(out, artifact)
+    return out
+
+
+# --------------------------------------------------------------------------
+# compile_kit_bundle: package a keystore's btn reader kits into a .tnpkg
+# (a zip archive) that the Chrome extension, the tn-js CLI, and Python's
+# own inbox accepter can all consume. Cross-language parity with
+# tn_proto/ts-sdk/src/compile.ts::compileKitBundle.
+# --------------------------------------------------------------------------
+
+
+def compile_kit_bundle(
+    keystore_dir: Path | str | None = None,
+    *,
+    out_path: Path | str,
+    cfg: LoadedConfig | None = None,
+    yaml_path: Path | str | None = None,
+    groups: list[str] | None = None,
+    label: str | None = None,
+    note: str | None = None,
+    full: bool = False,
+    confirm_includes_secrets: bool = False,
+) -> Path:
+    """Build a `.tnpkg` archive containing the keystore's reader kits.
+
+    This is now a thin wrapper around ``tn.export(kind="kit_bundle")`` /
+    ``tn.export(kind="full_keystore")`` — every produced archive carries
+    the universal signed manifest header. The kits themselves still live
+    inside the zip body at ``body/<group>.btn.mykit`` so chrome-ext /
+    tn-js consumers can scan them.
+
+    Provide either ``keystore_dir`` or ``yaml_path`` (or an already
+    loaded ``cfg``). The body shape is the same as before; the manifest
+    header is new.
+    """
+    if full and not confirm_includes_secrets:
+        raise ValueError(
+            "compile_kit_bundle(full=True) writes the publisher's raw private keys "
+            "(local.private + index_master.key) into the zip. This is intended for "
+            "publisher-to-self backup only. Pass confirm_includes_secrets=True to "
+            "acknowledge."
+        )
+
+    if cfg is None and yaml_path is not None:
+        from .config import load
+
+        cfg = load(Path(yaml_path))
+    resolved_keystore = (
+        Path(keystore_dir).resolve()
+        if keystore_dir is not None
+        else (Path(cfg.keystore).resolve() if cfg is not None else None)
+    )
+    if resolved_keystore is None:
+        raise ValueError("compile_kit_bundle: provide keystore_dir, cfg, or yaml_path")
+    if not resolved_keystore.is_dir():
+        raise FileNotFoundError(f"keystore directory not found: {resolved_keystore}")
+
+    if cfg is None:
+        # The new manifest needs an Ed25519 signer. Synthesize a cfg from the
+        # keystore so callers that pass keystore_dir without yaml_path still
+        # work (this is the path tests like test_compile_kit_bundle_*
+        # exercise, where the runtime is closed before the call).
+        from .config import load
+
+        sibling_yaml = resolved_keystore.parent / "tn.yaml"
+        if sibling_yaml.exists():
+            cfg = load(sibling_yaml)
+        else:
+            raise ValueError(
+                "compile_kit_bundle: cannot locate a tn.yaml next to the "
+                f"keystore at {resolved_keystore}. Pass cfg=... or yaml_path=... "
+                "so the manifest can be signed."
+            )
+
+    from .export import export as _export
+
+    return _export(
+        out_path,
+        kind=("full_keystore" if full else "kit_bundle"),
+        cfg=cfg,
+        keystore=resolved_keystore,
+        groups=groups,
+        confirm_includes_secrets=confirm_includes_secrets,
+    )
