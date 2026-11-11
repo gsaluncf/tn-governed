@@ -216,7 +216,21 @@ class Context:
         return [*sorted(revisions), *records]
 
     def _action_support(self, actions, records):
-        """Check required actions and return the native receipts needed to inspect them."""
+        """Check required actions and return the native receipts needed to inspect them.
+
+        With the shared-facts prototype on, an identical action list is checked once per
+        operation: ``records`` lives for one operation, so the result never outlives it.
+        """
+        shared = getattr(self, "share_manifest_facts", False)
+        key = ("action-support", tuple(actions))
+        if shared and key in records:
+            return list(records[key])
+        support = self._check_action_support(actions, records)
+        if shared:
+            records[key] = tuple(support)
+        return support
+
+    def _check_action_support(self, actions, records):
         support = []
         for identity in actions:
             decision = self._record(identity, records)

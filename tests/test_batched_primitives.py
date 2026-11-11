@@ -372,3 +372,74 @@ def test_source_fields_require_their_actual_query_permit(context):
     other = context._decision(request, "other-query")
     with pytest.raises(EvidenceError, match="this query's signed permit"):
         context.originate(10, policy, request=request, decision_id=other, call_id="query", source=source(0))
+
+
+@pytest.mark.parametrize("contents", [
+    ["Ada", "Grace", "Ada"], [7, 8, 7], [0.125, -0.0, 1.25], [Decimal("1.2500"), Decimal("-0.00")], ["solo"],
+])
+def test_shared_manifest_facts_read_as_the_per_cell_policy_manifest(context, contents):
+    per_cell = publish(context, contents)
+    context.share_manifest_facts = True
+    shared = publish(context, contents)
+    raw = context._metadata_read(shared[0])[0].get("manifest", group="evidence")
+    assert raw["schema"] == "tn.primitive-policy-columns.v1"
+    assert raw["shared"]["declared"]["kind"] and raw["shared"]["declared"]["fingerprint_scheme"]
+    assert len(raw["fields"]) == len(contents)
+    assert all(len(column) == len(contents) for column in raw["facts"].values())
+    assert "kind" not in raw["facts"] and "fingerprint_scheme" not in raw["facts"]
+    for left, right in zip(per_cell, shared, strict=True):
+        _, expected, expected_claims = context._metadata(left)
+        _, actual, actual_claims = context._metadata(right)
+        assert actual["declared"] == expected["declared"]
+        assert actual["claims"] == expected["claims"] and actual_claims == expected_claims
+        assert len(actual["actions"]) == len(expected["actions"])
+        assert type(right) is type(left)
+
+
+def test_shared_manifest_still_refuses_a_cell_read_as_another_type(context):
+    context.share_manifest_facts = True
+    names = publish(context, ["Ada", "Grace"])
+    forged = TNNumeric(names[0].reference, None, None, metadata_provider=context.string_metadata,
+                       publication=names[0].publication)
+    with pytest.raises(EvidenceError):
+        context._metadata_many([forged])
+
+
+def test_shared_manifest_still_refuses_a_field_it_does_not_sign(context):
+    context.share_manifest_facts = True
+    names = publish(context, ["Ada", "Grace"])
+    missing = TNString(ValueReference(names[0].reference.object_id, "value_99", "values"), None, None,
+                       metadata_provider=context.string_metadata, publication=names[0].publication)
+    with pytest.raises(EvidenceError):
+        context._metadata_many([missing])
+
+
+@pytest.mark.parametrize("contents", [
+    ["Ada", "Grace", "Ada"], [7, 8, 7], [0.125, -0.0, 1.25], [Decimal("1.2500"), Decimal("-0.00"), Decimal("2.3750")],
+])
+def test_column_manifest_round_trips_values_and_operations(context, contents):
+    context.share_manifest_facts = True
+    values = publish(context, contents)
+    for value, expected in zip(values, contents, strict=True):
+        _, binding, _ = context._metadata(value)
+        assert set(binding) == {"declared", "claims", "actions"}
+        actual = value.reveal(context, destination="console")
+        assert type(actual) is type(expected) and actual == expected
+        if isinstance(expected, Decimal):
+            assert actual.as_tuple() == expected.as_tuple()
+    with context:
+        combined = values[0] + values[1]
+    assert combined.reveal(context, destination="console") == contents[0] + contents[1]
+
+
+def test_column_manifest_refuses_columns_that_do_not_match_its_fields():
+    from tn_governed.values.manifests import signed_manifest
+
+    class Signed:
+        def get(self, name, group):
+            return {"schema": "tn.primitive-policy-columns.v1",
+                    "shared": {"declared": {"kind": "str"}, "claims": [], "actions": []},
+                    "fields": ["value_0", "value_1"], "facts": {"fingerprint": ["sha256:" + "0" * 64]}}
+
+    with pytest.raises(EvidenceError):
+        signed_manifest(Signed())

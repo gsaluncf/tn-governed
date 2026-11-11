@@ -35,6 +35,8 @@ def native_timeline(directory):
     if not path.is_file():
         return None
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+    if not rows:
+        return None
     stamps = {}
     for row in rows:
         stamps.setdefault(row["kind"], []).append(_instant(row["timestamp"]))
@@ -86,6 +88,44 @@ def cost_split(timings, turns):
             "inference_seconds": inference}
 
 
+def _log_seconds(stamp):
+    minutes, seconds, millis, micros = map(int, stamp.split("."))
+    return 60 * minutes + seconds + millis / 1e3 + micros / 1e6
+
+
+def server_seconds(directory):
+    """Seconds the TN model server spent on the governed request, from its own log."""
+    path = Path(directory) / "native-model/server.stderr.log"
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8", errors="replace")
+    found = [re.search(r'^(\d+\.\d+\.\d+\.\d+) I srv  server_tn_ha: TN_EVENT \{"event":"%s"' % event,
+                       text, re.M) for event in ("route_received", "http_returned")]
+    if not all(found):
+        return None
+    received, returned = (_log_seconds(match.group(1)) for match in found)
+    return returned - received
+
+
+def cost_breakdown(mode, timings, turns, server):
+    """Each side's own code apart from inference, the network to the model server, and catalog calls.
+
+    Code is the data stages, the TN runtime's work inside the model server, and the client's work
+    outside its wait for the model server. Network is that wait minus the server's own time.
+    """
+    waited = timings.get("generation_model_http")
+    if waited is None or (mode == "tn" and server is None):
+        return None
+    data = sum(timings.get(name) or 0 for name in DATA_STAGES)
+    inference = (turns["prompt_seconds"] + turns["decode_seconds"]) if turns else 0.0
+    in_server = server - inference if mode == "tn" else 0.0
+    client = (timings.get("generation") or 0) - waited
+    return {"data_seconds": data, "model_server_seconds": in_server, "client_seconds": client,
+            "code_seconds": data + in_server + client, "inference_seconds": inference,
+            "network_seconds": waited - (server if mode == "tn" else inference),
+            "catalog_seconds": sum(value for key, value in timings.items() if key.endswith("_catalog"))}
+
+
 def reduce_case(case):
     summary = case.get("summary", {})
     timings = summary.get("timings_seconds", {})
@@ -100,6 +140,8 @@ def reduce_case(case):
                        if k != "source_policy_refs"},
         "model": turns,
         "cost": cost_split(timings, turns),
+        "breakdown": cost_breakdown(case["mode"], timings, turns,
+                                    server_seconds(directory) if case["mode"] == "tn" else None),
         "native_timeline": ((case.get("native_timeline") or native_timeline(directory))
                             if case["mode"] == "tn" else None),
         "peak_rss_bytes": case.get("peak_rss_bytes"),

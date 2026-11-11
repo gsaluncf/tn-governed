@@ -7,7 +7,9 @@ Unity itself does not acquire a TN signing key or decrypt business content.
 
 from dataclasses import dataclass
 from collections import OrderedDict
+import contextlib
 import hashlib
+import os
 import threading
 import io
 from pathlib import Path
@@ -15,12 +17,12 @@ from urllib.request import url2pathname
 from urllib.parse import urlparse
 
 import tn
-from tn_polars.registry import UnityCatalogRegistry, write_edition_bundle
+from tn_polars.registry import UnityCatalogRegistry, deferred_sync, write_edition_bundle
 
 from tn_governed.publications import write_once
 from tn_governed.unity import CatalogTrust, FinanceEditionRequest, resolve_finance_editions
 
-from .primitives import OPERATIONS, VALUE_TYPE
+from .primitives import OPERATIONS, VALUE_TYPE, columns_enabled
 from .runtime import Assessment
 from .string import OperationDenied
 
@@ -398,12 +400,16 @@ class UnityGovernance:
 
     def publish_query_editions(self, query_id, publications, *, directory, application, purpose):
         infos, registrations = [], []
-        for index, (value, policy, source) in enumerate(publications):
-            bundle = Path(directory) / str(index)
-            info = self.publish_edition(value, policy=policy, source=source, directory=bundle,
-                                        application=application, purpose=purpose, register=False)
-            infos.append(info)
-            registrations.append((info["dataset"], info["edition"], info["record_id"], bundle))
+        # With the shared-facts switch on, a query's bundles become durable together.
+        batch = (deferred_sync() if columns_enabled() or os.environ.get("TN_SHARE_MANIFEST_FACTS") == "1"
+                 else contextlib.nullcontext())
+        with batch:
+            for index, (value, policy, source) in enumerate(publications):
+                bundle = Path(directory) / str(index)
+                info = self.publish_edition(value, policy=policy, source=source, directory=bundle,
+                                            application=application, purpose=purpose, register=False)
+                infos.append(info)
+                registrations.append((info["dataset"], info["edition"], info["record_id"], bundle))
         transports = self.registry.register_editions(query_id, registrations, directory, create_namespace=False)
         return tuple(zip(infos, transports, strict=True))
 

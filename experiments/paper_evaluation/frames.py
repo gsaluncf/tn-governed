@@ -29,14 +29,18 @@ from tn_governed.values.evidence import EvidenceError
 from tn_governed.values.numeric import TNNumeric
 from tn_governed.values.numeric_codec import KINDS
 from .numeric_profile import numeric_profile, polars_dtype, build_frame, check_fixed_plan_range
-from tn_governed.values.primitives import Context, OPERATIONS
-from tn_governed.values.sql import GovernedRows
+from tn_governed.values.primitives import ColumnBatch, Context, OPERATIONS
+from tn_governed.values.sql import ColumnRows, GovernedRows
 from tn_governed.values.string import OperationDenied, TNString, _active
 
 
 OPERATION = "dataframe_calculate"
 FRAME_OPERATIONS = ("load", "filter", "sort", "with_columns", "select", "release")
 ARTIFACT_NAMES = ("compiled_policy.json", "profile.json", "policy.wasm", "data.json")
+# Compiled evaluator code, keyed by policy revision and exact Wasm bytes. Modules are compiled when
+# a policy is assigned; every use still verifies the signed artifact bytes before the lookup, and
+# each evaluator gets a fresh Wasmtime store and instance.
+EVALUATOR_MODULES = OpaModuleCache(max_entries=64, max_source_bytes=64 * 1024 * 1024)
 
 
 class DataframeGovernance(UnityGovernance):
@@ -60,7 +64,17 @@ class DataframeGovernance(UnityGovernance):
             rule = definition.setdefault("rule", {})
             rule["dataframe_numeric"] = profile
             rule["operations"] = sorted(set(rule.get("operations", OPERATIONS)) | {OPERATION})
-        return super().publish_assignment(directory, columns=columns, **kwargs)
+        assignment_id = super().publish_assignment(directory, columns=columns, **kwargs)
+        self._compile_evaluators(self.assignments[assignment_id], kwargs["application"])
+        return assignment_id
+
+    def _compile_evaluators(self, assignment, application):
+        """Build each assigned policy's signed evaluator artifacts and compiled module once."""
+        for field in assignment["columns"].values():
+            policy = self.policy_dag.select(field["revision"], field["scope"],
+                                            lambda revision: revision.writer == self.authority)
+            _, files = self._evaluator_artifacts(policy, application, field["rule"]["dataframe_numeric"])
+            EVALUATOR_MODULES.module_for(policy.revision_id, files["policy.wasm"])
 
     def _evaluator_artifacts(self, policy, application, profile):
         key = (policy.revision_id, application, json.dumps(profile, sort_keys=True))
@@ -155,7 +169,7 @@ def _checked_edition(context, data, column, use, module_cache, selected):
 
 
 def _select_policies(context, metadata, use):
-    module_cache = OpaModuleCache()
+    module_cache = EVALUATOR_MODULES
     sources = {"name": set(), "value": set()}
     selected, checked = {}, set()
     for index, (data, _, _) in enumerate(metadata):
@@ -182,6 +196,8 @@ def dataframe_calculate(context, rows):
     if isinstance(rows, GovernedRows):
         if not rows or rows.columns != ("name", "value"):
             raise TypeError("dataframe calculation requires governed name/value columns")
+        if isinstance(rows, ColumnRows) and context.column_batches:
+            return _calculate_columns(context, rows)
         values = rows.handles()
     else:
         rows = tuple(rows)
@@ -194,47 +210,122 @@ def dataframe_calculate(context, rows):
     try:
         use = tn.UseContext(context.application, context.purpose, OPERATION)
         policies, sources = _select_policies(context, metadata, use)
-        policies.validate_contracts(request)
-        profiles = [context.resolver.rules[p.revision_id]["dataframe_numeric"] for p in request.policies]
-        profile = profiles[0]
-        polars_dtype(profile)
-        if any(p != profile for p in profiles):
-            raise EvidenceError("contributing contracts declare conflicting numeric profiles")
-        expected_schema = {"name": "String", "value": profile["dtype"]}
-        if any(entry.dtypes != expected_schema for entry in policies._entries.values()):
-            raise EvidenceError("signed evaluator schema differs from the source assignment")
-        if any(binding["declared"]["kind"] != ("str" if i % 2 == 0 else profile["kind"])
-               for i, (_, binding, _) in enumerate(metadata)):
-            raise EvidenceError("input primitive kind differs from the signed dataframe profile")
+        profile = _profile(context, request, policies, (
+            ("name" if i % 2 == 0 else "value", binding["declared"]["kind"])
+            for i, (_, binding, _) in enumerate(metadata)))
         # All artifact verification and the OPA load decision precede this open.
         policies.decide("load", context.application, sources, set(), use)
         first_data, frame_rows = context._open_values(request, values, metadata=metadata,
                                                       _columns=("name", "value"))
-        loaded = build_frame(frame_rows, profile)
-        check_fixed_plan_range(loaded, profile)
-        lazy = loaded.lazy()
-        policies.pin(lazy)
-        first = next(iter(policies._entries.values()))
-        frame = GovernedLazyFrame(lazy, first.policy, {}, first.evaluator, sources=sources,
-            tn_boundary=TnBoundary(first_data, policies, use, "values", "rows"), ordinary_rows=True)
-        result = (frame.filter(pl.col("value") >= 0).sort("name")
-                  .with_columns((pl.col("value") + 250).alias("adjusted")))
-        result = result.select(pl.col("adjusted").sum().alias("amount"))
-        materialized, support = result._materialize()
-        policies.decide("release", "governed-runtime", result.sources, result.row_sources, use,
-                        aggregate_support=support)
-        amount = materialized.select("amount").item()
-        if type(amount) is not KINDS[profile["kind"]]:
-            raise TypeError("dataframe result changed the signed numeric kind")
-        if str(materialized.schema["amount"]) != profile["dtype"]:
-            raise TypeError("dataframe result changed the signed numeric storage type")
-        output = context.publish_value(amount, request=request, metadata=metadata, actions=(decision,))
-        context.frame_runs.append({"schema": "tn.paper-dataframe.v2", "source_row_count": len(rows),
-            "numeric_profile": profile, "policies": list(policies.revision_ids),
-            "output_schema": {"amount": str(materialized.schema["amount"])},
-            "output_reference": output.reference.to_dict()})
-        return output
+        return _compute_frame(context, request, metadata, decision, policies, sources, use,
+                              first_data, frame_rows, profile, len(rows))
     except Exception as exc:
         context._append("Failure", request, call_id,
             {"decision_id": decision, "error_type": type(exc).__name__})
         raise
+
+
+def _profile(context, request, policies, kinds):
+    """The contributing contracts' one numeric profile, after the schema and cell kind checks."""
+    policies.validate_contracts(request)
+    profiles = [context.resolver.rules[p.revision_id]["dataframe_numeric"] for p in request.policies]
+    profile = profiles[0]
+    polars_dtype(profile)
+    if any(p != profile for p in profiles):
+        raise EvidenceError("contributing contracts declare conflicting numeric profiles")
+    expected_schema = {"name": "String", "value": profile["dtype"]}
+    if any(entry.dtypes != expected_schema for entry in policies._entries.values()):
+        raise EvidenceError("signed evaluator schema differs from the source assignment")
+    if any(kind != ("str" if column == "name" else profile["kind"]) for column, kind in kinds):
+        raise EvidenceError("input primitive kind differs from the signed dataframe profile")
+    return profile
+
+
+def _first_use(rows):
+    """Each input publication with its column, in the order a row-by-row walk of the cells meets it."""
+    batches, overrides = rows.column_inputs()
+    marks = {batch.first_row for column in rows.columns for batch in batches[column]}
+    marks |= {row for row, _ in overrides} | {row + 1 for row, _ in overrides if row + 1 < len(rows)}
+    order, seen = [], set()
+    for row in sorted(marks):
+        for column in rows.columns:
+            source = overrides.get((row, column)) or rows.batch(row, column)
+            identity = source.object_id if isinstance(source, ColumnBatch) else source.reference.object_id
+            if identity not in seen:
+                seen.add(identity)
+                order.append((column, source))
+    return order
+
+
+def _calculate_columns(context, rows):
+    """``dataframe_calculate`` over admitted column batches: admission, selection and opening per batch."""
+    batches, overrides = rows.column_inputs()
+    order = _first_use(rows)
+    used = [source for _, source in order if isinstance(source, ColumnBatch)]
+    keys = sorted(overrides, key=lambda key: (key[0], rows.columns.index(key[1])))
+    cells = [overrides[key] for key in keys]
+    call_id = uuid4().hex
+    request, items, cell_items, decision = context._prepare_columns(OPERATION, used, cells, call_id)
+    try:
+        by_cell = {cell.reference.object_id: item for cell, item in zip(cells, cell_items, strict=True)}
+        metadata = [items[source.object_id][:3] if isinstance(source, ColumnBatch)
+                    else by_cell[source.reference.object_id] for _, source in order]
+        use = tn.UseContext(context.application, context.purpose, OPERATION)
+        sources, selected = {"name": set(), "value": set()}, {}
+        for (column, _), (data, _, _) in zip(order, metadata, strict=True):
+            edition = _checked_edition(context, data, column, use, EVALUATOR_MODULES, selected)
+            sources[column].add(root_name(edition["source_object_id"], column))
+        first, *others = selected.values()
+        policies = first.include_all(others)
+        kinds = [(column, source.kind) for column, source in order if isinstance(source, ColumnBatch)]
+        kinds += [(key[1], item[1]["declared"]["kind"]) for key, item in zip(keys, cell_items, strict=True)]
+        profile = _profile(context, request, policies, kinds)
+        # All artifact verification and the OPA load decision precede this open.
+        policies.decide("load", context.application, sources, set(), use)
+        frame_rows, first_data, opened = {column: [None] * len(rows) for column in rows.columns}, None, {}
+        for column, source in order:
+            if isinstance(source, ColumnBatch):
+                data, contents = context._open_batch(request, source, items[source.object_id])
+                frame_rows[column][source.first_row:source.first_row + source.size] = contents
+            else:
+                ((data, opened[id(source)]),) = context._open_values(request, [source])
+            first_data = data if first_data is None else first_data
+        for key, cell in zip(keys, cells, strict=True):
+            if id(cell) not in opened:
+                ((_, opened[id(cell)]),) = context._open_values(request, [cell])
+            frame_rows[key[1]][key[0]] = opened[id(cell)]
+        return _compute_frame(context, request, metadata, decision, policies, sources, use,
+                              first_data, frame_rows, profile, len(rows))
+    except Exception as exc:
+        context._append("Failure", request, call_id,
+            {"decision_id": decision, "error_type": type(exc).__name__})
+        raise
+
+
+def _compute_frame(context, request, metadata, decision, policies, sources, use, first_data, frame_rows,
+                   profile, row_count):
+    """Load the opened columns, run the fixed plan, release the sum, and publish it with its support."""
+    loaded = build_frame(frame_rows, profile)
+    check_fixed_plan_range(loaded, profile)
+    lazy = loaded.lazy()
+    policies.pin(lazy)
+    first = next(iter(policies._entries.values()))
+    frame = GovernedLazyFrame(lazy, first.policy, {}, first.evaluator, sources=sources,
+        tn_boundary=TnBoundary(first_data, policies, use, "values", "rows"), ordinary_rows=True)
+    result = (frame.filter(pl.col("value") >= 0).sort("name")
+              .with_columns((pl.col("value") + 250).alias("adjusted")))
+    result = result.select(pl.col("adjusted").sum().alias("amount"))
+    materialized, support = result._materialize()
+    policies.decide("release", "governed-runtime", result.sources, result.row_sources, use,
+                    aggregate_support=support)
+    amount = materialized.select("amount").item()
+    if type(amount) is not KINDS[profile["kind"]]:
+        raise TypeError("dataframe result changed the signed numeric kind")
+    if str(materialized.schema["amount"]) != profile["dtype"]:
+        raise TypeError("dataframe result changed the signed numeric storage type")
+    output = context.publish_value(amount, request=request, metadata=metadata, actions=(decision,))
+    context.frame_runs.append({"schema": "tn.paper-dataframe.v2", "source_row_count": row_count,
+        "numeric_profile": profile, "policies": list(policies.revision_ids),
+        "output_schema": {"amount": str(materialized.schema["amount"])},
+        "output_reference": output.reference.to_dict()})
+    return output

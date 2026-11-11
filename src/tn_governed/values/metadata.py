@@ -38,7 +38,8 @@ def numeric_equality_fingerprint(content):
 
 def describe(content):
     identity = fingerprint(content)
-    if type(content) is str or equality_key(content) is not None:
+    # An int always has an equality key; skip computing it.
+    if type(content) is str or type(content) is int or equality_key(content) is not None:
         _PROCESS_HASHES[identity] = hash(content)
     facts = {
         "kind": type(content).__name__,
@@ -52,6 +53,30 @@ def describe(content):
     else:
         facts["equality_fingerprint"] = numeric_equality_fingerprint(content)
     return facts
+
+
+_SCHEME = "tn.primitive.content.v1"
+
+
+def column_facts(contents):
+    """``describe`` of every cell, as columns in its key order; None outside str and int columns."""
+    kinds = set(map(type, contents))
+    if kinds == {str}:
+        prints = ["sha256:" + hashlib.sha256(b"str\x00" + content.encode("utf-8", "surrogatepass")).hexdigest()
+                  for content in contents]
+        _PROCESS_HASHES.update(zip(prints, map(hash, contents)))
+        size = len(contents)
+        return {"kind": ["str"] * size, "fingerprint": prints, "fingerprint_scheme": [_SCHEME] * size,
+                "length": list(map(len, contents))}
+    if kinds == {int}:
+        prints = ["sha256:" + hashlib.sha256(b"int\x00" + str(content).encode("ascii")).hexdigest()
+                  for content in contents]
+        _PROCESS_HASHES.update(zip(prints, map(hash, contents)))
+        size = len(contents)
+        return {"kind": ["int"] * size, "fingerprint": prints, "fingerprint_scheme": [_SCHEME] * size,
+                "bit_length": [content.bit_length() for content in contents],
+                "bit_count": [content.bit_count() for content in contents]}
+    return None
 
 
 class DeclaredMetadata:

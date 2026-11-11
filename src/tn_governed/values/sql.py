@@ -5,6 +5,7 @@ column projections retain their primitive publication format; other queries
 produce a governed relation with an indexed schema and the policies assigned to the columns read.
 """
 
+from bisect import bisect_right
 from dataclasses import dataclass
 from collections.abc import Sequence
 import hashlib
@@ -100,6 +101,57 @@ class GovernedRows(Sequence):
         return GovernedRows(self.columns, rows)
 
 
+class ColumnRows(GovernedRows):
+    """Admitted source cells held as column batches; a row's wrappers are built only when it is read."""
+
+    def __init__(self, columns, batches, count, overrides=None):
+        self.columns, self._count = tuple(columns), count
+        self._batches = {column: tuple(batches[column]) for column in self.columns}
+        self._starts = {column: [batch.first_row for batch in self._batches[column]] for column in self.columns}
+        self._overrides, self._cells = dict(overrides or {}), {}
+
+    def __len__(self):
+        return self._count
+
+    def batch(self, row, column):
+        batches = self._batches[column]
+        return batches[bisect_right(self._starts[column], row) - 1]
+
+    def _cell(self, row, column):
+        if (row, column) in self._overrides:
+            return self._overrides[row, column]
+        if (row, column) not in self._cells:
+            batch = self.batch(row, column)
+            self._cells[row, column] = batch.handle(row - batch.first_row).materialize()
+        return self._cells[row, column]
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return [self[row] for row in range(*index.indices(self._count))]
+        if index < 0:
+            index += self._count
+        if not 0 <= index < self._count:
+            raise IndexError("governed row index out of range")
+        return tuple(self._cell(index, column) for column in self.columns)
+
+    def handles(self):
+        return tuple(self._overrides.get((row, column)) or self.batch(row, column).handle(
+                         row - self.batch(row, column).first_row)
+                     for row in range(self._count) for column in self.columns)
+
+    def with_row(self, index, row):
+        overrides = dict(self._overrides)
+        for column, value in zip(self.columns, row, strict=True):
+            batch = self.batch(index, column)
+            if value.reference != batch.reference(index - batch.first_row):
+                overrides[index, column] = value
+        return ColumnRows(self.columns, self._batches, self._count, overrides)
+
+    def column_inputs(self):
+        """The column batches and the cells that replace batch cells, by (row, column)."""
+        return self._batches, dict(self._overrides)
+
+
 class GovernedCursor:
     def __init__(self, columns, rows):
         self.description = tuple((name, None, None, None, None, None, None) for name in columns)
@@ -116,6 +168,9 @@ class GovernedCursor:
         return list(self.fetch_batches())
 
     def fetch_batches(self):
+        if isinstance(self._rows, ColumnRows) and self._index == 0:
+            self._index = len(self._rows)
+            return self._rows
         rows = self._rows[self._index:]
         self._index = len(self._rows)
         return GovernedRows([column[0] for column in self.description], rows)
@@ -134,6 +189,7 @@ class GovernedSQL:
         self.gateway, self.consumer, self.edition_publisher = gateway, consumer, edition_publisher
         self.directory = Path(directory)
         self.executions, self.editions, self.published_values = [], [], []
+        self.published_batches = []
         self.edition_transports = {}
 
     def table(self, name):
@@ -208,6 +264,41 @@ class GovernedSQL:
         return self.gateway._source_fields(fields, facts, policy, request, decision_id, call_id,
                                            _handles=True)
 
+    def _direct_columns(self, raw_rows, columns, table, identity, resolution, request, decision, query_id):
+        """Publish, register and admit each column of each batch as one object."""
+        gateway = self.gateway
+        batches, publications = {column: [] for column in columns}, []
+        for start in range(0, len(raw_rows), self.batch_size):
+            block = raw_rows[start:start + self.batch_size]
+            for column_index, column in enumerate(columns):
+                contents = [row[column_index] for row in block]
+                expected = SQL_TYPES.get(resolution.columns[column]["kind"])
+                if expected is None or set(map(type, contents)) != {expected}:
+                    raise TypeError("SQL type differs from its signed column assignment")
+                policy = resolution.policies[column]
+                batch = gateway.originate_column(contents, policy, first_row=start, request=request,
+                                                 decision_id=decision, call_id=query_id)
+                source = {"table": table, "column": column, "row": start, "query_id": query_id,
+                          "assignment_id": resolution.assignment_id,
+                          "snapshot_sha256": identity["snapshot_sha256"]}
+                publications.append((batch.publication.object, policy, source))
+                batches[column].append(batch)
+        editions = self.edition_publisher.publish_query_editions(query_id, publications,
+            directory=self.directory / query_id, application=self.consumer.application,
+            purpose=self.consumer.purpose)
+        for info, transport in editions:
+            self.consumer.resolver.admit_edition(info, self.consumer, transport=transport)
+            self.editions.append(info)
+            self.edition_transports[info["record_id"]] = transport
+        admitted = iter(self.consumer.admit_columns(batch for start_batches in zip(*batches.values())
+                                                    for batch in start_batches))
+        ordered = {column: [] for column in columns}
+        for start_batches in zip(*batches.values()):
+            for column in columns:
+                ordered[column].append(next(admitted))
+        self.published_batches.extend(batch for column in columns for batch in ordered[column])
+        return GovernedCursor(columns, ColumnRows(columns, ordered, len(raw_rows)))
+
     def _execute_direct(self, sql, parameters, prepared):
         match = SELECT.fullmatch(sql)
         columns, table, limit = match.groups()
@@ -237,6 +328,10 @@ class GovernedSQL:
             self.consumer.resolver.resolve(table, columns, actor=self.consumer.actor,
                 application=self.consumer.application, purpose=self.consumer.purpose, expected_source=identity,
                 packet=resolution.packet)
+            if (getattr(gateway, "column_batches", False) and getattr(self.consumer, "column_batches", False) and raw_rows
+                    and all(resolution.columns[column]["kind"] in ("str", "int") for column in columns)):
+                return self._direct_columns(raw_rows, columns, table, identity, resolution, request, decision,
+                                            query_id)
             rows = [[None] * len(columns) for _ in raw_rows]
             publications, handles, positions = [], [], []
             for start in range(0, len(raw_rows), self.batch_size):

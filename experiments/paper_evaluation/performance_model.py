@@ -101,6 +101,8 @@ def ordinary_server(directory, *, binary, model, port, startup_timeout=180, gpu_
         "--cache-reuse",
         "0",
         "--no-cache-idle-slots",
+        "--cache-ram",
+        "0",
         "--n-gpu-layers",
         str(gpu_layers),
     ]
@@ -211,16 +213,19 @@ def ordinary_server(directory, *, binary, model, port, startup_timeout=180, gpu_
                     process.wait(timeout=5)
 
 
-def _request_report(url, key, request_body, directory):
+def _request_report(url, key, request_body, directory, timings=None):
     """Send the plain model request and return the parsed response and its report HTML."""
     request = urllib.request.Request(
         url + "/v1/chat/completions",
         data=json.dumps(request_body).encode(),
         headers={"Content-Type": "application/json", "Authorization": "Bearer " + key},
     )
+    started = time.perf_counter()
     try:
         with urllib.request.urlopen(request, timeout=600) as response:
             raw = response.read()
+        if timings is not None:
+            timings["generation_model_http"] = time.perf_counter() - started
     except urllib.error.HTTPError as exc:
         directory.joinpath("model-response-error.bin").write_bytes(exc.read())
         raise
@@ -250,7 +255,7 @@ def _generate_plain(directory, result, *, binary, model, port, gpu_layers=ALL_GP
         timings["server_start"] = time.perf_counter() - startup
         generation = time.perf_counter()
         try:
-            body, report = _request_report(url, key, request_body, directory)
+            body, report = _request_report(url, key, request_body, directory, timings)
             visible = _inspected_text(report, directory)
         finally:
             # The TN interval runs from dispatch to a validated report in hand; so does this.
