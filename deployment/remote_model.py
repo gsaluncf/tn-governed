@@ -91,7 +91,7 @@ class RemoteHost:
             "--host", "127.0.0.1", "--port", str(port), "--ctx-size", "16384",
             "--parallel", "1", "--jinja", "--no-agent", "--no-ui",
             "--no-ui-mcp-proxy", "--no-context-shift", "--no-cache-prompt",
-            "--cache-reuse", "0", "--no-cache-idle-slots", "--n-gpu-layers",
+            "--cache-reuse", "0", "--no-cache-idle-slots", "--cache-ram", "0", "--n-gpu-layers",
             str(999 if gpu_layers is None else gpu_layers),
         ]
         environment = {"LLAMA_API_KEY": api_key}

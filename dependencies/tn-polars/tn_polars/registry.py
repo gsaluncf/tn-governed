@@ -11,7 +11,10 @@ import hashlib
 import os
 import re
 import tempfile
+import threading
+import time
 import urllib.error
+from contextlib import contextmanager
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -62,6 +65,14 @@ class RegistryEntry:
         return OpaWasmEvaluator(self.wasm_path, self.data_path)
 
 
+_CATALOG_CLOCK = [0.0]
+
+
+def catalog_request_seconds():
+    """Wall-clock seconds this process has spent in Unity Catalog requests."""
+    return _CATALOG_CLOCK[0]
+
+
 class UnityCatalogRegistry:
     """A thin client for the Unity Catalog REST API, OSS or hosted."""
 
@@ -76,6 +87,7 @@ class UnityCatalogRegistry:
             self.base_url + API + path,
             data=json.dumps(payload).encode("utf-8") if payload is not None else None,
             method=method, headers=self._headers(payload))
+        started = time.perf_counter()
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
                 return json.loads(response.read().decode("utf-8") or "{}")
@@ -85,6 +97,8 @@ class UnityCatalogRegistry:
                 f"Unity Catalog refused {method} {path}: HTTP {error.code}. "
                 f"The catalog is the authority for governed feeds, so this "
                 f"halts the operation. Server said: {detail}") from error
+        finally:
+            _CATALOG_CLOCK[0] += time.perf_counter() - started
 
     def _headers(self, payload):
         headers = {"Accept": "application/json"}
@@ -344,21 +358,67 @@ def _digest(identity):
     return identity[7:]
 
 
+_SYNC = threading.local()
+
+
+@contextmanager
+def deferred_sync():
+    """Write immutable files first, make them all durable with one sync, then link each.
+
+    As with a single write, a file's name appears only after its content is durable.
+    Nothing inside the block may read a file it wrote.
+    """
+    if getattr(_SYNC, "pending", None) is not None:
+        yield
+        return
+    _SYNC.pending = pending = []
+    try:
+        yield
+        _sync_all(temporary for temporary, _path, _content in pending)
+        for temporary, path, content in pending:
+            _link_immutable(temporary, path, content)
+    finally:
+        _SYNC.pending = None
+        for temporary, _path, _content in pending:
+            Path(temporary).unlink(missing_ok=True)
+
+
+def _sync_all(paths):
+    """One system-wide sync where the platform has it; otherwise sync each file."""
+    if hasattr(os, "sync"):
+        os.sync()
+        return
+    for path in paths:
+        with open(path, "r+b") as handle:
+            os.fsync(handle.fileno())
+
+
+def _link_immutable(temporary, path, content):
+    try:
+        os.link(temporary, path)
+    except FileExistsError:
+        if path.read_bytes() != content:
+            raise PolicyDenied(f"immutable edition bundle differs: {path.name}") from None
+
+
 def _immutable_write(path, content):
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(prefix=".edition-", dir=path.parent)
+    pending = getattr(_SYNC, "pending", None)
     try:
         with os.fdopen(descriptor, "wb") as output:
             output.write(content)
             output.flush()
-            os.fsync(output.fileno())
-        try:
-            os.link(temporary, path)
-        except FileExistsError:
-            if path.read_bytes() != content:
-                raise PolicyDenied(f"immutable edition bundle differs: {path.name}") from None
+            if pending is None:
+                os.fsync(output.fileno())
+        if pending is not None:
+            pending.append((temporary, path, content))
+            temporary = None
+            return
+        _link_immutable(temporary, path, content)
     finally:
-        Path(temporary).unlink(missing_ok=True)
+        if temporary is not None:
+            Path(temporary).unlink(missing_ok=True)
 
 
 def _batch_digest(batch_id):

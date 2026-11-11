@@ -5,7 +5,9 @@ from collections.abc import Mapping
 SCHEMA = "tn.primitive-bindings.v1"
 BATCH_SCHEMA = "tn.primitive-batch.v1"
 POLICY_SCHEMA = "tn.primitive-policy.v1"
-SCHEMAS = (SCHEMA, BATCH_SCHEMA, POLICY_SCHEMA)
+SHARED_POLICY_SCHEMA = "tn.primitive-policy-shared.v1"
+COLUMN_POLICY_SCHEMA = "tn.primitive-policy-columns.v1"
+SCHEMAS = (SCHEMA, BATCH_SCHEMA, POLICY_SCHEMA, SHARED_POLICY_SCHEMA, COLUMN_POLICY_SCHEMA)
 
 
 def _origin_key(value):
@@ -85,14 +87,167 @@ class BatchBindings(Mapping):
         return len(self._cells)
 
 
+class SharedPolicyBindings(Mapping):
+    """Policy bindings whose facts common to every cell are signed once, expanded on demand.
+
+    Each expanded binding equals the per-cell binding of a ``POLICY_SCHEMA`` manifest.
+    """
+
+    def __init__(self, shared, cells):
+        self._shared, self._cells = shared, cells
+
+    @property
+    def shared(self):
+        return self._shared
+
+    def declared(self, field):
+        """The declared facts of one cell, without building its whole binding."""
+        return {**self._shared["declared"], **self._cells[field]}
+
+    def __getitem__(self, field):
+        return {"declared": {**self._shared["declared"], **self._cells[field]},
+                "claims": list(self._shared["claims"]), "actions": list(self._shared["actions"])}
+
+    def get(self, field, default=None):
+        return self[field] if field in self._cells else default
+
+    def __iter__(self):
+        return iter(self._cells)
+
+    def __len__(self):
+        return len(self._cells)
+
+
+class ColumnBindings(Mapping):
+    """Policy bindings stored as signed columns: shared facts once, each other fact as one array.
+
+    Every cell keeps its own field. Each expanded binding equals the per-cell binding of a
+    ``POLICY_SCHEMA`` manifest.
+    """
+
+    def __init__(self, shared, fields, facts):
+        self._shared, self._fields, self._facts = shared, fields, facts
+        self._bindings = None
+
+    @property
+    def shared(self):
+        return self._shared
+
+    def _expanded(self):
+        """Expand every cell's binding once; the signed columns are immutable."""
+        if self._bindings is None:
+            common, keys = self._shared["declared"], list(self._facts)
+            claims, actions = self._shared["claims"], self._shared["actions"]
+            rows = zip(*(self._facts[key] for key in keys)) if keys else [()] * len(self._fields)
+            self._bindings = {field: {"declared": {**common, **dict(zip(keys, row))},
+                                      "claims": claims, "actions": actions}
+                              for field, row in zip(self._fields, rows, strict=True)}
+        return self._bindings
+
+    def declared(self, field):
+        return self._expanded()[field]["declared"]
+
+    @property
+    def fields(self):
+        return self._fields
+
+    def column(self, key):
+        """One declared fact for every field, in field order."""
+        if key in self._shared["declared"]:
+            return [self._shared["declared"][key]] * len(self._fields)
+        return self._facts[key]
+
+    def fact_names(self):
+        return [*self._shared["declared"], *(key for key in self._facts if key not in self._shared["declared"])]
+
+    def __getitem__(self, field):
+        return self._expanded()[field]
+
+    def __contains__(self, field):
+        return field in self._expanded()
+
+    def get(self, field, default=None):
+        return self._expanded().get(field, default)
+
+    def __iter__(self):
+        return iter(self._fields)
+
+    def __len__(self):
+        return len(self._fields)
+
+
+def column_manifest_from_columns(fields, columns, claims, actions):
+    """The manifest ``column_manifest_from_facts`` builds, from facts already held as columns."""
+    size = len(fields)
+    common = {key: column[0] for key, column in columns.items() if column.count(column[0]) == size}
+    return {"schema": COLUMN_POLICY_SCHEMA,
+            "shared": {"declared": common, "claims": claims, "actions": actions}, "fields": list(fields),
+            "facts": {key: columns[key] for key in sorted(columns) if key not in common}}
+
+
+def column_manifest_from_facts(facts, claims, actions):
+    """The manifest ``column_policy_manifest`` builds, computed from the facts directly.
+
+    None when the cells' fact names differ.
+    """
+    fields, cells = list(facts), list(facts.values())
+    keys = list(cells[0])
+    if any(cell.keys() != cells[0].keys() for cell in cells):
+        return None
+    columns = {key: [cell[key] for cell in cells] for key in keys}
+    common = {key: column[0] for key, column in columns.items() if column.count(column[0]) == len(column)}
+    return {"schema": COLUMN_POLICY_SCHEMA,
+            "shared": {"declared": common, "claims": claims, "actions": actions}, "fields": fields,
+            "facts": {key: columns[key] for key in sorted(keys) if key not in common}}
+
+
+def column_policy_manifest(bindings):
+    """Shared facts once and each remaining fact as one column; None if the cells' shapes differ."""
+    shared = shared_policy_manifest(bindings)
+    if shared is None:
+        return None
+    cells = shared["cells"]
+    keys = set(next(iter(cells.values())))
+    if any(set(cell) != keys for cell in cells.values()):
+        return None
+    fields = list(cells)
+    return {"schema": COLUMN_POLICY_SCHEMA, "shared": shared["shared"], "fields": fields,
+            "facts": {key: [cells[field][key] for field in fields] for key in sorted(keys)}}
+
+
+def shared_policy_manifest(bindings):
+    """Store the facts every cell shares once; None when the cells' support differs."""
+    first = next(iter(bindings.values()))
+    claims, actions = first["claims"], first["actions"]
+    if any(b["claims"] != claims or b["actions"] != actions for b in bindings.values()):
+        return None
+    common = dict(first["declared"])
+    for binding in bindings.values():
+        common = {key: value for key, value in common.items() if binding["declared"].get(key) == value}
+    cells = {field: {key: value for key, value in binding["declared"].items() if key not in common}
+             for field, binding in bindings.items()}
+    return {"schema": SHARED_POLICY_SCHEMA,
+            "shared": {"declared": common, "claims": claims, "actions": actions}, "cells": cells}
+
+
 def signed_manifest(data):
     """Read a publication's signed manifest with its schema and field bindings.
 
     A batch manifest keeps its signed schema; its bindings expand on demand from the shared facts.
+    A shared policy manifest reads as the policy manifest it compresses.
     """
     manifest = data.get("manifest", group="evidence")
     if isinstance(manifest, dict) and manifest.get("schema") == BATCH_SCHEMA:
         return {"schema": BATCH_SCHEMA, "bindings": BatchBindings(manifest["batch"], manifest["cells"])}
+    if isinstance(manifest, dict) and manifest.get("schema") == SHARED_POLICY_SCHEMA:
+        return {"schema": POLICY_SCHEMA, "bindings": SharedPolicyBindings(manifest["shared"], manifest["cells"])}
+    if isinstance(manifest, dict) and manifest.get("schema") == COLUMN_POLICY_SCHEMA:
+        fields, facts = manifest["fields"], manifest["facts"]
+        if (not isinstance(fields, list) or len(set(fields)) != len(fields) or not isinstance(facts, dict)
+                or any(not isinstance(column, list) or len(column) != len(fields) for column in facts.values())):
+            from .evidence import EvidenceError
+            raise EvidenceError("malformed signed column manifest")
+        return {"schema": POLICY_SCHEMA, "bindings": ColumnBindings(manifest["shared"], fields, facts)}
     return manifest
 
 

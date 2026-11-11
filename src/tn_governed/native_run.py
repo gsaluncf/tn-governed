@@ -126,6 +126,8 @@ def governed_server(
         "--cache-reuse",
         "0",
         "--no-cache-idle-slots",
+        "--cache-ram",
+        "0",
         "--n-gpu-layers",
         str(ALL_GPU_LAYERS if gpu_layers is None else gpu_layers),
     ]

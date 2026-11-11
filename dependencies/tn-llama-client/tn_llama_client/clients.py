@@ -2,6 +2,7 @@
 
 import json
 import re
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
@@ -31,6 +32,12 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 _OPENER = urllib.request.build_opener(_NoRedirect())
+_HTTP_CLOCK = [0.0]
+
+
+def model_http_seconds():
+    """Wall-clock seconds this process has spent waiting on model-server responses."""
+    return _HTTP_CLOCK[0]
 _FOUNDATIONAL_OUTPUT_GOVERNANCE = frozenset(
     {
         "instruction",
@@ -607,9 +614,11 @@ class GovernedLlamaClient:
             method="POST",
         )
         self.transcript.log_request("llama", request, body)
+        started = time.perf_counter()
         try:
             with _OPENER.open(request) as response:
                 response_body = response.read()
+                _HTTP_CLOCK[0] += time.perf_counter() - started
                 self.transcript.log_response(
                     "llama",
                     request.full_url,

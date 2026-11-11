@@ -23,6 +23,8 @@ from uuid import uuid4
 import tn
 import tn_llama_client
 import tn_polars
+from tn_polars.registry import catalog_request_seconds
+from tn_llama_client.clients import model_http_seconds
 
 import tn_governed.values as governed
 from tn_governed.native_objects import NativeObjects
@@ -63,12 +65,19 @@ VERIFICATION_FACTS = ("record_count", "record_kinds", "outputs",
 
 @contextmanager
 def _timed(timings, name):
+    """Accumulate a stage's time; Unity Catalog requests inside it are kept as ``<name>_catalog``."""
     with profile_stage(name):
-        started = time.perf_counter()
+        started, catalog, waited = time.perf_counter(), catalog_request_seconds(), model_http_seconds()
         try:
             yield
         finally:
-            timings[name] = timings.get(name, 0.0) + time.perf_counter() - started
+            requests = catalog_request_seconds() - catalog
+            timings[name] = timings.get(name, 0.0) + time.perf_counter() - started - requests
+            if requests:
+                timings[name + "_catalog"] = timings.get(name + "_catalog", 0.0) + requests
+            if model_http_seconds() > waited:
+                timings[name + "_model_http"] = (timings.get(name + "_model_http", 0.0)
+                                                 + model_http_seconds() - waited)
 
 
 def _error(exc, stage):
