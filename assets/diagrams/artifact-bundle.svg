@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="730" height="532" viewBox="0 0 730 532" role="img" aria-labelledby="title description">
+  <title id="title">An ArtifactBundle with a supporting claim</title>
+  <desc id="description">The planning application signs a publication containing the $90,000 quarterly total. The handle points to the total in values.value. The manifest identifies the finance team's signed statement that March sales figures are provisional. The bundle includes both the publication and the signed statement.</desc>
+  <defs>
+    <marker id="arrow" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0 0 9 5 0 10Z" fill="#137a78"/>
+    </marker>
+    <style>
+      text { font-family: 'Segoe UI', Arial, sans-serif; fill: #0e264a; font-size: 20px; }
+      .heading { font-size: 22px; font-weight: 700; }
+      .field { font-weight: 600; }
+      .panel { fill: #fff; stroke: #34739a; stroke-width: 1.7; }
+    </style>
+  </defs>
+
+  <rect width="730" height="532" fill="#fff"/>
+  <rect x="6" y="6" width="718" height="520" rx="5" fill="#fff" stroke="#34739a" stroke-width="2.4"/>
+  <path d="M12 7.3H718Q722.7 7.3 722.7 12V57H7.3V12Q7.3 7.3 12 7.3Z" fill="#def1fc"/>
+  <text x="27" y="40" class="heading">ArtifactBundle</text>
+
+  <rect x="26" y="74" width="678" height="54" rx="4" class="panel"/>
+  <text x="44" y="108" class="field">GovernedArtifact handle</text>
+  <text x="350" y="108">References values.value</text>
+
+  <rect x="26" y="146" width="678" height="251" rx="4" class="panel"/>
+  <path d="M31 147H699Q703 147 703 151V193H27V151Q27 147 31 147Z" fill="#def1fc"/>
+  <text x="44" y="177" class="heading">TN artifact</text>
+  <text x="684" y="177" text-anchor="end">Signed by the planning endpoint</text>
+  <text x="44" y="224" class="field">Encrypted groups</text>
+
+  <rect x="44" y="237" width="642" height="43" rx="3" fill="#edf7fd" stroke="#80b9da"/>
+  <text x="60" y="265" class="field">tn.agents</text>
+  <text x="288" y="265">Source contracts</text>
+
+  <rect x="44" y="288" width="642" height="43" rx="3" fill="#e5f5f2" stroke="#73b8b2"/>
+  <text x="60" y="316" class="field">values.value</text>
+  <text x="288" y="316">$90,000 in quarterly sales</text>
+
+  <rect x="44" y="339" width="642" height="43" rx="3" fill="#edf7fd" stroke="#80b9da"/>
+  <text x="60" y="367" class="field">evidence.manifest</text>
+  <text x="288" y="367">Operation, claim IDs, action record IDs</text>
+
+  <path d="M92 382.5V434" fill="none" stroke="#137a78" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="107" y="424" style="fill: #096560">Claim ID</text>
+
+  <rect x="26" y="438" width="678" height="71" rx="4" fill="#e5f5f2" stroke="#137a78" stroke-width="1.7"/>
+  <text x="44" y="466" class="heading">Signed claim</text>
+  <text x="684" y="466" text-anchor="end">Signed by finance</text>
+  <text x="44" y="498">“March figures are provisional.”</text>
+  <text x="684" y="498" text-anchor="end">About March sales</text>
+</svg>

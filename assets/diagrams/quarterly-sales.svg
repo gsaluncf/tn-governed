@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="410" viewBox="0 0 720 410" role="img" aria-labelledby="title desc">
+  <title id="title">From monthly sales to a quarterly total</title>
+  <desc id="desc">The finance team publishes monthly sales of $20,000, $30,000, and $40,000 for internal planning. Its policy requires a log entry before the figures can be displayed. The planning application publishes the $90,000 quarterly total with that policy. The reporting service checks the request and writes the log entry before showing the total on its internal dashboard.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0 0 9 4 0 8Z" fill="#34739a"/>
+    </marker>
+    <style>
+      text { font-family: "Segoe UI", Arial, sans-serif; fill: #0e264a; }
+      .panel { fill: #fff; stroke: #34739a; stroke-width: 1.8; }
+      .header { fill: #def1fc; }
+      .heading { font-size: 23px; font-weight: 700; }
+      .field { font-size: 16px; font-weight: 650; }
+      .value { font-size: 20px; }
+      .rule { fill: #e3f4f1; stroke: #58a7a4; stroke-width: 1; }
+      .policy { font-size: 19px; fill: #0c605f; }
+      .flow { fill: none; stroke: #34739a; stroke-width: 2; marker-end: url(#arrow); }
+      .verb { font-size: 16px; fill: #315e79; }
+    </style>
+  </defs>
+  <rect width="720" height="410" fill="#fff"/>
+
+  <g transform="translate(12 12)">
+    <rect class="panel" x="0" y="0" width="305" height="219" rx="4"/>
+    <rect class="header" x="1" y="1" width="303" height="43" rx="3"/>
+    <text class="heading" x="15" y="30">Finance team</text>
+    <text class="field" x="15" y="73">Monthly sales</text>
+    <text class="value" x="15" y="101">Jan $20k · Feb $30k · Mar $40k</text>
+    <rect class="rule" x="12" y="119" width="281" height="88" rx="3"/>
+    <text class="field" x="25" y="142">Source policy</text>
+    <text class="policy" x="25" y="168">Use for internal planning.</text>
+    <text class="policy" x="25" y="193">Log before display.</text>
+  </g>
+
+  <path class="flow" d="M318 105H399"/>
+  <text class="verb" x="359" y="95" text-anchor="middle">send sales</text>
+
+  <g transform="translate(403 12)">
+    <rect class="panel" x="0" y="0" width="305" height="219" rx="4"/>
+    <rect class="header" x="1" y="1" width="303" height="43" rx="3"/>
+    <text class="heading" x="15" y="30">Planning application</text>
+    <text class="field" x="15" y="73">Quarterly sales</text>
+    <text class="value" x="15" y="101">$20k + $30k + $40k = <tspan font-weight="700">$90k</tspan></text>
+    <rect class="rule" x="12" y="119" width="281" height="88" rx="3"/>
+    <text class="field" x="25" y="142">Source policy</text>
+    <text class="policy" x="25" y="168">Use for internal planning.</text>
+    <text class="policy" x="25" y="193">Log before display.</text>
+  </g>
+
+  <path class="flow" d="M555 232V269"/>
+  <text class="verb" x="542" y="256" text-anchor="end">send quarterly total</text>
+
+  <g transform="translate(12 273)">
+    <rect class="panel" x="0" y="0" width="696" height="124" rx="4"/>
+    <rect class="header" x="1" y="1" width="694" height="41" rx="3"/>
+    <text class="heading" x="15" y="29">Reporting service</text>
+    <text class="value" x="17" y="71">Authorize use on</text>
+    <text class="value" x="17" y="98">this dashboard</text>
+    <path class="flow" d="M204 82H251"/>
+    <text class="value" x="273" y="71">Write the</text>
+    <text class="value" x="273" y="98">log entry</text>
+    <path class="flow" d="M373 82H420"/>
+    <text class="value" x="442" y="71">Decrypt and display <tspan font-weight="700">$90k</tspan></text>
+    <text class="value" x="442" y="98">on the internal dashboard</text>
+  </g>
+</svg>
